@@ -1,0 +1,77 @@
+# CLAUDE.md — 프로젝트 규칙·컨벤션
+
+전북소방 구조 교육훈련 플랫폼(AI 튜터 포함). 제품 명세 [`PRD.md`](PRD.md), 설치/실행 [`SETUP.md`](SETUP.md) 참조.
+
+## 한 줄 요약
+구조대원이 **자료로 학습(과정·진도)**, **AI 튜터에게 질의(RAG·출처)**, **AI 자동 퀴즈로 이수**하는
+교육훈련 플랫폼 PoC. 챗봇은 인덱싱된 교육자료에 근거(출처·페이지)해 답하고, 근거가 없으면
+"확인되지 않습니다"로 답해 환각을 차단한다.
+
+## 기술 스택
+- **Next.js 14** (App Router, TypeScript) + **Tailwind CSS v4**(`@tailwindcss/postcss`, 설정은
+  `app/globals.css`의 `@theme` — `tailwind.config.ts` 없음) + **shadcn/ui**(Radix 기반, classic)
+- **Vercel AI SDK v4** (`ai`, `@ai-sdk/anthropic`) — `useChat` / `streamText` 스트리밍
+- **Anthropic Claude** (`ANTHROPIC_MODEL`, 기본 `claude-sonnet-4-5`)
+- **Supabase** (PostgreSQL + pgvector + Auth + Storage), `@supabase/supabase-js` + `@supabase/ssr`
+- **임베딩**: 기본 OpenAI `text-embedding-3-small` @ **1024차원** / 옵션 BGE-M3(자체 호스팅).
+  `EMBEDDING_PROVIDER` 로 전환. **인덱서와 웹앱은 같은 제공자/차원을 써야 함.**
+- **차트** recharts · **PDF** react-pdf · **날짜** date-fns
+- **인덱싱** Python (`indexing/`, 웹앱과 분리)
+
+## 디렉터리
+```
+app/            App Router (화면 + /api/chat, /api/feedback)
+components/ui/  shadcn 컴포넌트
+components/chat /admin  도메인 컴포넌트
+lib/supabase/   client(브라우저) · server(SSR) · admin(service role, 서버 전용)
+lib/rag.ts      검색 + 컨텍스트 조립        lib/embeddings.ts  쿼리 임베딩
+lib/courses.ts  과정 자동 편성·진도(순수)   lib/learning.ts    학습상태 조립(서버)
+lib/quiz.ts     퀴즈 스키마·프롬프트·채점   lib/database.types.ts  수작성 DB 타입
+lib/fitness.ts  체력 마일리지 규칙(순수)    lib/fitness-server.ts  마일리지 현황 조립(서버)
+app/home /courses /quiz   교육훈련 플랫폼 화면
+app/fitness /notices /me  체력단련 · 공지 · 마이페이지
+app/admin/  통계 + completion(이수 현황·CSV) · documents(자료) · users(사용자) · notices(공지 작성)
+components/learning/      과정/진도/퀴즈 컴포넌트
+components/fitness/       운동 기록 폼
+scripts/import-users.mjs  명단(CSV) 일괄 계정 등록
+supabase/migrations/    0001 테이블 · 0002 RPC · 0003 트리거+RLS · 0004 학습(진도·퀴즈)
+                        · 0005 플랫폼(공지·체력 마일리지)
+indexing/       Python 파이프라인          docs/  원본 자료 투입 위치
+eval/           평가셋 50문항 러너
+```
+
+## 플랫폼 도메인 규칙
+- **과정 = 카테고리, 레슨 = 자료(documents)**. 과정은 인덱싱 자료로 **자동 편성**(`lib/courses.ts`).
+- 진도: `lesson_progress`(본인 RLS) · 퀴즈/이수: `quiz_attempts`(본인 RLS, 관리자 select).
+- 퀴즈는 `/api/quiz/generate`(RAG+generateObject)로 출제, `/api/quiz/submit`에서 **서버 재채점** 후 기록.
+
+## 보안 규칙 (필수)
+- `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`·`SUPABASE_SERVICE_ROLE_KEY` 는 **서버 전용**.
+  클라이언트 번들에 절대 노출 금지. (`NEXT_PUBLIC_` 접두사 붙이지 말 것)
+- service role 클라이언트(`lib/supabase/admin.ts`)는 **role='admin' 검증 후** 또는 인덱서에서만.
+- 모든 사용자 데이터 테이블은 **RLS** 적용. 본인 데이터만 접근.
+- **브라우저 스토리지(localStorage/sessionStorage) 의존 금지** — 상태는 서버/DB에.
+
+## 코딩 컨벤션
+- 서버 컴포넌트 기본, 상호작용 필요한 곳만 `"use client"`.
+- Supabase 접근: 브라우저=`lib/supabase/client`, 서버=`lib/supabase/server`, 집계=`lib/supabase/admin`.
+- UI 한국어. 모바일 우선(본문 16px+, 터치 48px+, 대비 충분히).
+- 타이포: **Pretendard** self-host(`public/fonts`, `font-sans`). 분야 색은 `lib/category.ts`
+  단일 출처(산악=emerald·수난=sky·화재=orange·구급=rose), `<CategoryBadge>` 재사용. 색 클래스는
+  전체 문자열로 둘 것(Tailwind v4가 소스를 자동 스캔하므로 동적 조합 문자열은 감지 못함).
+- 환각 가드레일: §9.2 시스템 프롬프트를 단일 출처(`lib/rag.ts`)에서 관리.
+
+## 자주 쓰는 명령
+```bash
+npm run dev        # 개발 서버
+npm run build      # 프로덕션 빌드(타입 체크 포함)
+npm run lint       # ESLint
+npx tsc --noEmit   # 타입만 체크
+npm test           # 단위 테스트(vitest)
+
+# 인덱싱(자료 추가 시): SETUP.md 참고
+cd indexing && pip install -r requirements.txt && python embed_and_upload.py
+```
+
+## 환경변수
+`.env.local.example` 를 `.env.local` 로 복사 후 채운다. 키 목록·설명은 그 파일 주석 참고.

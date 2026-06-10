@@ -1,0 +1,15 @@
+# 전북소방 구조 AI — 인덱싱 파이프라인 의존성 (Python 3.11 권장)
+pymupdf>=1.24            # PDF 텍스트 추출
+python-pptx>=0.6.23      # PPTX 슬라이드/노트 추출
+supabase>=2.7            # documents/chunks 적재 (service role)
+python-dotenv>=1.0       # ../.env.local 로드
+
+# 임베딩 제공자: openai (기본)
+openai>=1.40
+
+# 임베딩 제공자: bge (옵션) — BGE-M3 자체 호스팅
+# sentence-transformers>=3.0
+
+# serve.py (BGE-M3 임베딩 HTTP 서비스) 사용 시 (옵션)
+# fastapi>=0.110
+# uvicorn>=0.30

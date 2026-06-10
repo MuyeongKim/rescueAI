@@ -1,0 +1,16 @@
+{
+  "로프구조_기초.pdf": {
+    "title": "로프구조 기초 매뉴얼",
+    "category": "산악",
+    "equipment": ["로프", "하강기", "안전벨트"],
+    "difficulty": "초급",
+    "publish_date": "2024-03-01"
+  },
+  "수난구조_장비.pdf": {
+    "title": "수난구조 장비 운용 지침",
+    "category": "수난",
+    "equipment": ["구명조끼", "스로백"],
+    "difficulty": "중급",
+    "publish_date": "2023-11-15"
+  }
+}
