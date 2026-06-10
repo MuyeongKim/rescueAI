@@ -1,6 +1,12 @@
 import { notFound } from "next/navigation";
 import type { Message } from "ai";
 import { createClient } from "@/lib/supabase/server";
+import {
+  DEMO,
+  demoConversations,
+  demoChatAnswer,
+  demoChatSources,
+} from "@/lib/demo";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 
 export const dynamic = "force-dynamic";
@@ -11,6 +17,29 @@ export default async function ConversationPage({
   params: { conversationId: string };
 }) {
   const conversationId = params.conversationId;
+
+  if (DEMO) {
+    const conv = demoConversations.find((c) => c.id === conversationId);
+    if (!conv) notFound();
+    const initialMessages: Message[] = [
+      { id: `${conversationId}-q`, role: "user", content: conv.title },
+      {
+        id: `${conversationId}-a`,
+        role: "assistant",
+        content: demoChatAnswer,
+        annotations: [
+          { messageId: 0, sources: demoChatSources, feedback: null },
+        ],
+      },
+    ];
+    return (
+      <ChatInterface
+        conversationId={conversationId}
+        initialMessages={initialMessages}
+      />
+    );
+  }
+
   const supabase = await createClient();
 
   // RLS로 본인 대화만 보임 — 없으면 404
