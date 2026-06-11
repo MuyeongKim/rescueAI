@@ -13,6 +13,7 @@ import {
   FolderCog,
   Users,
   Award,
+  Wand2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
@@ -23,6 +24,7 @@ export type NavKey =
   | "home"
   | "courses"
   | "chat"
+  | "generate"
   | "docs"
   | "fitness"
   | "me"
@@ -42,11 +44,13 @@ type NavItem = {
 };
 
 // 공지사항은 메뉴에서 제외 — 홈의 공지 섹션('전체 보기' → /notices)으로만 진입한다.
+// 모바일 탭바는 6개 제한 — 자료실은 학습 과정·홈에서 진입 가능해 모바일에서 제외.
 const NAV_ITEMS: NavItem[] = [
   { key: "home", href: "/home", label: "홈", icon: Home, mobile: true },
   { key: "courses", href: "/courses", label: "학습", icon: GraduationCap, mobile: true },
   { key: "chat", href: "/chat", label: "AI 튜터", icon: MessageSquare, mobile: true },
-  { key: "docs", href: "/docs", label: "자료실", icon: FileText, mobile: true },
+  { key: "generate", href: "/generate", label: "자료 생성", icon: Wand2, mobile: true },
+  { key: "docs", href: "/docs", label: "자료실", icon: FileText },
   { key: "fitness", href: "/fitness", label: "체력단련", icon: Dumbbell, mobile: true },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser, mobile: true },
 ];

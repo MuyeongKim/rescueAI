@@ -5,9 +5,7 @@ import {
   Clock,
   ThumbsUp,
   BookOpenCheck,
-  ClipboardList,
   Award,
-  Percent,
   Dumbbell,
   Flame,
   ListChecks,
@@ -102,40 +100,44 @@ async function loadAdminStats() {
     ]);
 
   const monthStartStr = `${new Date().toISOString().slice(0, 7)}-01`;
-  const [progressRes, quizRowsRes, fitnessMonthRes, fitnessCountRes] =
-    await Promise.all([
-      admin.from("lesson_progress").select("id", { count: "exact", head: true }),
-      admin.from("quiz_attempts").select("score, total, passed").limit(5000),
-      admin
-        .from("workout_logs")
-        .select("user_id, points")
-        .gte("performed_on", monthStartStr)
-        .limit(20000),
-      admin.from("workout_logs").select("id", { count: "exact", head: true }),
-    ]);
+  const [progressRes, fitnessMonthRes, fitnessCountRes] = await Promise.all([
+    admin.from("lesson_progress").select("user_id, document_id").limit(50000),
+    admin
+      .from("workout_logs")
+      .select("user_id, points")
+      .gte("performed_on", monthStartStr)
+      .limit(20000),
+    admin.from("workout_logs").select("id", { count: "exact", head: true }),
+  ]);
   const fitnessMonth = fitnessMonthRes.data ?? [];
   const fitnessActiveUsers = new Set(
     fitnessMonth.map((w) => w.user_id).filter(Boolean)
   ).size;
   const fitnessMonthPoints = fitnessMonth.reduce((s, w) => s + (w.points ?? 0), 0);
   const fitnessTotalLogs = fitnessCountRes.count ?? 0;
-  const lessonCompletions = progressRes.count ?? 0;
-  const quizRows = quizRowsRes.data ?? [];
-  const quizAttempts = quizRows.length;
-  const quizPassed = quizRows.filter((q) => q.passed).length;
-  const quizPassRate =
-    quizAttempts > 0 ? Math.round((quizPassed / quizAttempts) * 100) : null;
-  const quizAvg =
-    quizAttempts > 0
-      ? Math.round(
-          (quizRows.reduce(
-            (s, q) => s + (q.total ? (q.score ?? 0) / q.total : 0),
-            0
-          ) /
-            quizAttempts) *
-            100
-        )
-      : null;
+
+  const progressRows = progressRes.data ?? [];
+  const lessonCompletions = progressRows.length;
+  // 과정 이수 = 분야의 모든 자료를 완료한 (사용자 × 분야) 조합 수
+  const docsByCat = new Map<string, number[]>();
+  for (const d of docsRes.data ?? []) {
+    if (!d.category) continue;
+    if (!docsByCat.has(d.category)) docsByCat.set(d.category, []);
+    docsByCat.get(d.category)!.push(d.id);
+  }
+  const doneByUser = new Map<string, Set<number>>();
+  for (const p of progressRows) {
+    if (!p.user_id || p.document_id == null) continue;
+    if (!doneByUser.has(p.user_id)) doneByUser.set(p.user_id, new Set());
+    doneByUser.get(p.user_id)!.add(p.document_id);
+  }
+  let courseCompletions = 0;
+  const catIdLists = Array.from(docsByCat.values());
+  for (const done of Array.from(doneByUser.values())) {
+    for (const ids of catIdLists) {
+      if (ids.length > 0 && ids.every((id) => done.has(id))) courseCompletions++;
+    }
+  }
 
   const totalUsers = usersRes.count ?? 0;
   const totalQuestions = questionsRes.count ?? 0;
@@ -197,10 +199,7 @@ async function loadAdminStats() {
     daily,
     faq,
     lessonCompletions,
-    quizAttempts,
-    quizPassed,
-    quizPassRate,
-    quizAvg,
+    courseCompletions,
     fitnessActiveUsers,
     fitnessMonthPoints,
     fitnessTotalLogs,
@@ -223,10 +222,7 @@ export default async function AdminPage() {
     daily,
     faq,
     lessonCompletions,
-    quizAttempts,
-    quizPassed,
-    quizPassRate,
-    quizAvg,
+    courseCompletions,
     fitnessActiveUsers,
     fitnessMonthPoints,
     fitnessTotalLogs,
@@ -275,20 +271,10 @@ export default async function AdminPage() {
             value={`${lessonCompletions}건`}
           />
           <StatCard
-            icon={ClipboardList}
-            label="퀴즈 응시"
-            value={`${quizAttempts}건`}
-          />
-          <StatCard
             icon={Award}
-            label="퀴즈 합격률"
-            value={quizPassRate !== null ? `${quizPassRate}%` : "-"}
-            sub={`합격 ${quizPassed}건`}
-          />
-          <StatCard
-            icon={Percent}
-            label="퀴즈 평균점수"
-            value={quizAvg !== null ? `${quizAvg}%` : "-"}
+            label="과정 이수"
+            value={`${courseCompletions}건`}
+            sub="분야의 모든 자료 학습 완료"
           />
         </div>
       </div>

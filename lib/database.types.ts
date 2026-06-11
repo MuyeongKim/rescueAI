@@ -137,36 +137,6 @@ type LessonProgressInsert = {
   created_at?: string;
 };
 
-// ── quiz_attempts ──
-export type QuizQuestionRecord = {
-  question: string;
-  choices: string[];
-  answerIndex: number;
-  explanation: string;
-  source?: string | null;
-  selected?: number | null;
-};
-type QuizAttemptsRow = {
-  id: number;
-  user_id: string | null;
-  category: string | null;
-  score: number | null;
-  total: number | null;
-  passed: boolean;
-  questions: QuizQuestionRecord[] | null;
-  created_at: string;
-};
-type QuizAttemptsInsert = {
-  id?: number;
-  user_id?: string | null;
-  category?: string | null;
-  score?: number | null;
-  total?: number | null;
-  passed?: boolean;
-  questions?: QuizQuestionRecord[] | null;
-  created_at?: string;
-};
-
 // ── notices ──
 type NoticesRow = {
   id: number;
@@ -244,12 +214,6 @@ export interface Database {
         Row: LessonProgressRow;
         Insert: LessonProgressInsert;
         Update: Partial<LessonProgressInsert>;
-        Relationships: [];
-      };
-      quiz_attempts: {
-        Row: QuizAttemptsRow;
-        Insert: QuizAttemptsInsert;
-        Update: Partial<QuizAttemptsInsert>;
         Relationships: [];
       };
       notices: {

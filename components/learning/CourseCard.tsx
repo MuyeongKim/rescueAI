@@ -41,13 +41,7 @@ export function CourseCard({ course }: { course: Course }) {
                 </p>
               </div>
             </div>
-            {course.certified ? (
-              <Badge className="shrink-0">이수</Badge>
-            ) : course.passedQuiz ? (
-              <Badge variant="secondary" className="shrink-0">
-                퀴즈 합격
-              </Badge>
-            ) : null}
+            {course.certified && <Badge className="shrink-0">이수</Badge>}
           </div>
 
           <ProgressBar value={course.progress} indicatorClassName={s.dot} />

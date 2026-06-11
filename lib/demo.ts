@@ -3,7 +3,7 @@
 import { buildCourses, type LessonDoc } from "@/lib/courses";
 import { calcWeekly } from "@/lib/fitness";
 import type { DocSource } from "@/lib/database.types";
-import type { GeneratedQuestion } from "@/lib/quiz";
+import type { GeneratedDoc } from "@/lib/generate";
 
 export const DEMO = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
@@ -39,8 +39,8 @@ export const demoDocuments: DemoDoc[] = [
   { id: 9, title: "외상 환자 1차 평가", category: "구급", difficulty: "중급", publish_date: "2024-08-12", equipment: ["부목"], source_type: "pdf" },
 ];
 
-const demoCompleted = new Set<number>([1, 4, 6, 8]);
-const demoPassedCategories = new Set<string>(["화재"]);
+// 화재(6·7)는 전체 완료 → 이수 상태를 시연
+const demoCompleted = new Set<number>([1, 4, 6, 7, 8]);
 
 export const demoLessonDocs: LessonDoc[] = demoDocuments.map((d) => ({
   id: d.id,
@@ -51,13 +51,12 @@ export const demoLessonDocs: LessonDoc[] = demoDocuments.map((d) => ({
 }));
 
 export function getDemoLearningState() {
-  const courses = buildCourses(demoLessonDocs, demoCompleted, demoPassedCategories);
+  const courses = buildCourses(demoLessonDocs, demoCompleted);
   const totalLessons = courses.reduce((s, c) => s + c.total, 0);
   const totalCompleted = courses.reduce((s, c) => s + c.completed, 0);
   return {
     courses,
     completedIds: demoCompleted,
-    passedCategories: demoPassedCategories,
     totalLessons,
     totalCompleted,
     overallProgress:
@@ -82,43 +81,36 @@ export const demoChatSources: DocSource[] = [
 export const demoChatAnswer =
   "공기호흡기는 사용 전 다음을 점검합니다.\n\n1. 면체 밀착 상태 확인\n2. 실린더 충전 압력(약 300bar) 확인\n3. 잔압 경보장치 작동 확인\n4. 양압 상태에서 면체 누설 점검\n\n점검이 끝나면 양압을 유지한 채 진입하세요.\n\n[근거: 공기호흡기 착용 절차 p.3]";
 
-export const demoQuizQuestions: GeneratedQuestion[] = [
-  {
-    question: "공기호흡기 착용 전 가장 먼저 확인해야 하는 것은?",
-    choices: ["면체 밀착 상태", "헬멧 색상", "무전기 채널", "장갑 두께"],
-    answerIndex: 0,
-    explanation: "면체가 밀착되지 않으면 유독가스가 유입될 수 있어 가장 먼저 확인합니다.",
-    source: "공기호흡기 착용 절차",
-  },
-  {
-    question: "실린더 충전 압력의 통상 기준에 가장 가까운 값은?",
-    choices: ["50bar", "150bar", "300bar", "1000bar"],
-    answerIndex: 2,
-    explanation: "일반적으로 약 300bar 내외로 충전 상태를 확인합니다.",
-    source: "공기호흡기 착용 절차",
-  },
-  {
-    question: "잔압 경보장치의 목적으로 옳은 것은?",
-    choices: ["배터리 잔량 표시", "공기 잔량 부족 경고", "온도 표시", "위치 추적"],
-    answerIndex: 1,
-    explanation: "잔압 경보는 공기 잔량이 부족할 때 탈출을 유도합니다.",
-    source: "공기호흡기 착용 절차",
-  },
-  {
-    question: "내화 진입 시 대형 유지의 주된 이유는?",
-    choices: ["사진 촬영", "상호 안전 확보와 길잃음 방지", "장비 절약", "통신 차단"],
-    answerIndex: 1,
-    explanation: "대형을 유지하면 상호 확인이 가능해 길잃음·고립을 방지합니다.",
-    source: "내화 진입과 대형 유지",
-  },
-  {
-    question: "면체 누설 점검은 어느 상태에서 하는가?",
-    choices: ["전원 차단", "양압 작동 상태", "실린더 분리", "수중"],
-    answerIndex: 1,
-    explanation: "양압 작동 상태에서 누설 여부를 확인한 뒤 진입합니다.",
-    source: "공기호흡기 착용 절차",
-  },
-];
+// ── 자료 생성 (훈련계획/교안) ──
+export const demoGeneratedDoc: GeneratedDoc = {
+  title: "화재 분야 훈련계획 — 공기호흡기 착용·내화 진입 (2시간)",
+  sections: [
+    {
+      heading: "1. 훈련 개요",
+      content:
+        "대상: 일반 구조대원 / 시간: 2시간 / 장소: 소방서 훈련장\n목표: 공기호흡기 사용 전 점검 절차를 숙달하고, 내화 진입 시 대형 유지 요령을 체득한다.",
+    },
+    {
+      heading: "2. 준비물·안전조치",
+      content:
+        "공기호흡기 세트(인원수+예비 1), 방화복, 열화상카메라 1대.\n훈련 전 실린더 충전 압력(약 300bar)과 잔압 경보장치 작동을 전수 점검하고, 안전관리관 1명을 지정한다.",
+    },
+    {
+      heading: "3. 단계별 진행 (120분)",
+      content:
+        "① 이론·시범 (30분): 면체 밀착 점검 → 충전 압력 확인 → 잔압 경보 확인 → 양압 누설 점검 순서 시범.\n② 분임 실습 (60분): 2인 1조로 착용 절차 반복, 조별 교차 점검.\n③ 종합 훈련 (30분): 양압 유지 상태로 농연 환경 모의 진입, 대형 유지·상호 확인 훈련.",
+    },
+    {
+      heading: "4. 평가·강평",
+      content:
+        "착용 절차 4단계 누락 없이 수행하는지 조별 체크리스트로 확인하고, 진입 훈련 중 대형 이탈 사례를 강평에서 공유한다.",
+    },
+  ],
+  sources: [
+    { document_id: 6, doc: "공기호흡기 착용 절차", page: 3 },
+    { document_id: 7, doc: "내화 진입과 대형 유지", page: 2 },
+  ],
+};
 
 // ── 공지사항 ──
 export const demoNotices = [
@@ -179,20 +171,13 @@ export function getDemoFitnessState() {
   };
 }
 
-// ── 마이페이지: 퀴즈 기록 ──
-export const demoQuizAttempts = [
-  { id: 3, category: "화재", score: 5, total: 5, passed: true, created_at: "2026-06-07T10:20:00.000Z" },
-  { id: 2, category: "산악", score: 3, total: 5, passed: false, created_at: "2026-06-03T16:05:00.000Z" },
-  { id: 1, category: "화재", score: 4, total: 5, passed: true, created_at: "2026-05-29T09:40:00.000Z" },
-];
-
-// ── 관리자: 이수 현황 ──
+// ── 관리자: 이수 현황 (이수 = 분야의 모든 레슨 완료) ──
 export const demoCompletionUsers = [
-  { id: "demo-user", full_name: "데모 대원", email: "demo@jbfire.go.kr", division: "전북소방 구조대", lessonsDone: 4, passedCategories: ["화재"] },
-  { id: "u1", full_name: "김구조", email: "kim@jbfire.go.kr", division: "전주 119구조대", lessonsDone: 9, passedCategories: ["산악", "화재", "구급"] },
-  { id: "u2", full_name: "이수난", email: "lee@jbfire.go.kr", division: "군산 119구조대", lessonsDone: 7, passedCategories: ["수난", "구급"] },
-  { id: "u3", full_name: "박산악", email: "park@jbfire.go.kr", division: "남원 119구조대", lessonsDone: 5, passedCategories: ["산악"] },
-  { id: "u4", full_name: "최화재", email: "choi@jbfire.go.kr", division: "익산 119구조대", lessonsDone: 2, passedCategories: [] },
+  { id: "demo-user", full_name: "데모 대원", email: "demo@jbfire.go.kr", division: "전북소방 구조대", lessonsDone: 5, certifiedCategories: ["화재"] },
+  { id: "u1", full_name: "김구조", email: "kim@jbfire.go.kr", division: "전주 119구조대", lessonsDone: 9, certifiedCategories: ["산악", "수난", "화재", "구급"] },
+  { id: "u2", full_name: "이수난", email: "lee@jbfire.go.kr", division: "군산 119구조대", lessonsDone: 7, certifiedCategories: ["수난", "구급"] },
+  { id: "u3", full_name: "박산악", email: "park@jbfire.go.kr", division: "남원 119구조대", lessonsDone: 5, certifiedCategories: ["산악"] },
+  { id: "u4", full_name: "최화재", email: "choi@jbfire.go.kr", division: "익산 119구조대", lessonsDone: 2, certifiedCategories: [] },
 ];
 
 // ── 관리자: 사용자 목록 ──
@@ -236,10 +221,7 @@ export function getDemoAdminStats() {
       { q: "로프 하강 시 확보 방법", count: 11 },
     ],
     lessonCompletions: 96,
-    quizAttempts: 58,
-    quizPassed: 47,
-    quizPassRate: 81,
-    quizAvg: 78,
+    courseCompletions: 31,
     fitnessActiveUsers: 18,
     fitnessMonthPoints: 5840,
     fitnessTotalLogs: 214,

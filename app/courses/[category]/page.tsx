@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ArrowLeft, FileText, ChevronRight, Award, HelpCircle } from "lucide-react";
+import { ArrowLeft, FileText, ChevronRight, Award, Wand2 } from "lucide-react";
 
 import { getUserAndProfile } from "@/lib/auth";
 import { getLearningState } from "@/lib/learning";
@@ -78,7 +78,7 @@ export default async function CourseDetailPage({
                   레슨 {course.completed}/{course.total} · {course.progress}%
                 </span>
                 <span className="text-muted-foreground">
-                  퀴즈 {course.passedQuiz ? "합격" : "미응시/미합격"}
+                  모든 레슨 완료 시 이수
                 </span>
               </div>
             </CardContent>
@@ -117,20 +117,18 @@ export default async function CourseDetailPage({
             </ul>
           </div>
 
-          {/* 퀴즈 */}
+          {/* 이 분야 자료로 훈련계획·교안 만들기 */}
           <Card>
             <CardContent className="flex flex-col items-center gap-3 p-5 text-center">
-              <HelpCircle className="h-8 w-8 text-primary" />
+              <Wand2 className="h-8 w-8 text-primary" />
               <div>
-                <p className="font-medium">이수 퀴즈</p>
+                <p className="font-medium">자료 생성</p>
                 <p className="text-sm text-muted-foreground">
-                  자료 기반 5문항. 60% 이상이면 합격(이수)입니다.
+                  이 분야 자료를 근거로 훈련계획·교안을 만들어 보세요.
                 </p>
               </div>
-              <Link href={`/quiz/${encodeURIComponent(category)}`}>
-                <Button className="h-11 gap-2">
-                  {course.passedQuiz ? "퀴즈 다시 풀기" : "퀴즈 풀기"}
-                </Button>
+              <Link href="/generate">
+                <Button className="h-11 gap-2">자료 생성으로 이동</Button>
               </Link>
             </CardContent>
           </Card>

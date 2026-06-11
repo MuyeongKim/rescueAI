@@ -4,8 +4,6 @@ import { Award, BarChart3, ChevronRight, CircleUser, Dumbbell } from "lucide-rea
 import { getUserAndProfile } from "@/lib/auth";
 import { getLearningState } from "@/lib/learning";
 import { getFitnessState } from "@/lib/fitness-server";
-import { createClient } from "@/lib/supabase/server";
-import { DEMO, demoQuizAttempts } from "@/lib/demo";
 import {
   Card,
   CardContent,
@@ -13,48 +11,18 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { CategoryBadge } from "@/components/learning/CategoryBadge";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 
 export const dynamic = "force-dynamic";
 
-type QuizAttempt = {
-  id: number;
-  category: string | null;
-  score: number | null;
-  total: number | null;
-  passed: boolean;
-  created_at: string;
-};
-
-async function loadQuizAttempts(userId: string): Promise<QuizAttempt[]> {
-  if (DEMO) return demoQuizAttempts;
-  const supabase = await createClient();
-  const { data } = await supabase
-    .from("quiz_attempts")
-    .select("id, category, score, total, passed, created_at")
-    .eq("user_id", userId)
-    .order("created_at", { ascending: false })
-    .limit(10);
-  return (data ?? []) as QuizAttempt[];
-}
-
 export default async function MePage() {
   const { user, profile } = await getUserAndProfile();
   const userId = user?.id ?? "";
-  const [learning, fitness, quizzes] = await Promise.all([
+  const [learning, fitness] = await Promise.all([
     getLearningState(userId),
     getFitnessState(userId),
-    loadQuizAttempts(userId),
   ]);
 
   const certified = learning.courses.filter((c) => c.certified);
@@ -88,7 +56,7 @@ export default async function MePage() {
         </CardContent>
       </Card>
 
-      {/* 이수 기록 — 진도 상세는 홈·학습 탭이 담당, 여기는 증빙(이수·퀴즈 이력) 중심 */}
+      {/* 이수 기록 — 진도 상세는 홈·학습 탭이 담당, 여기는 증빙(이수 이력) 중심 */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="flex items-center gap-2 text-base">
@@ -106,7 +74,7 @@ export default async function MePage() {
           <p className="mb-2 text-sm font-medium">이수한 과정 {certified.length}개</p>
           {certified.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              아직 이수한 과정이 없습니다. 레슨 학습 후 퀴즈에 합격하면 이수됩니다.
+              아직 이수한 과정이 없습니다. 과정의 모든 레슨을 완료하면 이수됩니다.
             </p>
           ) : (
             <div className="flex flex-wrap gap-1.5">
@@ -152,56 +120,6 @@ export default async function MePage() {
           >
             체력단련 바로가기
           </Link>
-        </CardContent>
-      </Card>
-
-      {/* 퀴즈 기록 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">최근 퀴즈 기록</CardTitle>
-          <CardDescription>최근 10회 응시 기준</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>응시일</TableHead>
-                <TableHead>분야</TableHead>
-                <TableHead className="text-right">점수</TableHead>
-                <TableHead className="text-right">결과</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {quizzes.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={4} className="py-8 text-center text-muted-foreground">
-                    아직 퀴즈 응시 기록이 없습니다.
-                  </TableCell>
-                </TableRow>
-              ) : (
-                quizzes.map((q) => (
-                  <TableRow key={q.id}>
-                    <TableCell className="whitespace-nowrap text-muted-foreground">
-                      {q.created_at.slice(0, 10)}
-                    </TableCell>
-                    <TableCell>
-                      {q.category ? <CategoryBadge category={q.category} /> : "-"}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {q.score ?? 0}/{q.total ?? 0}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      {q.passed ? (
-                        <Badge>합격</Badge>
-                      ) : (
-                        <Badge variant="outline">불합격</Badge>
-                      )}
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
         </CardContent>
       </Card>
 

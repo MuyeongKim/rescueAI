@@ -31,7 +31,7 @@ type UserCompletion = {
   email: string | null;
   division: string | null;
   lessonsDone: number;
-  passedCategories: string[];
+  certifiedCategories: string[]; // 이수 = 분야의 모든 자료 학습 완료
 };
 
 // 전 사용자의 학습·이수 현황을 조립한다 (관리자 검증 후 service role).
@@ -39,38 +39,43 @@ async function loadCompletion(): Promise<UserCompletion[]> {
   if (DEMO) return demoCompletionUsers;
   const admin = createAdminClient();
 
-  const [profilesRes, progressRes, quizRes] = await Promise.all([
+  const [profilesRes, progressRes, docsRes] = await Promise.all([
     admin
       .from("profiles")
       .select("id, full_name, email, division")
       .order("division", { ascending: true }),
-    admin.from("lesson_progress").select("user_id"),
-    admin
-      .from("quiz_attempts")
-      .select("user_id, category")
-      .eq("passed", true),
+    admin.from("lesson_progress").select("user_id, document_id").limit(50000),
+    admin.from("documents").select("id, category"),
   ]);
 
-  const lessonCount = new Map<string, number>();
-  for (const p of progressRes.data ?? []) {
-    if (p.user_id)
-      lessonCount.set(p.user_id, (lessonCount.get(p.user_id) ?? 0) + 1);
-  }
-  const passed = new Map<string, Set<string>>();
-  for (const q of quizRes.data ?? []) {
-    if (!q.user_id || !q.category) continue;
-    if (!passed.has(q.user_id)) passed.set(q.user_id, new Set());
-    passed.get(q.user_id)!.add(q.category);
+  const docsByCat = new Map<string, number[]>();
+  for (const d of docsRes.data ?? []) {
+    if (!d.category) continue;
+    if (!docsByCat.has(d.category)) docsByCat.set(d.category, []);
+    docsByCat.get(d.category)!.push(d.id);
   }
 
-  return (profilesRes.data ?? []).map((p) => ({
-    id: p.id,
-    full_name: p.full_name,
-    email: p.email,
-    division: p.division,
-    lessonsDone: lessonCount.get(p.id) ?? 0,
-    passedCategories: Array.from(passed.get(p.id) ?? []),
-  }));
+  const doneByUser = new Map<string, Set<number>>();
+  for (const p of progressRes.data ?? []) {
+    if (!p.user_id || p.document_id == null) continue;
+    if (!doneByUser.has(p.user_id)) doneByUser.set(p.user_id, new Set());
+    doneByUser.get(p.user_id)!.add(p.document_id);
+  }
+
+  return (profilesRes.data ?? []).map((p) => {
+    const done = doneByUser.get(p.id) ?? new Set<number>();
+    const certifiedCategories = Array.from(docsByCat.entries())
+      .filter(([, ids]) => ids.length > 0 && ids.every((id) => done.has(id)))
+      .map(([cat]) => cat);
+    return {
+      id: p.id,
+      full_name: p.full_name,
+      email: p.email,
+      division: p.division,
+      lessonsDone: done.size,
+      certifiedCategories,
+    };
+  });
 }
 
 export default async function AdminCompletionPage() {
@@ -88,12 +93,12 @@ export default async function AdminCompletionPage() {
   }
   const divisionRows = Array.from(byDivision.entries())
     .map(([division, members]) => {
-      const certified = members.filter((m) => m.passedCategories.length > 0);
+      const certified = members.filter((m) => m.certifiedCategories.length > 0);
       return {
         division,
         count: members.length,
         lessons: members.reduce((s, m) => s + m.lessonsDone, 0),
-        completions: members.reduce((s, m) => s + m.passedCategories.length, 0),
+        completions: members.reduce((s, m) => s + m.certifiedCategories.length, 0),
         certifiedRate: Math.round((certified.length / members.length) * 100),
       };
     })
@@ -105,8 +110,8 @@ export default async function AdminCompletionPage() {
     u.email ?? "",
     u.division ?? "",
     u.lessonsDone,
-    u.passedCategories.length,
-    u.passedCategories.join(" · "),
+    u.certifiedCategories.length,
+    u.certifiedCategories.join(" · "),
   ]);
   const today = new Date().toISOString().slice(0, 10);
 
@@ -201,11 +206,11 @@ export default async function AdminCompletionPage() {
                       {u.lessonsDone}건
                     </TableCell>
                     <TableCell>
-                      {u.passedCategories.length === 0 ? (
+                      {u.certifiedCategories.length === 0 ? (
                         <Badge variant="outline">미이수</Badge>
                       ) : (
                         <span className="flex flex-wrap gap-1">
-                          {u.passedCategories.map((c) => (
+                          {u.certifiedCategories.map((c) => (
                             <CategoryBadge key={c} category={c} />
                           ))}
                         </span>

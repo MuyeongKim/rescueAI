@@ -5,7 +5,6 @@ import { DEMO, getDemoLearningState } from "@/lib/demo";
 export type LearningState = {
   courses: Course[];
   completedIds: Set<number>;
-  passedCategories: Set<string>;
   totalLessons: number;
   totalCompleted: number;
   overallProgress: number;
@@ -16,16 +15,11 @@ export async function getLearningState(userId: string): Promise<LearningState> {
   if (DEMO) return getDemoLearningState();
   const supabase = await createClient();
 
-  const [docsRes, progRes, quizRes] = await Promise.all([
+  const [docsRes, progRes] = await Promise.all([
     supabase
       .from("documents")
       .select("id, title, category, difficulty, publish_date"),
     supabase.from("lesson_progress").select("document_id").eq("user_id", userId),
-    supabase
-      .from("quiz_attempts")
-      .select("category")
-      .eq("user_id", userId)
-      .eq("passed", true),
   ]);
 
   const docs = (docsRes.data ?? []) as LessonDoc[];
@@ -34,13 +28,8 @@ export async function getLearningState(userId: string): Promise<LearningState> {
       .map((p) => p.document_id)
       .filter((x): x is number => x != null)
   );
-  const passedCategories = new Set<string>(
-    (quizRes.data ?? [])
-      .map((q) => q.category)
-      .filter((x): x is string => !!x)
-  );
 
-  const courses = buildCourses(docs, completedIds, passedCategories);
+  const courses = buildCourses(docs, completedIds);
   const totalLessons = courses.reduce((s, c) => s + c.total, 0);
   const totalCompleted = courses.reduce((s, c) => s + c.completed, 0);
   const overallProgress =
@@ -49,7 +38,6 @@ export async function getLearningState(userId: string): Promise<LearningState> {
   return {
     courses,
     completedIds,
-    passedCategories,
     totalLessons,
     totalCompleted,
     overallProgress,

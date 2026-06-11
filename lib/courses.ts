@@ -34,8 +34,7 @@ export type Course = {
   total: number;
   completed: number;
   progress: number; // 0~100
-  passedQuiz: boolean;
-  certified: boolean; // 모든 레슨 완료 + 퀴즈 합격
+  certified: boolean; // 모든 레슨 완료 = 이수
 };
 
 function sortLessons(a: LessonDoc, b: LessonDoc): number {
@@ -50,8 +49,7 @@ function sortLessons(a: LessonDoc, b: LessonDoc): number {
 
 export function buildCourses(
   docs: LessonDoc[],
-  completedIds: Set<number>,
-  passedCategories: Set<string>
+  completedIds: Set<number>
 ): Course[] {
   const byCat = new Map<string, LessonDoc[]>();
   for (const d of docs) {
@@ -78,7 +76,6 @@ export function buildCourses(
     const total = lessons.length;
     const completed = lessons.filter((l) => l.completed).length;
     const progress = total > 0 ? Math.round((completed / total) * 100) : 0;
-    const passedQuiz = passedCategories.has(category);
     return {
       category,
       description: COURSE_META[category]?.description ?? "구조 교육 과정",
@@ -87,8 +84,7 @@ export function buildCourses(
       total,
       completed,
       progress,
-      passedQuiz,
-      certified: total > 0 && completed === total && passedQuiz,
+      certified: total > 0 && completed === total,
     };
   });
 }

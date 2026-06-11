@@ -1,0 +1,132 @@
+// 교육자료·훈련계획 생성 — 스키마·옵션·프롬프트의 단일 출처.
+// UI는 클릭·선택형(자유 입력 최소화): 유형 × 분야 × 대상 × 시간 조합으로 생성한다.
+import { z } from "zod";
+
+// ── 생성 유형 ──
+export const GEN_TYPES = [
+  {
+    key: "plan",
+    label: "훈련계획",
+    description: "목표·준비물·단계별 진행·평가가 담긴 훈련계획 문서",
+  },
+  {
+    key: "lesson",
+    label: "교육자료(교안)",
+    description: "교육 시간에 바로 쓰는 강의용 교안(개요·본문·정리)",
+  },
+  {
+    key: "notebooklm",
+    label: "NotebookLM 프롬프트",
+    description: "NotebookLM에 붙여넣어 슬라이드를 만들 프롬프트 생성",
+  },
+] as const;
+export type GenType = (typeof GEN_TYPES)[number]["key"];
+
+// ── 선택 옵션 ──
+export const AUDIENCES = ["신임 대원", "일반 대원", "전문 과정"] as const;
+export type Audience = (typeof AUDIENCES)[number];
+
+export const DURATIONS = ["1시간", "2시간", "4시간"] as const;
+export type Duration = (typeof DURATIONS)[number];
+
+export type GenerateRequest = {
+  type: GenType;
+  category: string;
+  audience: Audience;
+  duration: Duration;
+  topic?: string; // 선택: 훈련 내용/주제(예: "공기호흡기 점검")
+  date?: string; // 선택: 훈련 일자 (YYYY-MM-DD)
+};
+
+// ── 생성 결과 ──
+export const generatedDocSchema = z.object({
+  title: z.string().describe("문서 제목 (분야·주제·시간이 드러나게)"),
+  sections: z
+    .array(
+      z.object({
+        heading: z.string().describe("섹션 제목 (번호 포함, 예: '1. 훈련 개요')"),
+        content: z.string().describe("섹션 본문. 줄바꿈(\\n)으로 항목 구분"),
+      })
+    )
+    .min(3)
+    .max(8),
+});
+
+export type GeneratedSection = z.infer<typeof generatedDocSchema>["sections"][number];
+
+export type GeneratedDocSource = {
+  document_id: number;
+  doc: string;
+  page: number | null;
+};
+
+export type GeneratedDoc = {
+  title: string;
+  sections: GeneratedSection[];
+  sources: GeneratedDocSource[];
+};
+
+// ── 프롬프트 ──
+const TYPE_GUIDE: Record<Exclude<GenType, "notebooklm">, string> = {
+  plan: `훈련계획 문서를 작성하세요. 다음 구성을 따르세요:
+1. 훈련 개요 (대상·시간·장소·목표)
+2. 준비물·안전조치 (장비 목록과 훈련 전 점검사항, 안전관리관 지정)
+3. 단계별 진행 (시간 배분을 명시한 이론→실습→종합 순서)
+4. 평가·강평 (숙달 확인 방법)`,
+  lesson: `강의용 교안을 작성하세요. 다음 구성을 따르세요:
+1. 학습 목표 (이 교육을 마치면 할 수 있어야 하는 것)
+2. 도입 (현장 사례나 질문으로 동기 부여)
+3. 본문 (핵심 내용을 소단원으로 나눠 설명, 시범·실습 포인트 표시)
+4. 정리·평가 (핵심 요약과 확인 질문)`,
+};
+
+export function buildGeneratePrompt(req: GenerateRequest): string {
+  if (req.type === "notebooklm") {
+    throw new Error("notebooklm 유형은 buildNotebookLmPrompt 를 사용하세요.");
+  }
+  const topicLine = req.topic?.trim()
+    ? `훈련 내용(주제): ${req.topic.trim()}`
+    : "훈련 내용(주제): 분야 전반에서 가장 중요한 주제를 선정";
+  const dateLine = req.date ? `\n- 훈련 일자: ${req.date} (문서 개요에 명시)` : "";
+  return `전북소방본부 ${req.category} 분야 ${
+    req.type === "plan" ? "훈련계획" : "교육자료(교안)"
+  }를 작성합니다.
+
+- 대상: ${req.audience}
+- 교육 시간: ${req.duration}
+- ${topicLine}${dateLine}
+
+${TYPE_GUIDE[req.type]}
+
+[작성 규칙]
+- 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
+- 대상 수준(${req.audience})에 맞는 난이도와 분량으로 작성하세요.
+- 시간 배분의 합이 교육 시간(${req.duration})과 일치해야 합니다.
+- 한국어로, 현장에서 바로 쓸 수 있게 구체적으로 작성하세요.`;
+}
+
+// NotebookLM에 붙여넣는 프롬프트 — AI 호출 없이 조립(데모·내부망에서도 동일 동작).
+// docTitles: 인덱싱(벡터DB)된 해당 분야 자료 제목 — 어떤 자료를 업로드할지 안내에 포함.
+export function buildNotebookLmPrompt(
+  req: GenerateRequest,
+  docTitles: string[] = []
+): string {
+  const topic = req.topic?.trim() || `${req.category} 분야 핵심 주제`;
+  const materials =
+    docTitles.length > 0
+      ? `\n\n업로드할 자료 (플랫폼에 인덱싱된 ${req.category} 분야 자료):\n${docTitles
+          .map((t) => `- ${t}`)
+          .join("\n")}`
+      : "";
+  return `업로드한 전북소방 ${req.category} 분야 교육자료를 바탕으로 "${topic}" 교육용 슬라이드를 만들어 주세요.${materials}
+
+조건:
+- 대상: ${req.audience} (이 수준에 맞는 용어와 난이도로)
+- 교육 시간: ${req.duration} 분량 (슬라이드 ${
+    req.duration === "1시간" ? "10~15" : req.duration === "2시간" ? "20~25" : "30~40"
+  }장)
+- 구성: ① 학습 목표 1장 ② 핵심 개념·절차 (단계별로 1장씩, 그림 위치 표시) ③ 현장 적용 사례 ④ 안전 유의사항 ⑤ 핵심 요약·퀴즈 1장
+- 각 슬라이드: 제목 + 핵심 문장 3개 이하 + 발표자 노트(설명 대본)
+- 자료에 없는 내용은 넣지 말고, 각 슬라이드에 근거 자료의 쪽 번호를 표시해 주세요.
+- 전북소방본부 교육용이므로 격식 있는 한국어로 작성해 주세요.`;
+}

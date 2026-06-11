@@ -7,7 +7,7 @@ const PROTECTED_PREFIXES = [
   "/docs",
   "/admin",
   "/courses",
-  "/quiz",
+  "/generate",
   "/fitness",
   "/notices",
   "/me",

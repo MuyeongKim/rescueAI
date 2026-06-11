@@ -17,7 +17,7 @@ export default async function CoursesPage() {
       <div>
         <h1 className="text-xl font-semibold">학습 과정</h1>
         <p className="text-sm text-muted-foreground">
-          분야별 과정입니다. 자료를 학습하고 퀴즈에 합격하면 이수로 표시됩니다.
+          분야별 과정입니다. 과정의 모든 자료를 학습하면 이수로 표시됩니다.
         </p>
       </div>
 

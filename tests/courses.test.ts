@@ -11,7 +11,7 @@ const docs: LessonDoc[] = [
 
 describe("buildCourses", () => {
   it("카테고리별로 과정을 만들고 카테고리 없는 자료는 제외한다", () => {
-    const courses = buildCourses(docs, new Set(), new Set());
+    const courses = buildCourses(docs, new Set());
     const cats = courses.map((c) => c.category);
     expect(cats).toContain("산악");
     expect(cats).toContain("수난");
@@ -21,32 +21,29 @@ describe("buildCourses", () => {
   });
 
   it("레슨을 난이도(초급→중급→고급) 순으로 정렬한다", () => {
-    const courses = buildCourses(docs, new Set(), new Set());
+    const courses = buildCourses(docs, new Set());
     const 산악 = courses.find((c) => c.category === "산악")!;
     expect(산악.lessons.map((l) => l.difficulty)).toEqual(["초급", "중급", "고급"]);
     expect(산악.lessons.map((l) => l.order)).toEqual([1, 2, 3]);
   });
 
   it("완료한 레슨으로 진도율을 계산한다", () => {
-    const courses = buildCourses(docs, new Set([2, 3]), new Set());
+    const courses = buildCourses(docs, new Set([2, 3]));
     const 산악 = courses.find((c) => c.category === "산악")!;
     expect(산악.completed).toBe(2);
     expect(산악.progress).toBe(67); // round(2/3*100)
     expect(산악.certified).toBe(false); // 전부 완료 아님
   });
 
-  it("모든 레슨 완료 + 퀴즈 합격 시 이수(certified)", () => {
-    const courses = buildCourses(docs, new Set([1, 2, 3]), new Set(["산악"]));
+  it("모든 레슨을 완료하면 이수(certified)", () => {
+    const courses = buildCourses(docs, new Set([1, 2, 3]));
     const 산악 = courses.find((c) => c.category === "산악")!;
     expect(산악.progress).toBe(100);
-    expect(산악.passedQuiz).toBe(true);
     expect(산악.certified).toBe(true);
   });
 
-  it("퀴즈만 합격하고 레슨 미완료면 이수 아님", () => {
-    const courses = buildCourses(docs, new Set([2]), new Set(["산악"]));
-    const 산악 = courses.find((c) => c.category === "산악")!;
-    expect(산악.passedQuiz).toBe(true);
-    expect(산악.certified).toBe(false);
+  it("자료가 없는 과정은 이수가 아니다", () => {
+    const courses = buildCourses([], new Set());
+    expect(courses).toHaveLength(0);
   });
 });

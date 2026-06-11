@@ -7,6 +7,7 @@ import {
   Dumbbell,
   Megaphone,
   Pin,
+  Wand2,
 } from "lucide-react";
 
 import { getUserAndProfile } from "@/lib/auth";
@@ -45,7 +46,6 @@ export default async function HomePage() {
     : {
         courses: [],
         completedIds: new Set<number>(),
-        passedCategories: new Set<string>(),
         totalLessons: 0,
         totalCompleted: 0,
         overallProgress: 0,
@@ -124,6 +124,11 @@ export default async function HomePage() {
           <Link href="/chat">
             <Button variant="outline" className="h-11 gap-2">
               <MessageSquare className="h-4 w-4" /> AI 튜터에게 질문
+            </Button>
+          </Link>
+          <Link href="/generate">
+            <Button variant="outline" className="h-11 gap-2">
+              <Wand2 className="h-4 w-4" /> 훈련계획·교안 생성
             </Button>
           </Link>
         </div>
