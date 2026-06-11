@@ -6,11 +6,13 @@ import {
   DURATIONS,
   buildGeneratePrompt,
   generatedDocSchema,
+  generatedSlidesSchema,
   type GenerateRequest,
   type GeneratedDoc,
   type GeneratedDocSource,
+  type GeneratedSlideDeck,
 } from "@/lib/generate";
-import { DEMO, demoGeneratedDoc } from "@/lib/demo";
+import { DEMO, demoGeneratedDoc, demoGeneratedSlides } from "@/lib/demo";
 
 export const maxDuration = 60;
 
@@ -68,8 +70,16 @@ export async function POST(req: Request) {
     return new Response("Bad Request", { status: 400 });
   }
 
-  // 데모 모드: AI/DB 없이 목 문서 반환
+  // 데모 모드: AI/DB 없이 목 문서/슬라이드 반환
   if (DEMO) {
+    if (body.type === "slides") {
+      return Response.json({
+        ...demoGeneratedSlides,
+        title: body.category
+          ? demoGeneratedSlides.title.replace("화재", body.category)
+          : demoGeneratedSlides.title,
+      } satisfies GeneratedSlideDeck);
+    }
     return Response.json({
       ...demoGeneratedDoc,
       title: body.category
@@ -89,7 +99,7 @@ export async function POST(req: Request) {
   const audience = body.audience;
   const duration = body.duration;
   if (
-    (type !== "plan" && type !== "lesson") ||
+    (type !== "plan" && type !== "lesson" && type !== "slides") ||
     !category ||
     !audience ||
     !AUDIENCES.includes(audience) ||
@@ -116,14 +126,27 @@ export async function POST(req: Request) {
   }
 
   try {
+    const system = `다음은 전북소방 ${category} 분야 교육자료입니다. 이 자료만 근거로 작성하세요.\n\n[참고 자료]\n${contextText}`;
+    const model = anthropic(process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5");
+
+    if (type === "slides") {
+      const { object } = await generateObject({
+        model,
+        schema: generatedSlidesSchema,
+        system,
+        prompt: buildGeneratePrompt(genReq),
+        temperature: 0.4,
+      });
+      return Response.json({ ...object, sources } satisfies GeneratedSlideDeck);
+    }
+
     const { object } = await generateObject({
-      model: anthropic(process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5"),
+      model,
       schema: generatedDocSchema,
-      system: `다음은 전북소방 ${category} 분야 교육자료입니다. 이 자료만 근거로 작성하세요.\n\n[참고 자료]\n${contextText}`,
+      system,
       prompt: buildGeneratePrompt(genReq),
       temperature: 0.4,
     });
-
     return Response.json({ ...object, sources } satisfies GeneratedDoc);
   } catch (e) {
     console.error("[generate] 실패:", e);

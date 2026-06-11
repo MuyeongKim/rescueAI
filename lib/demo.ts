@@ -3,7 +3,7 @@
 import { buildCourses, type LessonDoc } from "@/lib/courses";
 import { calcWeekly } from "@/lib/fitness";
 import type { DocSource } from "@/lib/database.types";
-import type { GeneratedDoc } from "@/lib/generate";
+import type { GeneratedDoc, GeneratedSlideDeck } from "@/lib/generate";
 
 export const DEMO = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
 
@@ -104,6 +104,72 @@ export const demoGeneratedDoc: GeneratedDoc = {
       heading: "4. 평가·강평",
       content:
         "착용 절차 4단계 누락 없이 수행하는지 조별 체크리스트로 확인하고, 진입 훈련 중 대형 이탈 사례를 강평에서 공유한다.",
+    },
+  ],
+  sources: [
+    { document_id: 6, doc: "공기호흡기 착용 절차", page: 3 },
+    { document_id: 7, doc: "내화 진입과 대형 유지", page: 2 },
+  ],
+};
+
+export const demoGeneratedSlides: GeneratedSlideDeck = {
+  title: "화재 — 공기호흡기 착용과 내화 진입",
+  slides: [
+    {
+      title: "학습 목표",
+      bullets: [
+        "공기호흡기 사용 전 점검 4단계를 순서대로 수행한다",
+        "양압 상태 확인 후 안전하게 진입한다",
+        "내화 진입 시 대형 유지 요령을 설명한다",
+      ],
+      notes:
+        "이번 교육의 세 가지 목표를 먼저 공유합니다. 점검 절차는 순서가 핵심이므로 4단계를 끝까지 강조해 주세요.",
+    },
+    {
+      title: "점검 1단계 — 면체 밀착 확인",
+      bullets: [
+        "면체와 안면부 사이 틈새 여부 확인",
+        "밀착되지 않으면 유독가스 유입 위험",
+      ],
+      notes:
+        "가장 먼저 면체 밀착 상태를 확인합니다. 머리카락이나 두건이 끼면 밀착이 깨질 수 있다는 점을 시범으로 보여주세요.",
+    },
+    {
+      title: "점검 2단계 — 충전 압력 확인",
+      bullets: ["잔압계로 충전 압력 확인 (통상 약 300bar)", "기준 미달 실린더는 교체"],
+      notes:
+        "잔압계를 직접 보여주며 300bar 내외 기준을 설명합니다. 압력이 낮은 실린더를 들고 진입하는 사례가 없도록 강조하세요.",
+    },
+    {
+      title: "점검 3단계 — 잔압 경보 확인",
+      bullets: ["경보장치 작동 여부 점검", "공기 잔량 부족 시 탈출 신호"],
+      notes:
+        "잔압 경보는 탈출 타이밍을 알려주는 생명줄입니다. 경보음을 실제로 들려주고 울리면 즉시 탈출이라는 원칙을 심어주세요.",
+    },
+    {
+      title: "점검 4단계 — 양압 누설 점검",
+      bullets: ["양압 작동 상태에서 면체 누설 확인", "점검 완료 후 양압 유지한 채 진입"],
+      notes:
+        "양압 상태에서 면체 가장자리 누설을 확인합니다. 여기까지 4단계가 끝나야 진입 준비가 완료됩니다.",
+    },
+    {
+      title: "내화 진입 — 대형 유지",
+      bullets: [
+        "진입조는 대형을 유지하며 상호 확인",
+        "대형 이탈은 길잃음·고립으로 직결",
+        "열화상카메라로 시야 보완",
+      ],
+      notes:
+        "농연 속에서는 1m 앞도 보이지 않습니다. 대형 유지가 곧 상호 안전 확보임을 사례와 함께 설명하세요.",
+    },
+    {
+      title: "핵심 요약",
+      bullets: [
+        "점검 4단계: 밀착 → 압력 → 경보 → 누설",
+        "양압 유지 상태로 진입",
+        "대형 유지 = 상호 안전",
+      ],
+      notes: "마지막으로 점검 순서를 구호로 함께 복창하며 마무리합니다.",
     },
   ],
   sources: [

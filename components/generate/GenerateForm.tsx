@@ -8,6 +8,8 @@ import {
   Download,
   FileText,
   Loader2,
+  MessageSquareText,
+  Presentation,
   Sparkles,
   Wand2,
 } from "lucide-react";
@@ -21,6 +23,7 @@ import {
   type Duration,
   type GenType,
   type GeneratedDoc,
+  type GeneratedSlideDeck,
 } from "@/lib/generate";
 import { categoryStyle } from "@/lib/category";
 import { cn } from "@/lib/utils";
@@ -98,23 +101,26 @@ export function GenerateForm({
   const [date, setDate] = useState("");
   const [loading, setLoading] = useState(false);
   const [doc, setDoc] = useState<GeneratedDoc | null>(null);
+  const [deck, setDeck] = useState<GeneratedSlideDeck | null>(null);
   const [nlmPrompt, setNlmPrompt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
   const genReq = { type, category, audience, duration, topic, date };
+  const subtitle = `대상: ${audience} · 교육 시간: ${duration}${date ? ` · ${date}` : ""}`;
 
   async function handleGenerate() {
     setCopied(false);
+    setDoc(null);
+    setDeck(null);
+    setNlmPrompt(null);
+
     // NotebookLM 프롬프트는 AI 호출 없이 즉시 조립 — 인덱싱된 자료 목록 포함
     if (type === "notebooklm") {
-      setDoc(null);
       setNlmPrompt(buildNotebookLmPrompt(genReq, docsByCategory[category] ?? []));
       return;
     }
 
     setLoading(true);
-    setNlmPrompt(null);
-    setDoc(null);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",
@@ -128,11 +134,24 @@ export function GenerateForm({
         });
         return;
       }
-      setDoc((await res.json()) as GeneratedDoc);
+      const json = await res.json();
+      if (type === "slides") setDeck(json as GeneratedSlideDeck);
+      else setDoc(json as GeneratedDoc);
     } catch {
       toast.error("생성 중 오류가 발생했습니다.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handlePptx() {
+    if (!deck) return;
+    try {
+      // pptxgenjs는 무거워서 다운로드 시점에만 로드
+      const { downloadPptx } = await import("@/lib/pptx");
+      await downloadPptx(deck, category, subtitle);
+    } catch {
+      toast.error("PPTX 파일 생성에 실패했습니다");
     }
   }
 
@@ -173,34 +192,40 @@ export function GenerateForm({
         <CardContent className="space-y-5 p-4 sm:p-5">
           <div className="space-y-2">
             <Label className="text-sm font-medium">생성할 자료</Label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3" role="radiogroup">
-              {GEN_TYPES.map((t) => (
-                <button
-                  key={t.key}
-                  type="button"
-                  role="radio"
-                  aria-checked={type === t.key}
-                  onClick={() => setType(t.key)}
-                  className={cn(
-                    "rounded-lg border p-3 text-left transition-colors min-h-[48px]",
-                    type === t.key
-                      ? "border-primary bg-primary/5"
-                      : "hover:border-primary/40 hover:bg-accent/40"
-                  )}
-                >
-                  <span className="flex items-center gap-1.5 font-medium">
-                    {t.key === "notebooklm" ? (
-                      <Sparkles className="h-4 w-4 text-primary" />
-                    ) : (
-                      <FileText className="h-4 w-4 text-primary" />
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup">
+              {GEN_TYPES.map((t) => {
+                const Icon =
+                  t.key === "notebooklm"
+                    ? Sparkles
+                    : t.key === "slides"
+                      ? Presentation
+                      : t.key === "lesson"
+                        ? MessageSquareText
+                        : FileText;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={type === t.key}
+                    onClick={() => setType(t.key)}
+                    className={cn(
+                      "rounded-lg border p-3 text-left transition-colors min-h-[48px]",
+                      type === t.key
+                        ? "border-primary bg-primary/5"
+                        : "hover:border-primary/40 hover:bg-accent/40"
                     )}
-                    {t.label}
-                  </span>
-                  <span className="mt-1 block text-xs text-muted-foreground">
-                    {t.description}
-                  </span>
-                </button>
-              ))}
+                  >
+                    <span className="flex items-center gap-1.5 font-medium">
+                      <Icon className="h-4 w-4 text-primary" />
+                      {t.label}
+                    </span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {t.description}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -291,7 +316,56 @@ export function GenerateForm({
         </Card>
       )}
 
-      {/* 2-b. 생성 문서 결과 */}
+      {/* 2-b. 슬라이드 결과 — 표준 양식(분야 색) PPTX로 변환 */}
+      {deck && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="flex items-center gap-2 text-base">
+              <Presentation className="h-4 w-4 text-primary" /> {deck.title}
+            </CardTitle>
+            <CardDescription className="flex flex-wrap items-center gap-1.5">
+              슬라이드 {deck.slides.length}장 · 근거:
+              {deck.sources.map((s, i) => (
+                <Badge key={i} variant="secondary" className="font-normal">
+                  {s.doc}
+                  {s.page != null && ` p.${s.page}`}
+                </Badge>
+              ))}
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
+              {deck.slides.map((s, i) => (
+                <div key={i} className="rounded-lg border p-3">
+                  <p className="mb-1 flex items-baseline gap-2 font-semibold">
+                    <span className="text-xs text-muted-foreground">{i + 1}</span>
+                    {s.title}
+                  </p>
+                  <ul className="list-disc space-y-0.5 pl-5 text-sm text-muted-foreground">
+                    {s.bullets.map((b, j) => (
+                      <li key={j}>{b}</li>
+                    ))}
+                  </ul>
+                  {s.notes && (
+                    <p className="mt-2 border-t pt-2 text-xs text-muted-foreground">
+                      🎤 {s.notes}
+                    </p>
+                  )}
+                </div>
+              ))}
+            </div>
+            <Button className="h-12 w-full gap-2 text-base" onClick={handlePptx}>
+              <Download className="h-4 w-4" /> PPTX 다운로드 (발표자 노트 포함)
+            </Button>
+            <p className="text-xs text-muted-foreground">
+              분야 색 표준 양식으로 만들어집니다. AI가 인덱싱된 교육자료를 근거로 생성한
+              초안이므로 시행 전 내용을 반드시 검토·보완하세요.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* 2-c. 생성 문서 결과 */}
       {doc && (
         <Card>
           <CardHeader className="pb-3">

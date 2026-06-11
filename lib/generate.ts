@@ -15,6 +15,11 @@ export const GEN_TYPES = [
     description: "교육 시간에 바로 쓰는 강의용 교안(개요·본문·정리)",
   },
   {
+    key: "slides",
+    label: "슬라이드(PPTX)",
+    description: "표준 양식 PPTX 슬라이드 자동 생성 (발표자 노트 포함)",
+  },
+  {
     key: "notebooklm",
     label: "NotebookLM 프롬프트",
     description: "NotebookLM에 붙여넣어 슬라이드를 만들 프롬프트 생성",
@@ -66,8 +71,39 @@ export type GeneratedDoc = {
   sources: GeneratedDocSource[];
 };
 
+// ── 슬라이드(PPTX) 생성 결과 ──
+export const generatedSlidesSchema = z.object({
+  title: z.string().describe("발표 제목 (분야·주제가 드러나게, 25자 이내)"),
+  slides: z
+    .array(
+      z.object({
+        title: z.string().describe("슬라이드 제목 (간결하게)"),
+        bullets: z
+          .array(z.string().describe("핵심 문장 (한 줄, 40자 이내)"))
+          .min(1)
+          .max(4),
+        notes: z.string().describe("발표자 노트 — 교관이 읽을 설명 대본 2~4문장"),
+      })
+    )
+    .min(6)
+    .max(20),
+});
+
+export type GeneratedSlide = z.infer<typeof generatedSlidesSchema>["slides"][number];
+
+export type GeneratedSlideDeck = {
+  title: string;
+  slides: GeneratedSlide[];
+  sources: GeneratedDocSource[];
+};
+
 // ── 프롬프트 ──
-const TYPE_GUIDE: Record<Exclude<GenType, "notebooklm">, string> = {
+// 시간별 권장 슬라이드 수 (NotebookLM 안내와 동일 기준, 스키마 상한 20장)
+export function slideCountFor(duration: Duration): string {
+  return duration === "1시간" ? "10~12" : duration === "2시간" ? "14~18" : "18~20";
+}
+
+const TYPE_GUIDE: Record<Exclude<GenType, "notebooklm" | "slides">, string> = {
   plan: `훈련계획 문서를 작성하세요. 다음 구성을 따르세요:
 1. 훈련 개요 (대상·시간·장소·목표)
 2. 준비물·안전조치 (장비 목록과 훈련 전 점검사항, 안전관리관 지정)
@@ -88,6 +124,24 @@ export function buildGeneratePrompt(req: GenerateRequest): string {
     ? `훈련 내용(주제): ${req.topic.trim()}`
     : "훈련 내용(주제): 분야 전반에서 가장 중요한 주제를 선정";
   const dateLine = req.date ? `\n- 훈련 일자: ${req.date} (문서 개요에 명시)` : "";
+
+  if (req.type === "slides") {
+    return `전북소방본부 ${req.category} 분야 교육용 슬라이드를 작성합니다.
+
+- 대상: ${req.audience}
+- 교육 시간: ${req.duration} (슬라이드 ${slideCountFor(req.duration)}장)
+- ${topicLine}
+
+[구성]
+① 학습 목표 1장 ② 핵심 개념·절차 (단계별로 1장씩) ③ 현장 적용 사례
+④ 안전 유의사항 ⑤ 핵심 요약 1장
+
+[작성 규칙]
+- 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
+- 각 슬라이드: 간결한 제목 + 핵심 문장 최대 4개(한 줄씩) + 발표자 노트(교관용 설명 대본 2~4문장).
+- 대상 수준(${req.audience})에 맞는 용어와 난이도로, 한국어로 작성하세요.`;
+  }
+
   return `전북소방본부 ${req.category} 분야 ${
     req.type === "plan" ? "훈련계획" : "교육자료(교안)"
   }를 작성합니다.

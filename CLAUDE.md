@@ -27,7 +27,7 @@ components/chat /admin  도메인 컴포넌트
 lib/supabase/   client(브라우저) · server(SSR) · admin(service role, 서버 전용)
 lib/rag.ts      검색 + 컨텍스트 조립        lib/embeddings.ts  쿼리 임베딩
 lib/courses.ts  과정 자동 편성·진도(순수)   lib/learning.ts    학습상태 조립(서버)
-lib/generate.ts 자료 생성 스키마·프롬프트   lib/docx.ts        docx 변환(클라이언트 동적 import)
+lib/generate.ts 자료 생성 스키마·프롬프트   lib/docx.ts /pptx.ts  docx·pptx 변환(클라이언트 동적 import)
 lib/fitness.ts  체력 마일리지 규칙(순수)    lib/fitness-server.ts  마일리지 현황 조립(서버)
 lib/database.types.ts     수작성 DB 타입
 app/home /courses /generate  교육훈련 플랫폼 화면 (+/api/generate)
@@ -46,7 +46,8 @@ eval/           평가셋 50문항 러너
 - **과정 = 카테고리, 레슨 = 자료(documents)**. 과정은 인덱싱 자료로 **자동 편성**(`lib/courses.ts`).
 - 진도: `lesson_progress`(본인 RLS). **이수 = 분야의 모든 자료 학습 완료** (퀴즈 제거됨, 0006).
 - 자료 생성: `/generate` 클릭·선택형 UI → `/api/generate`(분야 자료 컨텍스트+generateObject).
-  훈련계획/교안은 docx 다운로드, NotebookLM 프롬프트는 클라이언트 조립(AI 미호출).
+  훈련계획/교안은 docx, 슬라이드는 분야 색 표준 양식 PPTX(발표자 노트 포함) 다운로드,
+  NotebookLM 프롬프트는 클라이언트 조립(AI 미호출).
 
 ## 보안 규칙 (필수)
 - `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`·`SUPABASE_SERVICE_ROLE_KEY` 는 **서버 전용**.
