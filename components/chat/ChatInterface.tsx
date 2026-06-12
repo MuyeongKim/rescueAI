@@ -29,9 +29,12 @@ const EXAMPLES = [
 export function ChatInterface({
   conversationId,
   initialMessages = [],
+  initialInput,
 }: {
   conversationId?: string;
   initialMessages?: Message[];
+  /** 입력창 프리필 (예: SOP 카드의 "AI 튜터에게 묻기" → /chat?q=…) */
+  initialInput?: string;
 }) {
   const [category, setCategory] = useState<string>("전체");
   const convIdRef = useRef<string | undefined>(conversationId);
@@ -49,6 +52,7 @@ export function ChatInterface({
   } = useChat({
     api: "/api/chat",
     initialMessages,
+    initialInput,
   });
 
   // 스트림에서 conversationId 추출 → URL 갱신(브라우저 스토리지 미사용, 히스토리만 교체)

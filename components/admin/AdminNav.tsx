@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils";
 const TABS = [
   { href: "/admin", label: "통계" },
   { href: "/admin/completion", label: "이수 현황" },
+  { href: "/admin/dispatch", label: "출동통계 분석" },
   { href: "/admin/documents", label: "자료 관리" },
   { href: "/admin/users", label: "사용자 관리" },
   { href: "/admin/notices", label: "공지 작성" },

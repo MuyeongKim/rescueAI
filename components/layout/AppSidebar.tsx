@@ -14,6 +14,9 @@ import {
   Users,
   Award,
   Wand2,
+  ClipboardCheck,
+  Newspaper,
+  Siren,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
@@ -25,11 +28,15 @@ export type NavKey =
   | "courses"
   | "chat"
   | "generate"
+  | "sop"
+  | "news"
+  | "dispatch"
   | "docs"
   | "fitness"
   | "me"
   | "admin"
   | "admin-completion"
+  | "admin-dispatch"
   | "admin-documents"
   | "admin-users"
   | "admin-notices";
@@ -44,12 +51,16 @@ type NavItem = {
 };
 
 // 공지사항은 메뉴에서 제외 — 홈의 공지 섹션('전체 보기' → /notices)으로만 진입한다.
-// 모바일 탭바는 6개 제한 — 자료실은 학습 과정·홈에서 진입 가능해 모바일에서 제외.
+// 모바일 탭바는 6개 제한 — 자료실·동향·출동은 홈/마이페이지에서 진입 가능해 모바일에서 제외.
+// SOP는 현장(모바일·태블릿) 사용이 핵심이라 모바일 탭에 포함하고 학습을 제외.
 const NAV_ITEMS: NavItem[] = [
   { key: "home", href: "/home", label: "홈", icon: Home, mobile: true },
-  { key: "courses", href: "/courses", label: "학습", icon: GraduationCap, mobile: true },
+  { key: "courses", href: "/courses", label: "학습", icon: GraduationCap },
   { key: "chat", href: "/chat", label: "AI 튜터", icon: MessageSquare, mobile: true },
   { key: "generate", href: "/generate", label: "자료 생성", icon: Wand2, mobile: true },
+  { key: "sop", href: "/sop", label: "현장 SOP", icon: ClipboardCheck, mobile: true },
+  { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
+  { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
   { key: "docs", href: "/docs", label: "자료실", icon: FileText },
   { key: "fitness", href: "/fitness", label: "체력단련", icon: Dumbbell, mobile: true },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser, mobile: true },
@@ -58,6 +69,7 @@ const NAV_ITEMS: NavItem[] = [
 const ADMIN_ITEMS: NavItem[] = [
   { key: "admin", href: "/admin", label: "통계", icon: BarChart3 },
   { key: "admin-completion", href: "/admin/completion", label: "이수 현황", icon: Award },
+  { key: "admin-dispatch", href: "/admin/dispatch", label: "출동통계 분석", icon: Siren },
   { key: "admin-documents", href: "/admin/documents", label: "자료 관리", icon: FolderCog },
   { key: "admin-users", href: "/admin/users", label: "사용자 관리", icon: Users },
   { key: "admin-notices", href: "/admin/notices", label: "공지 작성", icon: Megaphone },
@@ -167,12 +179,17 @@ export async function AppSidebar({
                 href={item.href}
                 aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "flex flex-col items-center gap-0.5 px-3 py-1.5 rounded-lg transition-colors min-w-[48px]",
+                  "flex flex-col items-center gap-0.5 px-1.5 py-1.5 rounded-lg transition-colors min-w-[48px]",
                   isActive ? "text-primary" : "text-muted-foreground"
                 )}
               >
                 <Icon className="h-5 w-5" />
-                <span className={cn("text-xs", isActive && "font-medium")}>
+                <span
+                  className={cn(
+                    "text-[11px] whitespace-nowrap",
+                    isActive && "font-medium"
+                  )}
+                >
                   {item.label}
                 </span>
               </Link>
