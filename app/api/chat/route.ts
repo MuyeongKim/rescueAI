@@ -69,7 +69,10 @@ export async function POST(req: Request) {
   }
 
   // 7) 대화 보장 (없으면 신규 생성, 제목=첫 질문 앞부분)
+  // conversations 테이블 미생성(마이그레이션 전) 시에도 답변은 가능해야 한다 —
+  // 저장 없이 임시 대화로 강등(기록·과거 대화 재열람만 비활성).
   let conversationId = body.conversationId;
+  let ephemeral = conversationId?.startsWith("temp-") ?? false;
   if (!conversationId) {
     const { data: conv, error } = await supabase
       .from("conversations")
@@ -77,17 +80,21 @@ export async function POST(req: Request) {
       .select("id")
       .single();
     if (error || !conv) {
-      console.error("[chat] 대화 생성 실패:", error?.message);
-      return new Response("대화 생성 실패", { status: 500 });
+      console.error("[chat] 대화 저장 불가 — 임시 대화로 진행:", error?.message);
+      ephemeral = true;
+      conversationId = `temp-${Date.now()}`;
+    } else {
+      conversationId = conv.id;
     }
-    conversationId = conv.id;
   }
   const convId: string = conversationId;
 
   // 6) user 메시지 선행 저장 (스트림 실패해도 질문은 보존)
-  await supabase
-    .from("messages")
-    .insert({ conversation_id: convId, role: "user", content: question });
+  if (!ephemeral) {
+    await supabase
+      .from("messages")
+      .insert({ conversation_id: convId, role: "user", content: question });
+  }
 
   const startedAt = Date.now();
   const system = buildSystemPrompt(contextText);
@@ -95,8 +102,10 @@ export async function POST(req: Request) {
   // 4~5) Claude 스트리밍 + 메타데이터(conversationId, sources) 전달
   return createDataStreamResponse({
     execute: (dataStream) => {
-      // 클라이언트가 신규 대화 id를 즉시 인지하도록 전송
-      dataStream.writeData({ type: "conversationId", value: convId });
+      // 클라이언트가 신규 대화 id를 즉시 인지하도록 전송 (임시 대화는 URL 교체 안 함)
+      if (!ephemeral) {
+        dataStream.writeData({ type: "conversationId", value: convId });
+      }
 
       const result = streamText({
         model: getChatModel(),
@@ -105,18 +114,22 @@ export async function POST(req: Request) {
         temperature: 0.2,
         onFinish: async ({ text }) => {
           const latencyMs = Date.now() - startedAt;
-          const { data: saved, error } = await supabase
-            .from("messages")
-            .insert({
-              conversation_id: convId,
-              role: "assistant",
-              content: text,
-              sources: sources.length > 0 ? sources : null,
-              latency_ms: latencyMs,
-            })
-            .select("id")
-            .single();
-          if (error) console.error("[chat] assistant 저장 실패:", error.message);
+          let saved: { id: number } | null = null;
+          if (!ephemeral) {
+            const { data, error } = await supabase
+              .from("messages")
+              .insert({
+                conversation_id: convId,
+                role: "assistant",
+                content: text,
+                sources: sources.length > 0 ? sources : null,
+                latency_ms: latencyMs,
+              })
+              .select("id")
+              .single();
+            if (error) console.error("[chat] assistant 저장 실패:", error.message);
+            saved = data;
+          }
 
           // assistant 메시지에 출처/저장 id를 annotation으로 부착 (§8.1 응답)
           dataStream.writeMessageAnnotation({
