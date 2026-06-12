@@ -19,6 +19,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { MobileMoreSheet } from "@/components/layout/MobileMoreSheet";
 import { cn } from "@/lib/utils";
 import { hasRecentNotice } from "@/lib/notices";
 
@@ -48,8 +49,9 @@ type NavItem = {
   mobile?: boolean;
 };
 
-// 공지사항은 메뉴에서 제외 — 홈의 공지 섹션('전체 보기' → /notices)으로만 진입한다.
-// 모바일 탭바는 6개 제한 — 동향·출동·자료실은 홈/마이페이지에서 진입 가능해 모바일에서 제외.
+// 공지사항은 데스크톱 메뉴에서 제외 — 홈의 공지 섹션('전체 보기' → /notices)으로 진입.
+// 모바일: 주요 5개는 탭, 나머지 전부는 "더보기" 시트(MobileMoreSheet)로 — 새 페이지를
+// 만들면 탭 또는 MobileMoreSheet에 반드시 추가해 모바일 동선을 보장한다.
 const NAV_ITEMS: NavItem[] = [
   { key: "home", href: "/home", label: "홈", icon: Home, mobile: true },
   { key: "courses", href: "/courses", label: "학습", icon: GraduationCap, mobile: true },
@@ -59,7 +61,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
   { key: "docs", href: "/docs", label: "자료실", icon: FileText },
   { key: "fitness", href: "/fitness", label: "체력단련", icon: Dumbbell, mobile: true },
-  { key: "me", href: "/me", label: "마이페이지", icon: CircleUser, mobile: true },
+  { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
 ];
 
 const ADMIN_ITEMS: NavItem[] = [
@@ -191,6 +193,7 @@ export async function AppSidebar({
               </Link>
             );
           })}
+          <MobileMoreSheet isAdmin={isAdmin} active={active} />
         </div>
       </nav>
     </>
