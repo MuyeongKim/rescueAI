@@ -166,20 +166,34 @@ export function GenerateForm({
     }
   }
 
+  function downloadBlob(blob: Blob, filename: string) {
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+
   async function handleDocx() {
     if (!doc) return;
     try {
       // docx는 무거워서 다운로드 시점에만 로드
       const { buildDocxBlob } = await import("@/lib/docx");
-      const blob = await buildDocxBlob(doc);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = `${doc.title.slice(0, 50)}.docx`;
-      a.click();
-      URL.revokeObjectURL(url);
+      downloadBlob(await buildDocxBlob(doc), `${doc.title.slice(0, 50)}.docx`);
     } catch {
       toast.error("문서 파일 생성에 실패했습니다");
+    }
+  }
+
+  async function handleHwpx() {
+    if (!doc) return;
+    try {
+      // hwpx 빌더도 다운로드 시점에만 로드
+      const { buildHwpxBlob } = await import("@/lib/hwpx");
+      downloadBlob(await buildHwpxBlob(doc), `${doc.title.slice(0, 50)}.hwpx`);
+    } catch {
+      toast.error("한글 파일 생성에 실패했습니다");
     }
   }
 
@@ -390,8 +404,15 @@ export function GenerateForm({
               </section>
             ))}
             <div className="flex flex-col gap-2 pt-2 sm:flex-row">
-              <Button className="h-12 flex-1 gap-2 text-base" onClick={handleDocx}>
-                <Download className="h-4 w-4" /> 워드(docx) 다운로드
+              <Button className="h-12 flex-1 gap-2 text-base" onClick={handleHwpx}>
+                <Download className="h-4 w-4" /> 한글(hwpx) 다운로드
+              </Button>
+              <Button
+                variant="outline"
+                className="h-12 flex-1 gap-2 text-base"
+                onClick={handleDocx}
+              >
+                <Download className="h-4 w-4" /> 워드(docx)
               </Button>
               <Button
                 variant="outline"
