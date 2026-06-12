@@ -23,10 +23,46 @@ function LoginForm() {
   const redirect = searchParams.get("redirect") || "/home";
 
   const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
+  // 매직링크는 보조 수단 (비밀번호 미발급 계정용)
+  const [magicMode, setMagicMode] = useState(false);
   const [sent, setSent] = useState(false);
 
-  async function handleSubmit(e: React.FormEvent) {
+  // 기본: 이메일 + 비밀번호 로그인 (메일 발송 없음)
+  async function handlePasswordLogin(e: React.FormEvent) {
+    e.preventDefault();
+    const trimmed = email.trim();
+    if (!trimmed || !password) return;
+
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const { error } = await supabase.auth.signInWithPassword({
+        email: trimmed,
+        password,
+      });
+      if (error) {
+        toast.error("로그인 실패", {
+          description:
+            error.message === "Invalid login credentials"
+              ? "이메일 또는 비밀번호가 올바르지 않습니다."
+              : error.message,
+        });
+        return;
+      }
+      // 서버(미들웨어)가 새 세션 쿠키를 읽도록 전체 이동
+      window.location.assign(redirect);
+    } catch (err) {
+      toast.error("오류가 발생했습니다", {
+        description: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function handleMagicLink(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = email.trim();
     if (!trimmed) return;
@@ -38,23 +74,17 @@ function LoginForm() {
         typeof window !== "undefined"
           ? window.location.origin
           : process.env.NEXT_PUBLIC_SITE_URL || "";
-      const emailRedirectTo = `${origin}/auth/callback?redirect=${encodeURIComponent(
-        redirect
-      )}`;
-
       const { error } = await supabase.auth.signInWithOtp({
         email: trimmed,
-        options: { emailRedirectTo },
+        options: {
+          emailRedirectTo: `${origin}/auth/callback?redirect=${encodeURIComponent(redirect)}`,
+        },
       });
-
       if (error) {
         toast.error("로그인 링크 전송 실패", { description: error.message });
         return;
       }
       setSent(true);
-      toast.success("로그인 링크를 보냈습니다", {
-        description: "이메일의 링크를 눌러 로그인하세요.",
-      });
     } catch (err) {
       toast.error("오류가 발생했습니다", {
         description: err instanceof Error ? err.message : String(err),
@@ -95,13 +125,19 @@ function LoginForm() {
             <Button
               variant="ghost"
               className="mt-2 h-11"
-              onClick={() => setSent(false)}
+              onClick={() => {
+                setSent(false);
+                setMagicMode(false);
+              }}
             >
-              다른 이메일로 다시 시도
+              비밀번호로 로그인
             </Button>
           </div>
         ) : (
-          <form onSubmit={handleSubmit} className="space-y-4">
+          <form
+            onSubmit={magicMode ? handleMagicLink : handlePasswordLogin}
+            className="space-y-4"
+          >
             <div className="space-y-2">
               <Label htmlFor="email" className="text-base">
                 이메일
@@ -119,14 +155,41 @@ function LoginForm() {
                 disabled={loading}
               />
             </div>
+            {!magicMode && (
+              <div className="space-y-2">
+                <Label htmlFor="password" className="text-base">
+                  비밀번호
+                </Label>
+                <Input
+                  id="password"
+                  type="password"
+                  autoComplete="current-password"
+                  required
+                  placeholder="비밀번호"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  className="h-12 text-base"
+                  disabled={loading}
+                />
+              </div>
+            )}
             <Button
               type="submit"
               className="h-12 w-full text-base"
               disabled={loading}
             >
               {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              로그인 링크 받기
+              {magicMode ? "로그인 링크 받기" : "로그인"}
             </Button>
+            <button
+              type="button"
+              className="block w-full text-center text-sm text-muted-foreground hover:text-primary"
+              onClick={() => setMagicMode(!magicMode)}
+            >
+              {magicMode
+                ? "비밀번호로 로그인"
+                : "비밀번호가 없나요? 이메일 링크로 로그인"}
+            </button>
             <p className="text-center text-xs text-muted-foreground">
               계정은 관리자가 발급합니다. 등록된 이메일로만 로그인할 수 있습니다.
             </p>
