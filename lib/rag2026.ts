@@ -5,7 +5,7 @@
 // metadata 예: { source: "2026년 복무관리 계획.pdf", category: "복무규정",
 //               "Header 2": "...", year, upload_date, parser }
 // 검색 RPC: match_rag_2026(query_embedding, match_count, match_threshold?, filter jsonb)
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { toPgVector } from "@/lib/embeddings";
 import type { DocSource } from "@/lib/database.types";
 import type { SearchResult } from "@/lib/rag";
@@ -39,7 +39,7 @@ export async function searchRag2026(
   topK: number,
   category?: string | null
 ): Promise<SearchResult> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   // rag_2026 은 수작성 Database 타입에 없는 외부 테이블 — 형식 검사를 우회한다.
   const { data, error } = await (supabase.rpc as CallableFunction)(
     "match_rag_2026",
@@ -88,7 +88,7 @@ export async function fetchRag2026Context(
   category: string,
   limit = 40
 ): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
     .select("content, metadata")
     .eq("metadata->>category", category)
@@ -119,7 +119,7 @@ export async function fetchRag2026Context(
 
 // 분야 → 원본 파일명 목록 (AI 자료제작 선택지·NotebookLM 자료 목록용)
 export async function listRag2026Categories(): Promise<Record<string, string[]>> {
-  const supabase = await createClient();
+  const supabase = createAdminClient();
   const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
     .select("category:metadata->>category, source:metadata->>source")
     .limit(10000);
