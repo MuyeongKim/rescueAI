@@ -8,7 +8,6 @@ const PROTECTED_PREFIXES = [
   "/admin",
   "/courses",
   "/generate",
-  "/sop",
   "/news",
   "/dispatch",
   "/fitness",

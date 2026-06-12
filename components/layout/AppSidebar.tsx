@@ -14,7 +14,6 @@ import {
   Users,
   Award,
   Wand2,
-  ClipboardCheck,
   Newspaper,
   Siren,
 } from "lucide-react";
@@ -28,7 +27,6 @@ export type NavKey =
   | "courses"
   | "chat"
   | "generate"
-  | "sop"
   | "news"
   | "dispatch"
   | "docs"
@@ -51,14 +49,12 @@ type NavItem = {
 };
 
 // 공지사항은 메뉴에서 제외 — 홈의 공지 섹션('전체 보기' → /notices)으로만 진입한다.
-// 모바일 탭바는 6개 제한 — 자료실·동향·출동은 홈/마이페이지에서 진입 가능해 모바일에서 제외.
-// SOP는 현장(모바일·태블릿) 사용이 핵심이라 모바일 탭에 포함하고 학습을 제외.
+// 모바일 탭바는 6개 제한 — 동향·출동·자료실은 홈/마이페이지에서 진입 가능해 모바일에서 제외.
 const NAV_ITEMS: NavItem[] = [
   { key: "home", href: "/home", label: "홈", icon: Home, mobile: true },
-  { key: "courses", href: "/courses", label: "학습", icon: GraduationCap },
+  { key: "courses", href: "/courses", label: "학습", icon: GraduationCap, mobile: true },
   { key: "chat", href: "/chat", label: "AI 튜터", icon: MessageSquare, mobile: true },
   { key: "generate", href: "/generate", label: "자료 생성", icon: Wand2, mobile: true },
-  { key: "sop", href: "/sop", label: "현장 SOP", icon: ClipboardCheck, mobile: true },
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
   { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
   { key: "docs", href: "/docs", label: "자료실", icon: FileText },
