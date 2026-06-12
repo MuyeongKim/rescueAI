@@ -26,11 +26,11 @@ npm run dev                        # http://localhost:3000
 ## 주요 화면 / API
 - `/home` 학습자 홈(진도·이수·추천) · `/courses` 과정 목록 · `/courses/[분야]` 레슨·진도
   (이수 = 분야의 모든 자료 학습 완료)
-- `/generate` 자료 생성 — 클릭·선택형으로 **훈련계획·교안(docx)·슬라이드(PPTX, 발표자 노트)**
-  생성, NotebookLM용 프롬프트 조립. 사용법은 SETUP.md "자료 생성" 절 참고
+- `/generate` AI 자료제작 — 클릭·선택형으로 **훈련계획·교안(docx)·슬라이드(PPTX, 발표자 노트)**
+  생성, NotebookLM용 프롬프트 조립. 사용법은 SETUP.md "AI 자료제작" 절 참고
 - `/login` 매직링크 · `/chat` AI 튜터(스트리밍·출처·피드백) · `/chat/[id]` 과거 대화
 - `/docs` 자료 목록 · `/docs/[id]?page=N` PDF 뷰어 · `/admin` 통계(이용+학습 현황)
-- `POST /api/chat` RAG+Claude · `/api/feedback` 👍/👎 · `/api/progress` 레슨 완료 · `/api/generate` 자료 생성
+- `POST /api/chat` RAG+Claude · `/api/feedback` 👍/👎 · `/api/progress` 레슨 완료 · `/api/generate` AI 자료제작
 
 ## 검증 명령
 ```bash

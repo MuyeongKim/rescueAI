@@ -56,7 +56,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "home", href: "/home", label: "홈", icon: Home, mobile: true },
   { key: "courses", href: "/courses", label: "학습", icon: GraduationCap, mobile: true },
   { key: "chat", href: "/chat", label: "AI 튜터", icon: MessageSquare, mobile: true },
-  { key: "generate", href: "/generate", label: "자료 생성", icon: Wand2, mobile: true },
+  { key: "generate", href: "/generate", label: "AI 자료제작", icon: Wand2, mobile: true },
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
   { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
   { key: "docs", href: "/docs", label: "자료실", icon: FileText },

@@ -80,7 +80,7 @@ function LoginForm() {
         </p>
         <CardTitle className="text-xl">전북소방 구조 AI</CardTitle>
         <CardDescription className="text-base">
-          구조대원 교육훈련 플랫폼 — 학습·AI 튜터·자료 생성·체력단련
+          구조대원 교육훈련 플랫폼 — 학습·AI 튜터·AI 자료제작·체력단련
         </CardDescription>
       </CardHeader>
       <CardContent>

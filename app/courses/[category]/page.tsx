@@ -122,13 +122,13 @@ export default async function CourseDetailPage({
             <CardContent className="flex flex-col items-center gap-3 p-5 text-center">
               <Wand2 className="h-8 w-8 text-primary" />
               <div>
-                <p className="font-medium">자료 생성</p>
+                <p className="font-medium">AI 자료제작</p>
                 <p className="text-sm text-muted-foreground">
                   이 분야 자료를 근거로 훈련계획·교안을 만들어 보세요.
                 </p>
               </div>
               <Link href="/generate">
-                <Button className="h-11 gap-2">자료 생성으로 이동</Button>
+                <Button className="h-11 gap-2">AI 자료제작으로 이동</Button>
               </Link>
             </CardContent>
           </Card>

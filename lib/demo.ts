@@ -81,7 +81,7 @@ export const demoChatSources: DocSource[] = [
 export const demoChatAnswer =
   "공기호흡기는 사용 전 다음을 점검합니다.\n\n1. 면체 밀착 상태 확인\n2. 실린더 충전 압력(약 300bar) 확인\n3. 잔압 경보장치 작동 확인\n4. 양압 상태에서 면체 누설 점검\n\n점검이 끝나면 양압을 유지한 채 진입하세요.\n\n[근거: 공기호흡기 착용 절차 p.3]";
 
-// ── 자료 생성 (훈련계획/교안) ──
+// ── AI 자료제작 (훈련계획/교안) ──
 export const demoGeneratedDoc: GeneratedDoc = {
   title: "화재 분야 훈련계획 — 공기호흡기 착용·내화 진입 (2시간)",
   sections: [
