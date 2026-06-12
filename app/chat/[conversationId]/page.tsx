@@ -8,6 +8,7 @@ import {
   demoChatSources,
 } from "@/lib/demo";
 import { ChatInterface } from "@/components/chat/ChatInterface";
+import { listChatCategories } from "@/lib/categories-server";
 
 export const dynamic = "force-dynamic";
 
@@ -73,10 +74,13 @@ export default async function ConversationPage({
       : {}),
   }));
 
+  const categories = await listChatCategories();
+
   return (
     <ChatInterface
       conversationId={conversationId}
       initialMessages={initialMessages}
+      categories={categories}
     />
   );
 }

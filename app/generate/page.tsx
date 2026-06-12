@@ -2,6 +2,7 @@ import { Wand2 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/server";
 import { DEMO, demoDocuments } from "@/lib/demo";
+import { ragTableEnabled, listRag2026Categories } from "@/lib/rag2026";
 import { COURSE_CATEGORIES } from "@/lib/courses";
 import { GenerateForm } from "@/components/generate/GenerateForm";
 
@@ -10,6 +11,9 @@ export const dynamic = "force-dynamic";
 // 인덱싱된 자료가 있는 분야와 분야별 자료 제목을 모은다.
 // 자료 제목은 NotebookLM 프롬프트의 "업로드할 자료" 안내에 쓰인다.
 async function loadDocsByCategory(): Promise<Record<string, string[]>> {
+  // RAG_TABLE=rag_2026: 기존 임베딩 테이블의 분야·원본 파일 목록 사용
+  if (!DEMO && ragTableEnabled()) return listRag2026Categories();
+
   let rows: { title: string; category: string | null }[];
   if (DEMO) {
     rows = demoDocuments.map((d) => ({ title: d.title, category: d.category }));

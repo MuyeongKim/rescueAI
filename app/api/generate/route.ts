@@ -1,5 +1,5 @@
 import { generateObject } from "ai";
-import { anthropic } from "@ai-sdk/anthropic";
+import { getChatModel } from "@/lib/llm";
 import { createClient } from "@/lib/supabase/server";
 import {
   AUDIENCES,
@@ -13,6 +13,7 @@ import {
   type GeneratedSlideDeck,
 } from "@/lib/generate";
 import { DEMO, demoGeneratedDoc, demoGeneratedSlides } from "@/lib/demo";
+import { ragTableEnabled, fetchRag2026Context } from "@/lib/rag2026";
 
 export const maxDuration = 60;
 
@@ -21,6 +22,9 @@ async function fetchCategoryContext(
   category: string,
   limit = 40
 ): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
+  // RAG_TABLE=rag_2026: 외부에서 임베딩해 둔 기존 테이블 사용
+  if (ragTableEnabled()) return fetchRag2026Context(category, limit);
+
   const supabase = await createClient();
   const { data: docs } = await supabase
     .from("documents")
@@ -127,7 +131,7 @@ export async function POST(req: Request) {
 
   try {
     const system = `다음은 전북소방 ${category} 분야 교육자료입니다. 이 자료만 근거로 작성하세요.\n\n[참고 자료]\n${contextText}`;
-    const model = anthropic(process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5");
+    const model = getChatModel();
 
     if (type === "slides") {
       const { object } = await generateObject({

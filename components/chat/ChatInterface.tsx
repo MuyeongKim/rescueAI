@@ -18,7 +18,7 @@ import {
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationList } from "@/components/chat/ConversationList";
 
-const CATEGORIES = ["전체", "산악", "수난", "화재", "구급"] as const;
+const DEFAULT_CATEGORIES = ["산악", "수난", "화재", "구급"];
 
 const EXAMPLES = [
   "공기호흡기 착용 전 점검 절차를 알려줘",
@@ -30,11 +30,14 @@ export function ChatInterface({
   conversationId,
   initialMessages = [],
   initialInput,
+  categories,
 }: {
   conversationId?: string;
   initialMessages?: Message[];
-  /** 입력창 프리필 (예: SOP 카드의 "AI 튜터에게 묻기" → /chat?q=…) */
+  /** 입력창 프리필 (예: /chat?q=…) */
   initialInput?: string;
+  /** 분야 필터 선택지 ("전체" 제외) — 서버에서 실제 자료 기준으로 전달 */
+  categories?: string[];
 }) {
   const [category, setCategory] = useState<string>("전체");
   const convIdRef = useRef<string | undefined>(conversationId);
@@ -110,11 +113,13 @@ export function ChatInterface({
               <SelectValue placeholder="전체" />
             </SelectTrigger>
             <SelectContent>
-              {CATEGORIES.map((c) => (
-                <SelectItem key={c} value={c}>
-                  {c}
-                </SelectItem>
-              ))}
+              {["전체", ...(categories?.length ? categories : DEFAULT_CATEGORIES)].map(
+                (c) => (
+                  <SelectItem key={c} value={c}>
+                    {c}
+                  </SelectItem>
+                )
+              )}
             </SelectContent>
           </Select>
         </div>

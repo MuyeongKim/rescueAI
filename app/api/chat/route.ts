@@ -1,4 +1,4 @@
-import { anthropic } from "@ai-sdk/anthropic";
+import { getChatModel } from "@/lib/llm";
 import {
   createDataStreamResponse,
   streamText,
@@ -99,7 +99,7 @@ export async function POST(req: Request) {
       dataStream.writeData({ type: "conversationId", value: convId });
 
       const result = streamText({
-        model: anthropic(process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5"),
+        model: getChatModel(),
         system,
         messages: convertToCoreMessages(messages),
         temperature: 0.2,
