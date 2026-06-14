@@ -2,9 +2,11 @@
 // RAG_TABLE=rag_2026 환경변수가 설정되면 lib/rag.ts·/api/generate 가 이 모듈을 사용한다.
 //
 // rag_2026 스키마: { id uuid, content text, metadata jsonb, embedding vector(1024) }
-// metadata 예: { source: "2026년 복무관리 계획.pdf", category: "복무규정",
-//               "Header 2": "...", year, upload_date, parser }
+// metadata 예: { source: "...", category: "SOP"(원본·n8n용), edu_category: "현장대응(SOP)"(구조
+//               교육 관점 재분류 — 이 앱이 분야로 사용), "Header 2": "...", year, upload_date }
+// 분야 필드는 edu_category 를 사용한다(기존 category 는 보존). 미적용 데이터 폴백은 category.
 // 검색 RPC: match_rag_2026(query_embedding, match_count, match_threshold?, filter jsonb)
+const CATEGORY_FIELD = "edu_category";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { toPgVector } from "@/lib/embeddings";
 import type { DocSource } from "@/lib/database.types";
@@ -20,7 +22,8 @@ type RagRow = {
   content: string;
   metadata: {
     source?: string;
-    category?: string;
+    category?: string; // 원본 분류(보존)
+    edu_category?: string; // 구조 교육 관점 재분류(이 앱의 분야)
     ["Header 2"]?: string;
     [k: string]: unknown;
   } | null;
@@ -48,7 +51,7 @@ export async function searchRag2026(
       match_count: topK,
       // 관련 없는 청크 차단 + RPC 기본 임계값에 의존하지 않도록 명시
       match_threshold: 0.2,
-      filter: category ? { category } : {},
+      filter: category ? { [CATEGORY_FIELD]: category } : {},
     }
   );
 
@@ -91,7 +94,7 @@ export async function fetchRag2026Context(
   const supabase = createAdminClient();
   const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
     .select("content, metadata")
-    .eq("metadata->>category", category)
+    .eq(`metadata->>${CATEGORY_FIELD}`, category)
     .limit(limit);
 
   if (error) {
@@ -121,7 +124,7 @@ export async function fetchRag2026Context(
 export async function listRag2026Categories(): Promise<Record<string, string[]>> {
   const supabase = createAdminClient();
   const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
-    .select("category:metadata->>category, source:metadata->>source")
+    .select(`category:metadata->>${CATEGORY_FIELD}, source:metadata->>source`)
     .limit(10000);
 
   if (error) {
