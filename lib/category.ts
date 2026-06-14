@@ -38,6 +38,41 @@ const STYLES: Record<string, CategoryStyle> = {
     text: "text-rose-700",
     hex: "#f43f5e",
   },
+  화학사고: {
+    badge: "bg-violet-100 text-violet-700 border-violet-200",
+    dot: "bg-violet-500",
+    tint: "bg-violet-100",
+    text: "text-violet-700",
+    hex: "#8b5cf6",
+  },
+  "드론 운용": {
+    badge: "bg-indigo-100 text-indigo-700 border-indigo-200",
+    dot: "bg-indigo-500",
+    tint: "bg-indigo-100",
+    text: "text-indigo-700",
+    hex: "#6366f1",
+  },
+  "장비 관리": {
+    badge: "bg-teal-100 text-teal-700 border-teal-200",
+    dot: "bg-teal-500",
+    tint: "bg-teal-100",
+    text: "text-teal-700",
+    hex: "#14b8a6",
+  },
+  "복무·행정": {
+    badge: "bg-amber-100 text-amber-700 border-amber-200",
+    dot: "bg-amber-500",
+    tint: "bg-amber-100",
+    text: "text-amber-700",
+    hex: "#f59e0b",
+  },
+  "현장지휘·공통": {
+    badge: "bg-slate-100 text-slate-700 border-slate-200",
+    dot: "bg-slate-500",
+    tint: "bg-slate-100",
+    text: "text-slate-700",
+    hex: "#64748b",
+  },
 };
 
 const FALLBACK: CategoryStyle = {
