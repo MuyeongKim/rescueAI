@@ -119,6 +119,7 @@ export async function POST(req: Request) {
     duration,
     topic: body.topic?.slice(0, 100),
     date: /^\d{4}-\d{2}-\d{2}$/.test(body.date ?? "") ? body.date : undefined,
+    model: body.model,
   };
 
   const { contextText, sources } = await fetchCategoryContext(category);
@@ -131,7 +132,8 @@ export async function POST(req: Request) {
 
   try {
     const system = `다음은 전북소방 ${category} 분야 교육자료입니다. 이 자료만 근거로 작성하세요.\n\n[참고 자료]\n${contextText}`;
-    const model = getChatModel();
+    // 폼에서 선택한 모델 — 미지정/사용불가 시 서버 기본값으로 폴백
+    const model = getChatModel(genReq.model);
 
     if (type === "slides") {
       const { object } = await generateObject({

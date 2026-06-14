@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import { DEMO, demoDocuments } from "@/lib/demo";
 import { ragTableEnabled, listRag2026Categories } from "@/lib/rag2026";
 import { COURSE_CATEGORIES } from "@/lib/courses";
+import { availableModels } from "@/lib/llm";
 import { GenerateForm } from "@/components/generate/GenerateForm";
 
 export const dynamic = "force-dynamic";
@@ -42,6 +43,7 @@ async function loadDocsByCategory(): Promise<Record<string, string[]>> {
 export default async function GeneratePage() {
   const docsByCategory = await loadDocsByCategory();
   const categories = Object.keys(docsByCategory);
+  const models = availableModels();
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 px-3 py-5 sm:px-4">
@@ -61,7 +63,7 @@ export default async function GeneratePage() {
           아직 인덱싱된 자료가 없습니다. 자료를 올리면 분야가 자동으로 나타납니다.
         </p>
       ) : (
-        <GenerateForm docsByCategory={docsByCategory} />
+        <GenerateForm docsByCategory={docsByCategory} models={models} />
       )}
     </div>
   );

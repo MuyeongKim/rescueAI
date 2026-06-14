@@ -89,8 +89,10 @@ function docToText(doc: GeneratedDoc): string {
 
 export function GenerateForm({
   docsByCategory,
+  models = [],
 }: {
   docsByCategory: Record<string, string[]>;
+  models?: { key: string; label: string; note?: string }[];
 }) {
   const categories = Object.keys(docsByCategory);
   const [type, setType] = useState<GenType>("plan");
@@ -99,13 +101,14 @@ export function GenerateForm({
   const [duration, setDuration] = useState<Duration>("2시간");
   const [topic, setTopic] = useState("");
   const [date, setDate] = useState("");
+  const [model, setModel] = useState<string>(models[0]?.key ?? "");
   const [loading, setLoading] = useState(false);
   const [doc, setDoc] = useState<GeneratedDoc | null>(null);
   const [deck, setDeck] = useState<GeneratedSlideDeck | null>(null);
   const [nlmPrompt, setNlmPrompt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
 
-  const genReq = { type, category, audience, duration, topic, date };
+  const genReq = { type, category, audience, duration, topic, date, model };
   const subtitle = `대상: ${audience} · 교육 시간: ${duration}${date ? ` · ${date}` : ""}`;
 
   async function handleGenerate() {
@@ -287,6 +290,31 @@ export function GenerateForm({
               />
             </div>
           </div>
+
+          {/* AI 모델 선택 — 2개 이상 사용 가능할 때만. NotebookLM은 AI를 안 쓰므로 숨김 */}
+          {type !== "notebooklm" && models.length > 1 && (
+            <div className="space-y-2">
+              <Label className="text-sm font-medium">AI 모델</Label>
+              <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="AI 모델">
+                {models.map((m) => (
+                  <Button
+                    key={m.key}
+                    type="button"
+                    role="radio"
+                    aria-checked={model === m.key}
+                    variant={model === m.key ? "default" : "outline"}
+                    className="h-12 flex-col items-start gap-0 px-4 py-1.5"
+                    onClick={() => setModel(m.key)}
+                  >
+                    <span className="text-sm font-medium">{m.label}</span>
+                    {m.note && (
+                      <span className="text-[11px] font-normal opacity-70">{m.note}</span>
+                    )}
+                  </Button>
+                ))}
+              </div>
+            </div>
+          )}
 
           <Button
             className="h-12 w-full gap-2 text-base"

@@ -41,6 +41,7 @@ export type GenerateRequest = {
   duration: Duration;
   topic?: string; // 선택: 훈련 내용/주제(예: "공기호흡기 점검")
   date?: string; // 선택: 훈련 일자 (YYYY-MM-DD)
+  model?: string; // 선택: LLM 모델 키 (lib/llm.ts MODEL_OPTIONS, 미지정 시 서버 기본)
 };
 
 // ── 생성 결과 ──
