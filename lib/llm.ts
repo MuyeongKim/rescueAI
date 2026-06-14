@@ -20,9 +20,11 @@ export type ModelOption = {
 };
 
 // 선택 가능 후보 — 실제 노출은 availableModels() 가 자격증명 유무로 필터링한다.
+// Gemini는 -latest 별칭 사용: 구글이 최신으로 갱신하면 코드 수정 없이 자동 추적
+// (현재 flash-latest→gemini-3.5-flash, pro-latest→gemini-3.1-pro-preview).
 export const MODEL_OPTIONS: ModelOption[] = [
-  { key: "gemini-2.5-flash", label: "Gemini 2.5 Flash", provider: "gemini", model: "gemini-2.5-flash", note: "빠름 · 기본" },
-  { key: "gemini-2.5-pro", label: "Gemini 2.5 Pro", provider: "gemini", model: "gemini-2.5-pro", note: "고품질 · 느림" },
+  { key: "gemini-flash", label: "Gemini Flash (최신)", provider: "gemini", model: "gemini-flash-latest", note: "빠름 · 기본" },
+  { key: "gemini-pro", label: "Gemini Pro (최신)", provider: "gemini", model: "gemini-pro-latest", note: "고품질 · 느림" },
   { key: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", provider: "claude", model: "claude-sonnet-4-5", note: "고품질" },
   { key: "internal-qwen", label: "내부망 Qwen", provider: "openai-compat", model: "", note: "내부망 전용" },
 ];
@@ -57,7 +59,7 @@ function build(option: ModelOption): LanguageModelV1 {
 function defaultOption(): ModelOption {
   const provider = (process.env.LLM_PROVIDER as Provider) || "claude";
   if (provider === "gemini")
-    return { key: "default", label: "Gemini", provider, model: process.env.GEMINI_MODEL || "gemini-2.5-flash" };
+    return { key: "default", label: "Gemini", provider, model: process.env.GEMINI_MODEL || "gemini-flash-latest" };
   if (provider === "openai-compat")
     return { key: "default", label: "내부망", provider, model: process.env.LLM_MODEL || "qwen3.5" };
   return { key: "default", label: "Claude", provider, model: process.env.ANTHROPIC_MODEL || "claude-sonnet-4-5" };
