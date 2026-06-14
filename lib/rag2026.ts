@@ -121,23 +121,29 @@ export async function fetchRag2026Context(
 }
 
 // 분야 → 원본 파일명 목록 (AI 자료제작 선택지·NotebookLM 자료 목록용)
+// Supabase REST는 요청당 최대 1000행이라, 전체 분야를 빠짐없이 모으려면 페이지네이션 필요.
 export async function listRag2026Categories(): Promise<Record<string, string[]>> {
   const supabase = createAdminClient();
-  const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
-    .select(`category:metadata->>${CATEGORY_FIELD}, source:metadata->>source`)
-    .limit(10000);
-
-  if (error) {
-    console.error("[rag2026] list categories error:", error.message);
-    return {};
-  }
-
+  const PAGE = 1000;
   const byCat = new Map<string, Set<string>>();
-  for (const r of (data ?? []) as { category: string | null; source: string | null }[]) {
-    if (!r.category) continue;
-    if (!byCat.has(r.category)) byCat.set(r.category, new Set());
-    if (r.source) byCat.get(r.category)!.add(r.source);
+
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
+      .select(`category:metadata->>${CATEGORY_FIELD}, source:metadata->>source`)
+      .range(from, from + PAGE - 1);
+    if (error) {
+      console.error("[rag2026] list categories error:", error.message);
+      break;
+    }
+    const rows = (data ?? []) as { category: string | null; source: string | null }[];
+    for (const r of rows) {
+      if (!r.category) continue;
+      if (!byCat.has(r.category)) byCat.set(r.category, new Set());
+      if (r.source) byCat.get(r.category)!.add(r.source);
+    }
+    if (rows.length < PAGE) break; // 마지막 페이지
   }
+
   return Object.fromEntries(
     Array.from(byCat.entries()).map(([c, s]) => [c, Array.from(s).sort()])
   );
