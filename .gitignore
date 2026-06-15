@@ -54,3 +54,8 @@ public/pdf.worker.min.mjs
 # Claude Code 개인 설정 (스킬은 .agents/skills·.claude/skills 로 공유)
 .claude/settings.local.json
 .claude/launch.json
+
+# 로컬 RAG 적재 도구 (웹앱과 분리, 추적 안 함)
+rag7.py
+*.py
+!indexing/**/*.py
