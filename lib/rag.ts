@@ -34,8 +34,9 @@ export async function searchContext(
   const embedding = await getQueryEmbedding(query);
 
   // RAG_TABLE=rag_2026: 외부에서 임베딩해 둔 기존 테이블로 검색 (홈서버 BGE 임베딩)
+  // 하이브리드(벡터+키워드 RRF) + LLM 재순위를 위해 원문 query 도 함께 넘긴다.
   if (ragTableEnabled()) {
-    return searchRag2026(embedding, topK, category);
+    return searchRag2026(query, embedding, topK, category);
   }
 
   const supabase = await createClient();

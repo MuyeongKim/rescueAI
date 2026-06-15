@@ -7,8 +7,11 @@
 // 분야 필드는 edu_category 를 사용한다(기존 category 는 보존). 미적용 데이터 폴백은 category.
 // 검색 RPC: match_rag_2026(query_embedding, match_count, match_threshold?, filter jsonb)
 const CATEGORY_FIELD = "edu_category";
+import { generateObject } from "ai";
+import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { toPgVector } from "@/lib/embeddings";
+import { getChatModel } from "@/lib/llm";
 import type { DocSource } from "@/lib/database.types";
 import type { SearchResult } from "@/lib/rag";
 import type { GeneratedDocSource } from "@/lib/generate";
@@ -66,45 +69,124 @@ function refine(rows: RagRow[], keep: number): { meta: RagRow["metadata"]; text:
   return out;
 }
 
-// 벡터 검색 → 챗봇/생성용 컨텍스트 + 출처 (lib/rag.ts SearchResult 형식)
+// RRF(Reciprocal Rank Fusion): 여러 순위 리스트를 id 기준으로 융합. score=Σ 1/(k+rank).
+function rrfFuse(lists: RagRow[][], k = 60): RagRow[] {
+  const score = new Map<string, number>();
+  const byId = new Map<string, RagRow>();
+  for (const list of lists) {
+    list.forEach((row, idx) => {
+      if (!row?.id) return;
+      byId.set(row.id, row);
+      score.set(row.id, (score.get(row.id) ?? 0) + 1 / (k + idx + 1));
+    });
+  }
+  return Array.from(score.entries())
+    .sort((a, b) => b[1] - a[1])
+    .map(([id]) => byId.get(id)!);
+}
+
+// 키워드 질의 구성: 공백·구두점으로 나눠 2자+ 토큰만 OR 로 묶어 full-text 재현율 확보.
+function buildKeywordQuery(query: string): string {
+  const tokens = query
+    .split(/[\s,.()[\]{}:;"'`/\\?!~·…\-—]+/)
+    .filter((t) => t.length >= 2)
+    .slice(0, 8);
+  return tokens.join(" or ");
+}
+
+const rerankSchema = z.object({ ranked: z.array(z.number()) });
+
+// LLM 재순위: 융합 후보 중 질문 관련도 높은 순으로 keep 개 선택. 실패 시 융합 순서 유지(안전).
+async function llmRerank(
+  query: string,
+  items: { meta: RagRow["metadata"]; text: string }[],
+  keep: number
+): Promise<{ meta: RagRow["metadata"]; text: string }[]> {
+  if (process.env.RERANK === "0" || items.length <= keep) return items.slice(0, keep);
+  try {
+    const listed = items
+      .map((it, i) => `[${i}] ${labelOf(it.meta)}\n${it.text.slice(0, 350)}`)
+      .join("\n\n");
+    const { object } = await generateObject({
+      model: getChatModel(),
+      schema: rerankSchema,
+      prompt: `질문에 답하는 데 가장 관련 깊은 자료를 골라, 관련도 높은 순서로 최대 ${keep}개의 번호만 JSON 배열로 반환하세요.\n\n질문: ${query}\n\n자료:\n${listed}\n\n예: {"ranked":[3,0,5]}`,
+      temperature: 0,
+      // 재순위는 단순 작업 — Gemini 사고(thinking) 끄면 지연 크게 감소 (타 제공자는 무시됨)
+      providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
+    });
+    const seen = new Set<number>();
+    const picked: { meta: RagRow["metadata"]; text: string }[] = [];
+    for (const idx of object.ranked) {
+      if (Number.isInteger(idx) && idx >= 0 && idx < items.length && !seen.has(idx)) {
+        seen.add(idx);
+        picked.push(items[idx]);
+      }
+      if (picked.length >= keep) break;
+    }
+    // 모자라면 융합 순서로 채움
+    for (let i = 0; i < items.length && picked.length < keep; i++) {
+      if (!seen.has(i)) picked.push(items[i]);
+    }
+    return picked;
+  } catch (e) {
+    console.error("[rag2026] 재순위 실패, 융합 순서 유지:", e);
+    return items.slice(0, keep);
+  }
+}
+
+// 하이브리드 검색(벡터+키워드 RRF) + LLM 재순위 → 컨텍스트 + 출처 (lib/rag.ts SearchResult)
 export async function searchRag2026(
+  query: string,
   embedding: number[],
   topK: number,
   category?: string | null
 ): Promise<SearchResult> {
   const supabase = createAdminClient();
-  // 노이즈 청크가 섞여도 의미 청크가 충분히 남도록 후보를 넉넉히(topK의 4배+) 받는다.
+  // 노이즈가 섞여도 의미 청크가 충분히 남도록 후보를 넉넉히 받는다.
   const candidateCount = Math.max(24, topK * 4);
-  // rag_2026 은 수작성 Database 타입에 없는 외부 테이블 — 형식 검사를 우회한다.
-  const { data, error } = await (supabase.rpc as CallableFunction)(
-    "match_rag_2026",
-    {
+  const kwQuery = buildKeywordQuery(query);
+
+  // ① 벡터 검색(RPC) + ② 키워드 full-text(websearch/simple) 병렬
+  const [vecRes, kwRes] = await Promise.all([
+    (supabase.rpc as CallableFunction)("match_rag_2026", {
       query_embedding: toPgVector(embedding),
       match_count: candidateCount,
-      // 약한 매칭 차단(정상 매칭은 0.5+). 노이즈 필터와 함께 관련성 확보.
-      match_threshold: 0.3,
+      match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
       filter: category ? { [CATEGORY_FIELD]: category } : {},
-    }
-  );
+    }),
+    (async () => {
+      if (!kwQuery) return { data: [], error: null };
+      let q = (supabase.from as CallableFunction)("rag_2026")
+        .select("id, content, metadata")
+        .textSearch("content", kwQuery, { type: "websearch", config: "simple" })
+        .limit(candidateCount);
+      if (category) q = q.eq(`metadata->>${CATEGORY_FIELD}`, category);
+      return q;
+    })(),
+  ]);
 
-  if (error) {
-    console.error("[rag2026] match_rag_2026 error:", error.message);
-    return { contextText: "", sources: [], matched: 0 };
-  }
+  if (vecRes.error) console.error("[rag2026] vector error:", vecRes.error.message);
+  if (kwRes.error) console.error("[rag2026] keyword error:", kwRes.error.message);
 
-  const rows = (data ?? []) as RagRow[];
-  // 정제·노이즈제외 후 상위 의미 청크만 (절차형 질문 대비 8개)
-  const refined = refine(rows, 8);
+  const vecRows = (vecRes.data ?? []) as RagRow[];
+  const kwRows = (kwRes.data ?? []) as RagRow[];
+
+  // ③ RRF 융합 → ④ 정제·노이즈 제외(후보 12) → ⑤ LLM 재순위(상위 8)
+  const fused = rrfFuse([vecRows, kwRows]);
+  if (fused.length === 0) return { contextText: "", sources: [], matched: 0 };
+  const refined = refine(fused, 12);
   if (refined.length === 0) return { contextText: "", sources: [], matched: 0 };
+  const top = await llmRerank(query, refined, 8);
 
-  const contextText = refined
+  const contextText = top
     .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
     .join("\n\n---\n\n");
 
-  // 출처는 파일(source) 단위로 중복 제거, 최대 3개. 원문 뷰어가 없으므로 document_id=0.
+  // 출처는 파일(source) 단위 중복 제거, 최대 3개. 원문 뷰어 없어 document_id=0.
   const seen = new Set<string>();
   const sources: DocSource[] = [];
-  for (const r of refined) {
+  for (const r of top) {
     const key = r.meta?.source ?? "자료";
     if (seen.has(key)) continue;
     seen.add(key);
@@ -117,7 +199,7 @@ export async function searchRag2026(
     if (sources.length >= 3) break;
   }
 
-  return { contextText, sources, matched: refined.length };
+  return { contextText, sources, matched: top.length };
 }
 
 // 분야 자료를 모아 생성(AI 자료제작) 컨텍스트를 만든다 (벡터 검색 없이 카테고리 일괄).
