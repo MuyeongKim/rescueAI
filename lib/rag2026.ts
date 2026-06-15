@@ -50,10 +50,25 @@ function cleanContent(c: string): string {
 
 // 노이즈 청크 판별: 목차/개정이력 헤더, 정제 후 껍데기(제목만) → 검색 결과에서 제외
 const NOISE_HEADERS = new Set(["Contents", "목차", "개정이력서"]);
+
+// 목차/색인 청크 판별: "SOP NNN … 페이지" 항목이 여러 번 반복되는 표.
+// 쿼리어(SOP·항목명)가 본문보다 목차에 밀집해 검색 상위를 점령하는 문제를 막는다.
+// 헤더가 'Contents'가 아니어도(예: "재난현장 표준작전절차 SOP") 본문 절차 청크를 밀어내므로 제거.
+function isTocLike(cleaned: string): boolean {
+  // "SOP 325", "SOP | 107" 처럼 코드번호가 붙은 항목 수
+  const numbered = (cleaned.match(/SOP\s*\|?\s*\d{2,3}/g) ?? []).length;
+  if (numbered >= 3) return true;
+  // 색인 불릿(∙․) + SOP 가 반복되는 줄
+  const bullets = (cleaned.match(/[∙·][․·]?\s*SOP/g) ?? []).length;
+  if (bullets >= 3) return true;
+  return false;
+}
+
 function isNoise(cleaned: string, header?: string): boolean {
   const h = (header ?? "").replace(/\s+/g, "").trim();
   if (NOISE_HEADERS.has(h)) return true;
   if (cleaned.length < 40) return true; // 제목만 있고 본문 없는 청크
+  if (isTocLike(cleaned)) return true; // 목차/색인 표
   return false;
 }
 
@@ -85,13 +100,51 @@ function rrfFuse(lists: RagRow[][], k = 60): RagRow[] {
     .map(([id]) => byId.get(id)!);
 }
 
-// 키워드 질의 구성: 공백·구두점으로 나눠 2자+ 토큰만 OR 로 묶어 full-text 재현율 확보.
-function buildKeywordQuery(query: string): string {
-  const tokens = query
-    .split(/[\s,.()[\]{}:;"'`/\\?!~·…\-—]+/)
-    .filter((t) => t.length >= 2)
-    .slice(0, 8);
-  return tokens.join(" or ");
+// 키워드 질의 구성: 공백·구두점으로 나눠 2자+ 토큰 + 확장 키워드를 OR 로 묶어 재현율 확보.
+// extra: 쿼리 확장 LLM이 뽑은 핵심어(복합어 분해·약어 풀이 포함). 본문 매칭률을 높인다.
+function buildKeywordQuery(query: string, extra: string[] = []): string {
+  const tokens = query.split(/[\s,.()[\]{}:;"'`/\\?!~·…\-—]+/);
+  const all = [...tokens, ...extra]
+    .map((t) => t.trim())
+    .filter((t) => t.length >= 2);
+  return Array.from(new Set(all)).slice(0, 12).join(" or ");
+}
+
+// 쿼리 확장: 짧은 검색어("소방드론 SOP")는 제목·목차만 매칭돼 본문 절차가 밀려난다.
+// 검색 전에 LLM으로 (a) 임베딩용 자연어 질의와 (b) 본문 매칭용 키워드(복합어 분해·약어 풀이)를
+// 만들어 재현율을 끌어올린다. QUERY_EXPANSION=0 이거나 실패 시 원문 그대로 사용(안전).
+const expandSchema = z.object({
+  paraphrase: z.string(),
+  keywords: z.array(z.string()),
+});
+
+export async function expandQuery(
+  query: string
+): Promise<{ embedText: string; keywords: string[] }> {
+  if (process.env.QUERY_EXPANSION === "0") return { embedText: query, keywords: [] };
+  try {
+    const { object } = await generateObject({
+      model: getChatModel(),
+      schema: expandSchema,
+      prompt: `소방·구조 매뉴얼(SOP·장비) 벡터 검색을 위해 아래 검색어를 확장하세요.
+- paraphrase: 검색 의도를 살린 한 문장의 자연어 질의. 약어는 풀어쓰고(SOP→표준작전절차), 복합어 의도를 드러내세요.
+- keywords: 본문 매칭용 핵심어 5~8개. 복합어는 구성어로도 분해(예: "소방드론"→"드론"), 약어는 풀어쓴 말도 포함.
+
+검색어: ${query}
+
+예: {"paraphrase":"소방 드론의 재난현장 표준작전절차와 운용 안전 수칙","keywords":["드론","소방드론","비행","운용","안전","상황분석"]}`,
+      temperature: 0,
+      providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
+    });
+    const para = object.paraphrase?.trim();
+    return {
+      embedText: para ? `${query} ${para}` : query,
+      keywords: Array.isArray(object.keywords) ? object.keywords : [],
+    };
+  } catch (e) {
+    console.error("[rag2026] 쿼리 확장 실패, 원문 사용:", e);
+    return { embedText: query, keywords: [] };
+  }
 }
 
 const rerankSchema = z.object({ ranked: z.array(z.number()) });
@@ -140,12 +193,13 @@ export async function searchRag2026(
   query: string,
   embedding: number[],
   topK: number,
-  category?: string | null
+  category?: string | null,
+  keywordTerms: string[] = []
 ): Promise<SearchResult> {
   const supabase = createAdminClient();
-  // 노이즈가 섞여도 의미 청크가 충분히 남도록 후보를 넉넉히 받는다.
-  const candidateCount = Math.max(24, topK * 4);
-  const kwQuery = buildKeywordQuery(query);
+  // 노이즈(목차·총론)가 섞여도 본문 청크가 충분히 남도록 후보를 넉넉히 받는다.
+  const candidateCount = Math.max(40, topK * 6);
+  const kwQuery = buildKeywordQuery(query, keywordTerms);
 
   // ① 벡터 검색(RPC) + ② 키워드 full-text(websearch/simple) 병렬
   const [vecRes, kwRes] = await Promise.all([
