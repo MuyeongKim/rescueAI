@@ -36,6 +36,36 @@ function labelOf(meta: RagRow["metadata"]): string {
   return header && header !== src ? `${src} — ${header}` : src;
 }
 
+// 청크 본문 정제: docling 이미지 마커·목차 점선·과잉 공백 제거 (LLM 입력 노이즈 감소)
+function cleanContent(c: string): string {
+  return c
+    .replace(/<!--\s*image\s*-->/gi, "")
+    .replace(/[·∙․.]{4,}/g, " ") // 목차 leader 점선
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// 노이즈 청크 판별: 목차/개정이력 헤더, 정제 후 껍데기(제목만) → 검색 결과에서 제외
+const NOISE_HEADERS = new Set(["Contents", "목차", "개정이력서"]);
+function isNoise(cleaned: string, header?: string): boolean {
+  const h = (header ?? "").replace(/\s+/g, "").trim();
+  if (NOISE_HEADERS.has(h)) return true;
+  if (cleaned.length < 40) return true; // 제목만 있고 본문 없는 청크
+  return false;
+}
+
+// 후보 행들을 정제·노이즈제외 후 상위 N개만 추려 (LLM 컨텍스트용) 의미 청크로 반환
+function refine(rows: RagRow[], keep: number): { meta: RagRow["metadata"]; text: string }[] {
+  const out: { meta: RagRow["metadata"]; text: string }[] = [];
+  for (const r of rows) {
+    const text = cleanContent(r.content);
+    if (isNoise(text, r.metadata?.["Header 2"])) continue;
+    out.push({ meta: r.metadata, text });
+    if (out.length >= keep) break;
+  }
+  return out;
+}
+
 // 벡터 검색 → 챗봇/생성용 컨텍스트 + 출처 (lib/rag.ts SearchResult 형식)
 export async function searchRag2026(
   embedding: number[],
@@ -43,14 +73,16 @@ export async function searchRag2026(
   category?: string | null
 ): Promise<SearchResult> {
   const supabase = createAdminClient();
+  // 노이즈 청크가 섞여도 의미 청크가 충분히 남도록 후보를 넉넉히(topK의 4배+) 받는다.
+  const candidateCount = Math.max(24, topK * 4);
   // rag_2026 은 수작성 Database 타입에 없는 외부 테이블 — 형식 검사를 우회한다.
   const { data, error } = await (supabase.rpc as CallableFunction)(
     "match_rag_2026",
     {
       query_embedding: toPgVector(embedding),
-      match_count: topK,
-      // 관련 없는 청크 차단 + RPC 기본 임계값에 의존하지 않도록 명시
-      match_threshold: 0.2,
+      match_count: candidateCount,
+      // 약한 매칭 차단(정상 매칭은 0.5+). 노이즈 필터와 함께 관련성 확보.
+      match_threshold: 0.3,
       filter: category ? { [CATEGORY_FIELD]: category } : {},
     }
   );
@@ -61,29 +93,31 @@ export async function searchRag2026(
   }
 
   const rows = (data ?? []) as RagRow[];
-  if (rows.length === 0) return { contextText: "", sources: [], matched: 0 };
+  // 정제·노이즈제외 후 상위 의미 청크만 (절차형 질문 대비 8개)
+  const refined = refine(rows, 8);
+  if (refined.length === 0) return { contextText: "", sources: [], matched: 0 };
 
-  const contextText = rows
-    .map((r) => `[${labelOf(r.metadata)}]\n${r.content}`)
+  const contextText = refined
+    .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
     .join("\n\n---\n\n");
 
   // 출처는 파일(source) 단위로 중복 제거, 최대 3개. 원문 뷰어가 없으므로 document_id=0.
   const seen = new Set<string>();
   const sources: DocSource[] = [];
-  for (const r of rows) {
-    const key = r.metadata?.source ?? "자료";
+  for (const r of refined) {
+    const key = r.meta?.source ?? "자료";
     if (seen.has(key)) continue;
     seen.add(key);
     sources.push({
       document_id: 0,
-      doc: labelOf(r.metadata),
+      doc: labelOf(r.meta),
       page: null,
-      content: r.content.slice(0, 400),
+      content: r.text.slice(0, 400),
     });
     if (sources.length >= 3) break;
   }
 
-  return { contextText, sources, matched: rows.length };
+  return { contextText, sources, matched: refined.length };
 }
 
 // 분야 자료를 모아 생성(AI 자료제작) 컨텍스트를 만든다 (벡터 검색 없이 카테고리 일괄).
@@ -92,29 +126,32 @@ export async function fetchRag2026Context(
   limit = 40
 ): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
   const supabase = createAdminClient();
+  // 노이즈 제외 후에도 limit 만큼 남도록 후보를 2배로 받는다.
   const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
     .select("content, metadata")
     .eq(`metadata->>${CATEGORY_FIELD}`, category)
-    .limit(limit);
+    .limit(limit * 2);
 
   if (error) {
     console.error("[rag2026] fetch context error:", error.message);
     return { contextText: "", sources: [] };
   }
   const rows = (data ?? []) as RagRow[];
-  if (rows.length === 0) return { contextText: "", sources: [] };
+  // 정제·노이즈제외 (생성 컨텍스트도 깨끗한 본문만). limit 만큼 의미 청크 확보.
+  const refined = refine(rows, limit);
+  if (refined.length === 0) return { contextText: "", sources: [] };
 
-  const contextText = rows
-    .map((r) => `[${labelOf(r.metadata)}]\n${r.content}`)
+  const contextText = refined
+    .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
     .join("\n\n---\n\n");
 
   const seen = new Set<string>();
   const sources: GeneratedDocSource[] = [];
-  for (const r of rows) {
-    const key = r.metadata?.source ?? "자료";
+  for (const r of refined) {
+    const key = r.meta?.source ?? "자료";
     if (seen.has(key)) continue;
     seen.add(key);
-    sources.push({ document_id: 0, doc: labelOf(r.metadata), page: null });
+    sources.push({ document_id: 0, doc: labelOf(r.meta), page: null });
     if (sources.length >= 5) break;
   }
   return { contextText, sources };
