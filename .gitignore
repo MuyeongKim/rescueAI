@@ -55,7 +55,8 @@ public/pdf.worker.min.mjs
 .claude/settings.local.json
 .claude/launch.json
 
-# 로컬 RAG 적재 도구 (웹앱과 분리, 추적 안 함)
-rag7.py
+# 로컬 파이썬 잡파일 무시 (단, 인덱싱 파이프라인과 rag7.py 적재 도구는 추적)
+# rag7.py 는 키를 하드코딩하지 않고 .env.local 에서만 읽으므로 커밋해도 비밀 노출 없음.
 *.py
 !indexing/**/*.py
+!rag7.py
