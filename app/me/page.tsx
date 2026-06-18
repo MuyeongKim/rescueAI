@@ -1,6 +1,5 @@
 import Link from "next/link";
 import {
-  Award,
   BarChart3,
   ChevronRight,
   CircleUser,
@@ -11,7 +10,6 @@ import {
 } from "lucide-react";
 
 import { getUserAndProfile } from "@/lib/auth";
-import { getLearningState } from "@/lib/learning";
 import { getFitnessState } from "@/lib/fitness-server";
 import {
   Card,
@@ -21,7 +19,6 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { CategoryBadge } from "@/components/learning/CategoryBadge";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { ProgressBar } from "@/components/learning/ProgressBar";
 
@@ -33,12 +30,8 @@ const FITNESS_MONTH_GOAL = 300;
 export default async function MePage() {
   const { user, profile } = await getUserAndProfile();
   const userId = user?.id ?? "";
-  const [learning, fitness] = await Promise.all([
-    getLearningState(userId),
-    getFitnessState(userId),
-  ]);
+  const fitness = await getFitnessState(userId);
 
-  const certified = learning.courses.filter((c) => c.certified);
   const name = profile?.full_name || user?.email?.split("@")[0] || "구조대원";
 
   return (
@@ -46,7 +39,7 @@ export default async function MePage() {
       <div>
         <h1 className="text-xl font-semibold">마이페이지</h1>
         <p className="text-sm text-muted-foreground">
-          내 정보·학습 현황·이수 기록을 확인합니다.
+          내 정보·체력 마일리지·출동 기록을 확인합니다.
         </p>
       </div>
 
@@ -66,36 +59,6 @@ export default async function MePage() {
               <p className="text-sm text-muted-foreground">{profile.division}</p>
             )}
           </div>
-        </CardContent>
-      </Card>
-
-      {/* 이수 기록 — 진도 상세는 홈·학습 탭이 담당, 여기는 증빙(이수 이력) 중심 */}
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="flex items-center gap-2 text-base">
-            <Award className="h-4 w-4 text-primary" /> 이수 기록
-          </CardTitle>
-          <CardDescription>
-            전체 진도 {learning.totalCompleted}/{learning.totalLessons} 레슨 ·{" "}
-            {learning.overallProgress}% —{" "}
-            <Link href="/courses" className="text-primary hover:underline">
-              학습 과정에서 이어가기
-            </Link>
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          <p className="mb-2 text-sm font-medium">이수한 과정 {certified.length}개</p>
-          {certified.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              아직 이수한 과정이 없습니다. 과정의 모든 레슨을 완료하면 이수됩니다.
-            </p>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {certified.map((c) => (
-                <CategoryBadge key={c.category} category={c.category} />
-              ))}
-            </div>
-          )}
         </CardContent>
       </Card>
 
@@ -203,7 +166,7 @@ export default async function MePage() {
               className="flex h-12 items-center gap-2 rounded-md px-3 text-sm font-medium transition-colors hover:bg-accent/60"
             >
               <BarChart3 className="h-4 w-4 text-primary" />
-              관리자 — 통계·이수 현황·자료·사용자·공지
+              관리자 — 통계·자료·사용자·공지
               <ChevronRight className="ml-auto h-4 w-4 text-muted-foreground" />
             </Link>
           </CardContent>

@@ -37,7 +37,7 @@ export default async function DocsPage() {
         <h1 className="text-xl font-semibold">교육자료</h1>
         <p className="text-sm text-muted-foreground">
           원본 교육자료 참고 서가입니다. 분야·난이도로 거르거나 제목으로
-          검색하세요. 과정·진도 관리는 학습 탭에서 합니다.
+          검색하세요.
         </p>
       </div>
       <DocsBrowser documents={documents ?? []} />

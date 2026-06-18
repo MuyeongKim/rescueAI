@@ -1,6 +1,5 @@
 // 키 없는 데모/미리보기 모드. NEXT_PUBLIC_DEMO_MODE=1 일 때 Supabase/Anthropic/OpenAI 호출 없이
 // 목 데이터로 전체 UI를 둘러볼 수 있게 한다. 실제 흐름 코드는 if (DEMO) 가드로만 분기.
-import { buildCourses, type LessonDoc } from "@/lib/courses";
 import { calcWeekly } from "@/lib/fitness";
 import type { DocSource } from "@/lib/database.types";
 import type { GeneratedDoc, GeneratedSlideDeck } from "@/lib/generate";
@@ -38,35 +37,6 @@ export const demoDocuments: DemoDoc[] = [
   { id: 8, title: "심폐소생술(CPR) 순서", category: "구급", difficulty: "초급", publish_date: "2024-03-30", equipment: ["AED"], source_type: "pdf" },
   { id: 9, title: "외상 환자 1차 평가", category: "구급", difficulty: "중급", publish_date: "2024-08-12", equipment: ["부목"], source_type: "pdf" },
 ];
-
-// 화재(6·7)는 전체 완료 → 이수 상태를 시연
-const demoCompleted = new Set<number>([1, 4, 6, 7, 8]);
-
-export const demoLessonDocs: LessonDoc[] = demoDocuments.map((d) => ({
-  id: d.id,
-  title: d.title,
-  category: d.category,
-  difficulty: d.difficulty,
-  publish_date: d.publish_date,
-}));
-
-export function getDemoLearningState() {
-  const courses = buildCourses(demoLessonDocs, demoCompleted);
-  const totalLessons = courses.reduce((s, c) => s + c.total, 0);
-  const totalCompleted = courses.reduce((s, c) => s + c.completed, 0);
-  return {
-    courses,
-    completedIds: demoCompleted,
-    totalLessons,
-    totalCompleted,
-    overallProgress:
-      totalLessons > 0 ? Math.round((totalCompleted / totalLessons) * 100) : 0,
-  };
-}
-
-export function isDemoCompleted(documentId: number): boolean {
-  return demoCompleted.has(documentId);
-}
 
 export const demoConversations = [
   { id: "demo-conv-1", title: "공기호흡기 점검 절차", updated_at: "2026-05-30T09:12:00.000Z" },
@@ -237,15 +207,6 @@ export function getDemoFitnessState() {
   };
 }
 
-// ── 관리자: 이수 현황 (이수 = 분야의 모든 레슨 완료) ──
-export const demoCompletionUsers = [
-  { id: "demo-user", full_name: "데모 대원", email: "demo@jbfire.go.kr", division: "전북소방 구조대", lessonsDone: 5, certifiedCategories: ["화재"] },
-  { id: "u1", full_name: "김구조", email: "kim@jbfire.go.kr", division: "전주 119구조대", lessonsDone: 9, certifiedCategories: ["산악", "수난", "화재", "구급"] },
-  { id: "u2", full_name: "이수난", email: "lee@jbfire.go.kr", division: "군산 119구조대", lessonsDone: 7, certifiedCategories: ["수난", "구급"] },
-  { id: "u3", full_name: "박산악", email: "park@jbfire.go.kr", division: "남원 119구조대", lessonsDone: 5, certifiedCategories: ["산악"] },
-  { id: "u4", full_name: "최화재", email: "choi@jbfire.go.kr", division: "익산 119구조대", lessonsDone: 2, certifiedCategories: [] },
-];
-
 // ── 관리자: 사용자 목록 ──
 export const demoUsers = [
   { id: "demo-user", email: "demo@jbfire.go.kr", full_name: "데모 대원", role: "admin", division: "전북소방 구조대", created_at: "2026-01-01T00:00:00.000Z" },
@@ -286,8 +247,6 @@ export function getDemoAdminStats() {
       { q: "유압전개기 안전 사용 수칙", count: 14 },
       { q: "로프 하강 시 확보 방법", count: 11 },
     ],
-    lessonCompletions: 96,
-    courseCompletions: 31,
     fitnessActiveUsers: 18,
     fitnessMonthPoints: 5840,
     fitnessTotalLogs: 214,

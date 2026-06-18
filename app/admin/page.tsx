@@ -4,8 +4,6 @@ import {
   MessageSquare,
   Clock,
   ThumbsUp,
-  BookOpenCheck,
-  Award,
   Dumbbell,
   Flame,
   ListChecks,
@@ -100,8 +98,7 @@ async function loadAdminStats() {
     ]);
 
   const monthStartStr = `${new Date().toISOString().slice(0, 7)}-01`;
-  const [progressRes, fitnessMonthRes, fitnessCountRes] = await Promise.all([
-    admin.from("lesson_progress").select("user_id, document_id").limit(50000),
+  const [fitnessMonthRes, fitnessCountRes] = await Promise.all([
     admin
       .from("workout_logs")
       .select("user_id, points")
@@ -115,29 +112,6 @@ async function loadAdminStats() {
   ).size;
   const fitnessMonthPoints = fitnessMonth.reduce((s, w) => s + (w.points ?? 0), 0);
   const fitnessTotalLogs = fitnessCountRes.count ?? 0;
-
-  const progressRows = progressRes.data ?? [];
-  const lessonCompletions = progressRows.length;
-  // 과정 이수 = 분야의 모든 자료를 완료한 (사용자 × 분야) 조합 수
-  const docsByCat = new Map<string, number[]>();
-  for (const d of docsRes.data ?? []) {
-    if (!d.category) continue;
-    if (!docsByCat.has(d.category)) docsByCat.set(d.category, []);
-    docsByCat.get(d.category)!.push(d.id);
-  }
-  const doneByUser = new Map<string, Set<number>>();
-  for (const p of progressRows) {
-    if (!p.user_id || p.document_id == null) continue;
-    if (!doneByUser.has(p.user_id)) doneByUser.set(p.user_id, new Set());
-    doneByUser.get(p.user_id)!.add(p.document_id);
-  }
-  let courseCompletions = 0;
-  const catIdLists = Array.from(docsByCat.values());
-  for (const done of Array.from(doneByUser.values())) {
-    for (const ids of catIdLists) {
-      if (ids.length > 0 && ids.every((id) => done.has(id))) courseCompletions++;
-    }
-  }
 
   const totalUsers = usersRes.count ?? 0;
   const totalQuestions = questionsRes.count ?? 0;
@@ -198,8 +172,6 @@ async function loadAdminStats() {
     categories,
     daily,
     faq,
-    lessonCompletions,
-    courseCompletions,
     fitnessActiveUsers,
     fitnessMonthPoints,
     fitnessTotalLogs,
@@ -221,8 +193,6 @@ export default async function AdminPage() {
     categories,
     daily,
     faq,
-    lessonCompletions,
-    courseCompletions,
     fitnessActiveUsers,
     fitnessMonthPoints,
     fitnessTotalLogs,
@@ -257,26 +227,6 @@ export default async function AdminPage() {
           value={satisfaction !== null ? `${satisfaction}%` : "-"}
           sub={`👍 ${up} · 👎 ${down}`}
         />
-      </div>
-
-      {/* 학습 현황 */}
-      <div>
-        <h2 className="mb-2 text-sm font-semibold text-muted-foreground">
-          학습 현황
-        </h2>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard
-            icon={BookOpenCheck}
-            label="레슨 완료"
-            value={`${lessonCompletions}건`}
-          />
-          <StatCard
-            icon={Award}
-            label="과정 이수"
-            value={`${courseCompletions}건`}
-            sub="분야의 모든 자료 학습 완료"
-          />
-        </div>
       </div>
 
       {/* 체력단련 현황 */}

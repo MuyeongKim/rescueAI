@@ -4,7 +4,6 @@ import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ArrowLeft, Loader2, FileWarning } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { CompleteButton } from "@/components/learning/CompleteButton";
 import { CategoryBadge } from "@/components/learning/CategoryBadge";
 
 const PdfViewer = dynamic(
@@ -20,19 +19,15 @@ const PdfViewer = dynamic(
 );
 
 export function DocViewerClient({
-  documentId,
   title,
   category,
   fileUrl,
   initialPage,
-  completed,
 }: {
-  documentId: number;
   title: string;
   category: string | null;
   fileUrl: string | null;
   initialPage: number;
-  completed: boolean;
 }) {
   return (
     <div className="mx-auto max-w-4xl px-3 py-4 sm:px-4">
@@ -50,7 +45,6 @@ export function DocViewerClient({
             </div>
           )}
         </div>
-        <CompleteButton documentId={documentId} initialCompleted={completed} />
       </div>
 
       {fileUrl ? (

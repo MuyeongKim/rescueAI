@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { DocViewerClient } from "@/components/docs/DocViewerClient";
-import { DEMO, demoDocuments, isDemoCompleted } from "@/lib/demo";
+import { DEMO, demoDocuments } from "@/lib/demo";
 
 export const dynamic = "force-dynamic";
 
@@ -24,12 +24,10 @@ export default async function DocViewerPage({
     if (!d) notFound();
     return (
       <DocViewerClient
-        documentId={d.id}
         title={d.title}
         category={d.category}
         fileUrl={null}
         initialPage={initialPage}
-        completed={isDemoCompleted(d.id)}
       />
     );
   }
@@ -43,29 +41,12 @@ export default async function DocViewerPage({
 
   if (!doc) notFound();
 
-  // 학습 완료 여부 (레슨 진도)
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  let completed = false;
-  if (user) {
-    const { data: p } = await supabase
-      .from("lesson_progress")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("document_id", id)
-      .maybeSingle();
-    completed = !!p;
-  }
-
   return (
     <DocViewerClient
-      documentId={doc.id}
       title={doc.title}
       category={doc.category}
       fileUrl={doc.file_url}
       initialPage={initialPage}
-      completed={completed}
     />
   );
 }

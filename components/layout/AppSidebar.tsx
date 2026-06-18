@@ -6,13 +6,11 @@ import {
   FileText,
   BarChart3,
   Home,
-  GraduationCap,
   Dumbbell,
   Megaphone,
   CircleUser,
   FolderCog,
   Users,
-  Award,
   Wand2,
   Newspaper,
   Siren,
@@ -25,7 +23,6 @@ import { hasRecentNotice } from "@/lib/notices";
 
 export type NavKey =
   | "home"
-  | "courses"
   | "chat"
   | "generate"
   | "news"
@@ -34,7 +31,6 @@ export type NavKey =
   | "fitness"
   | "me"
   | "admin"
-  | "admin-completion"
   | "admin-dispatch"
   | "admin-documents"
   | "admin-users"
@@ -54,7 +50,6 @@ type NavItem = {
 // 만들면 탭 또는 MobileMoreSheet에 반드시 추가해 모바일 동선을 보장한다.
 const NAV_ITEMS: NavItem[] = [
   { key: "home", href: "/home", label: "홈", icon: Home, mobile: true },
-  { key: "courses", href: "/courses", label: "학습", icon: GraduationCap, mobile: true },
   { key: "chat", href: "/chat", label: "AI 튜터", icon: MessageSquare, mobile: true },
   { key: "generate", href: "/generate", label: "AI 자료제작", icon: Wand2, mobile: true },
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
@@ -66,7 +61,6 @@ const NAV_ITEMS: NavItem[] = [
 
 const ADMIN_ITEMS: NavItem[] = [
   { key: "admin", href: "/admin", label: "통계", icon: BarChart3 },
-  { key: "admin-completion", href: "/admin/completion", label: "이수 현황", icon: Award },
   { key: "admin-dispatch", href: "/admin/dispatch", label: "출동통계 분석", icon: Siren },
   { key: "admin-documents", href: "/admin/documents", label: "자료 관리", icon: FolderCog },
   { key: "admin-users", href: "/admin/users", label: "사용자 관리", icon: Users },

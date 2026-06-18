@@ -2,7 +2,6 @@
 
 import Link from "next/link";
 import {
-  Award,
   BarChart3,
   CircleUser,
   FileText,
@@ -36,7 +35,6 @@ const MORE_ITEMS = [
 
 const ADMIN_MORE_ITEMS = [
   { key: "admin", href: "/admin", label: "통계", icon: BarChart3 },
-  { key: "admin-completion", href: "/admin/completion", label: "이수 현황", icon: Award },
   { key: "admin-dispatch", href: "/admin/dispatch", label: "출동통계 분석", icon: Siren },
   { key: "admin-documents", href: "/admin/documents", label: "자료 관리", icon: FolderCog },
   { key: "admin-users", href: "/admin/users", label: "사용자 관리", icon: Users },
