@@ -19,8 +19,9 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Badge } from "@/components/ui/badge";
 import { CategoryBadge } from "@/components/learning/CategoryBadge";
+import { DocumentUpload } from "@/components/admin/DocumentUpload";
+import { DocumentDeleteButton } from "@/components/admin/DocumentDeleteButton";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,6 @@ type DocRow = {
   source_type: string;
   status: string;
   publish_date: string | null;
-  chunkCount: number | null;
 };
 
 async function loadDocuments(): Promise<DocRow[]> {
@@ -45,26 +45,14 @@ async function loadDocuments(): Promise<DocRow[]> {
       source_type: d.source_type,
       status: "processed",
       publish_date: d.publish_date,
-      chunkCount: 12,
     }));
   }
   const admin = createAdminClient();
-  const [docsRes, chunksRes] = await Promise.all([
-    admin
-      .from("documents")
-      .select("id, title, category, difficulty, source_type, status, publish_date")
-      .order("created_at", { ascending: false }),
-    admin.from("chunks").select("document_id"),
-  ]);
-  const counts = new Map<number, number>();
-  for (const c of chunksRes.data ?? []) {
-    if (c.document_id != null)
-      counts.set(c.document_id, (counts.get(c.document_id) ?? 0) + 1);
-  }
-  return (docsRes.data ?? []).map((d) => ({
-    ...d,
-    chunkCount: counts.get(d.id) ?? 0,
-  }));
+  const { data } = await admin
+    .from("documents")
+    .select("id, title, category, difficulty, source_type, status, publish_date")
+    .order("created_at", { ascending: false });
+  return data ?? [];
 }
 
 export default async function AdminDocumentsPage() {
@@ -84,16 +72,16 @@ export default async function AdminDocumentsPage() {
 
       <Card>
         <CardHeader className="pb-3">
-          <CardTitle className="text-base">자료 추가 방법</CardTitle>
+          <CardTitle className="text-base">원본 자료 업로드</CardTitle>
           <CardDescription>
-            PDF를 <code className="rounded bg-muted px-1">docs/&lt;분야&gt;/</code> 폴더에 넣고
-            인덱서를 실행하면 자료·과정이 자동 등록됩니다:{" "}
-            <code className="rounded bg-muted px-1">
-              cd indexing && python embed_and_upload.py
-            </code>{" "}
-            (웹 업로드 UI는 추후 제공 예정)
+            대원이 자료실(<code className="rounded bg-muted px-1">/docs</code>)에서 열람할 원본
+            PDF를 올립니다. 비공개로 저장되며 로그인한 대원만 열람할 수 있습니다.
+            <br />※ AI 튜터의 검색 근거(벡터)는 별도 인덱싱(rag7.py)으로 적재됩니다 — 이 업로드와 무관.
           </CardDescription>
         </CardHeader>
+        <CardContent>
+          <DocumentUpload />
+        </CardContent>
       </Card>
 
       <Card>
@@ -109,15 +97,15 @@ export default async function AdminDocumentsPage() {
                 <TableHead>제목</TableHead>
                 <TableHead>분야</TableHead>
                 <TableHead className="hidden sm:table-cell">난이도</TableHead>
-                <TableHead className="hidden sm:table-cell text-right">청크</TableHead>
-                <TableHead className="text-right">상태</TableHead>
+                <TableHead className="hidden sm:table-cell">발행일</TableHead>
+                <TableHead className="w-12 text-right">삭제</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {docs.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={5} className="py-8 text-center text-muted-foreground">
-                    인덱싱된 자료가 없습니다. 위 안내대로 자료를 추가하세요.
+                    등록된 자료가 없습니다. 위에서 PDF를 업로드하세요.
                   </TableCell>
                 </TableRow>
               ) : (
@@ -130,17 +118,11 @@ export default async function AdminDocumentsPage() {
                     <TableCell className="hidden sm:table-cell text-muted-foreground">
                       {d.difficulty ?? "-"}
                     </TableCell>
-                    <TableCell className="hidden sm:table-cell text-right tabular-nums">
-                      {d.chunkCount ?? "-"}
+                    <TableCell className="hidden sm:table-cell text-muted-foreground">
+                      {d.publish_date ?? "-"}
                     </TableCell>
                     <TableCell className="text-right">
-                      {d.status === "processed" ? (
-                        <Badge variant="secondary">처리됨</Badge>
-                      ) : d.status === "processing" ? (
-                        <Badge variant="outline">처리중</Badge>
-                      ) : (
-                        <Badge variant="destructive">실패</Badge>
-                      )}
+                      <DocumentDeleteButton id={d.id} title={d.title} />
                     </TableCell>
                   </TableRow>
                 ))

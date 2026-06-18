@@ -1,7 +1,19 @@
 import { notFound } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/admin";
 import { DocViewerClient } from "@/components/docs/DocViewerClient";
 import { DEMO, demoDocuments } from "@/lib/demo";
+
+// 비공개 버킷 경로(file_url)를 시간제한 서명 URL로 변환. http(레거시)면 그대로, 없으면 null.
+async function resolveFileUrl(fileUrl: string | null): Promise<string | null> {
+  if (!fileUrl) return null;
+  if (/^https?:\/\//.test(fileUrl)) return fileUrl;
+  const admin = createAdminClient();
+  const { data } = await admin.storage
+    .from("documents")
+    .createSignedUrl(fileUrl, 3600); // 1시간 유효
+  return data?.signedUrl ?? null;
+}
 
 export const dynamic = "force-dynamic";
 
@@ -41,11 +53,13 @@ export default async function DocViewerPage({
 
   if (!doc) notFound();
 
+  const fileUrl = await resolveFileUrl(doc.file_url);
+
   return (
     <DocViewerClient
       title={doc.title}
       category={doc.category}
-      fileUrl={doc.file_url}
+      fileUrl={fileUrl}
       initialPage={initialPage}
     />
   );
