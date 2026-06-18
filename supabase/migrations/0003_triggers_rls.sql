@@ -2,10 +2,14 @@
 -- 재실행 가능하도록 drop if exists 가드를 추가했다.
 
 -- 회원가입 시 profiles 자동 생성
+-- security definer + set search_path=public 필수: GoTrue(supabase_auth_admin 역할)가
+-- 계정 생성 시 이 트리거를 실행하는데, search_path 미설정 + 미한정 테이블이면
+-- profiles 를 못 찾아 "Database error creating new user" 로 롤백된다.
 create or replace function handle_new_user()
-returns trigger language plpgsql security definer as $$
+returns trigger language plpgsql security definer
+set search_path = public as $$
 begin
-  insert into profiles (id, email, full_name)
+  insert into public.profiles (id, email, full_name)
   values (new.id, new.email, new.raw_user_meta_data->>'full_name')
   on conflict (id) do nothing;
   return new;

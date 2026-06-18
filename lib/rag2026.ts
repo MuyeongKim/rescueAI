@@ -1,11 +1,11 @@
-// 기존 rag_2026 테이블(외부에서 임베딩해 적재한 LangChain 형식) 연동 어댑터.
-// RAG_TABLE=rag_2026 환경변수가 설정되면 lib/rag.ts·/api/generate 가 이 모듈을 사용한다.
+// 외부에서 임베딩해 적재한 LangChain 형식 벡터 테이블(예: rag_rescue) 연동 어댑터.
+// RAG_TABLE 환경변수가 설정되면 lib/rag.ts·/api/generate 가 이 모듈을 사용한다.
 //
-// rag_2026 스키마: { id uuid, content text, metadata jsonb, embedding vector(1024) }
+// 스키마: { id uuid, content text, metadata jsonb, embedding vector(1024) }
 // metadata 예: { source: "...", category: "SOP"(원본·n8n용), edu_category: "현장대응(SOP)"(구조
 //               교육 관점 재분류 — 이 앱이 분야로 사용), "Header 2": "...", year, upload_date }
 // 분야 필드는 edu_category 를 사용한다(기존 category 는 보존). 미적용 데이터 폴백은 category.
-// 검색 RPC: match_rag_2026(query_embedding, match_count, match_threshold?, filter jsonb)
+// 검색 RPC: match_<RAG_TABLE>(query_embedding, match_count, match_threshold?, filter jsonb)
 const CATEGORY_FIELD = "edu_category";
 import { generateObject } from "ai";
 import { z } from "zod";
@@ -16,8 +16,13 @@ import type { DocSource } from "@/lib/database.types";
 import type { SearchResult } from "@/lib/rag";
 import type { GeneratedDocSource } from "@/lib/generate";
 
+// 테이블·검색함수 이름은 RAG_TABLE 단일 출처에서 파생(이름 변경 시 env+SQL만 고치면 됨).
+// 검색 RPC 규칙: match_<테이블명> (예: rag_rescue → match_rag_rescue).
+const RAG_TABLE = process.env.RAG_TABLE || "rag_rescue";
+const MATCH_FN = `match_${RAG_TABLE}`;
+
 export function ragTableEnabled(): boolean {
-  return process.env.RAG_TABLE === "rag_2026";
+  return !!process.env.RAG_TABLE;
 }
 
 type RagRow = {
@@ -203,7 +208,7 @@ export async function searchRag2026(
 
   // ① 벡터 검색(RPC) + ② 키워드 full-text(websearch/simple) 병렬
   const [vecRes, kwRes] = await Promise.all([
-    (supabase.rpc as CallableFunction)("match_rag_2026", {
+    (supabase.rpc as CallableFunction)(MATCH_FN, {
       query_embedding: toPgVector(embedding),
       match_count: candidateCount,
       match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
@@ -211,7 +216,7 @@ export async function searchRag2026(
     }),
     (async () => {
       if (!kwQuery) return { data: [], error: null };
-      let q = (supabase.from as CallableFunction)("rag_2026")
+      let q = (supabase.from as CallableFunction)(RAG_TABLE)
         .select("id, content, metadata")
         .textSearch("content", kwQuery, { type: "websearch", config: "simple" })
         .limit(candidateCount);
@@ -263,7 +268,7 @@ export async function fetchRag2026Context(
 ): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
   const supabase = createAdminClient();
   // 노이즈 제외 후에도 limit 만큼 남도록 후보를 2배로 받는다.
-  const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
+  const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
     .select("content, metadata")
     .eq(`metadata->>${CATEGORY_FIELD}`, category)
     .limit(limit * 2);
@@ -301,7 +306,7 @@ export async function listRag2026Categories(): Promise<Record<string, string[]>>
   const byCat = new Map<string, Set<string>>();
 
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await (supabase.from as CallableFunction)("rag_2026")
+    const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
       .select(`category:metadata->>${CATEGORY_FIELD}, source:metadata->>source`)
       .range(from, from + PAGE - 1);
     if (error) {
