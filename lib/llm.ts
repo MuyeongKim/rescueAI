@@ -48,13 +48,35 @@ export function availableModels(): { key: string; label: string; note?: string }
   }));
 }
 
+// GLM(z.ai) 추론 모델은 기본적으로 사고(thinking)에 토큰을 대량 소모해 본문이 잘린다.
+// RAG·생성엔 사고가 불필요하므로 요청 본문에 thinking:disabled 를 주입한다(없을 때만).
+// 다른 openai-compat 모델(model 이 glm* 아님)은 건드리지 않는다.
+const glmFetch: typeof fetch = async (input, init) => {
+  if (init?.body && typeof init.body === "string") {
+    try {
+      const b = JSON.parse(init.body);
+      if (typeof b.model === "string" && b.model.startsWith("glm") && b.thinking === undefined) {
+        b.thinking = { type: "disabled" };
+        init = { ...init, body: JSON.stringify(b) };
+      }
+    } catch {
+      /* 본문이 JSON 아니면 그대로 통과 */
+    }
+  }
+  return fetch(input, init);
+};
+
 function build(option: ModelOption): LanguageModelV1 {
   if (option.provider === "gemini") return google(option.model);
   if (option.provider === "claude") return anthropic(option.model);
-  // openai-compat (내부망 Qwen·Ollama /v1·vLLM 등)
+  // openai-compat (z.ai GLM·내부망 Qwen·vLLM 등)
   const baseURL = process.env.LLM_API_URL;
   if (!baseURL) throw new Error("LLM_API_URL 가 설정되지 않았습니다 (openai-compat).");
-  const compat = createOpenAI({ baseURL, apiKey: process.env.LLM_API_KEY || "not-needed" });
+  const compat = createOpenAI({
+    baseURL,
+    apiKey: process.env.LLM_API_KEY || "not-needed",
+    fetch: glmFetch,
+  });
   return compat(option.model || process.env.LLM_MODEL || "qwen3.5");
 }
 
