@@ -40,6 +40,10 @@ export async function getUserAndProfile(): Promise<{
       (user.user_metadata as { full_name?: string } | null)?.full_name ?? null,
     role: appRole === "admin" ? "admin" : "user",
     division: null,
+    rank: null,
+    team: null,
+    digital_id: null,
+    must_change_password: false,
     created_at: user.created_at ?? "",
   };
   return { user: { id: user.id, email: user.email }, profile: fallback };

@@ -24,6 +24,10 @@ type ProfilesRow = {
   full_name: string | null;
   role: string;
   division: string | null;
+  rank: string | null;
+  team: string | null;
+  digital_id: string | null;
+  must_change_password: boolean;
   created_at: string;
 };
 type ProfilesInsert = {
@@ -32,6 +36,10 @@ type ProfilesInsert = {
   full_name?: string | null;
   role?: string;
   division?: string | null;
+  rank?: string | null;
+  team?: string | null;
+  digital_id?: string | null;
+  must_change_password?: boolean;
   created_at?: string;
 };
 

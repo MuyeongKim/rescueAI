@@ -13,6 +13,7 @@ const PROTECTED_PREFIXES = [
   "/fitness",
   "/notices",
   "/me",
+  "/change-password",
 ];
 
 export async function middleware(request: NextRequest) {
@@ -70,6 +71,22 @@ export async function middleware(request: NextRequest) {
     url.pathname = "/home";
     url.search = "";
     return NextResponse.redirect(url);
+  }
+
+  // 첫 로그인 비번 변경 강제: 플래그가 켜진 계정(초기 비번=디지털식별번호)은
+  // 변경 전까지 /change-password 로만 보낸다. (본인 profiles 행은 RLS로 조회 가능)
+  if (user && isProtected && path !== "/change-password") {
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("must_change_password")
+      .eq("id", user.id)
+      .maybeSingle();
+    if (prof?.must_change_password) {
+      const url = request.nextUrl.clone();
+      url.pathname = "/change-password";
+      url.search = "";
+      return NextResponse.redirect(url);
+    }
   }
 
   return supabaseResponse;
