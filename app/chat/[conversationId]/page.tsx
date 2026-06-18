@@ -9,6 +9,7 @@ import {
 } from "@/lib/demo";
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { listChatCategories } from "@/lib/categories-server";
+import { availableModels } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +82,7 @@ export default async function ConversationPage({
       conversationId={conversationId}
       initialMessages={initialMessages}
       categories={categories}
+      models={availableModels()}
     />
   );
 }

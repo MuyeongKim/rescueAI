@@ -43,6 +43,7 @@ export async function POST(req: Request) {
     messages?: Message[];
     conversationId?: string;
     category?: string | null;
+    model?: string;
   };
   try {
     body = await req.json();
@@ -52,6 +53,7 @@ export async function POST(req: Request) {
 
   const messages: Message[] = body.messages ?? [];
   const category: string | null = body.category ?? null;
+  const modelKey: string | undefined = body.model || undefined;
 
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
   const question = (lastUser?.content ?? "").toString().trim();
@@ -108,7 +110,7 @@ export async function POST(req: Request) {
       }
 
       const result = streamText({
-        model: getChatModel(),
+        model: getChatModel(modelKey),
         system,
         messages: convertToCoreMessages(messages),
         temperature: 0.2,

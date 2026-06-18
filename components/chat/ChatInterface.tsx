@@ -31,6 +31,7 @@ export function ChatInterface({
   initialMessages = [],
   initialInput,
   categories,
+  models = [],
 }: {
   conversationId?: string;
   initialMessages?: Message[];
@@ -38,8 +39,11 @@ export function ChatInterface({
   initialInput?: string;
   /** 분야 필터 선택지 ("전체" 제외) — 서버에서 실제 자료 기준으로 전달 */
   categories?: string[];
+  /** 사용 가능한 LLM 모델(자격증명 있는 것만) — 서버 availableModels() */
+  models?: { key: string; label: string; note?: string }[];
 }) {
   const [category, setCategory] = useState<string>("전체");
+  const [model, setModel] = useState<string>(models[0]?.key ?? "");
   const convIdRef = useRef<string | undefined>(conversationId);
   const bottomRef = useRef<HTMLDivElement>(null);
 
@@ -81,6 +85,7 @@ export function ChatInterface({
   const requestBody = () => ({
     conversationId: convIdRef.current,
     category: category === "전체" ? null : category,
+    model: model || undefined,
   });
 
   function onSubmit(e: React.FormEvent) {
@@ -122,6 +127,24 @@ export function ChatInterface({
               )}
             </SelectContent>
           </Select>
+
+          {models.length > 1 && (
+            <>
+              <span className="ml-1 text-sm text-muted-foreground">모델</span>
+              <Select value={model} onValueChange={setModel}>
+                <SelectTrigger className="h-10 w-36">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {models.map((m) => (
+                    <SelectItem key={m.key} value={m.key}>
+                      {m.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </>
+          )}
         </div>
       </div>
 
