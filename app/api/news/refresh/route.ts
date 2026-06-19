@@ -107,9 +107,10 @@ async function refresh(): Promise<{ added: number; scanned: number }> {
     auto: true,
     hidden: false,
   }));
-  const { error } = await admin.from("news").upsert(rows, { onConflict: "url", ignoreDuplicates: true });
+  // 기존 url 은 위에서 이미 제외했으므로 단순 insert (부분 유니크 인덱스가 최종 방어).
+  const { error } = await admin.from("news").insert(rows);
   if (error) {
-    console.error("[news/refresh] upsert 실패:", error.message);
+    console.error("[news/refresh] insert 실패:", error.message);
     throw new Error(error.message);
   }
   return { added: rows.length, scanned: candidates.length };
