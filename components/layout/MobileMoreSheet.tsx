@@ -35,6 +35,7 @@ const MORE_ITEMS = [
 
 const ADMIN_MORE_ITEMS = [
   { key: "admin", href: "/admin", label: "통계", icon: BarChart3 },
+  { key: "admin-news", href: "/admin/news", label: "동향 관리", icon: Newspaper },
   { key: "admin-dispatch", href: "/admin/dispatch", label: "출동통계 분석", icon: Siren },
   { key: "admin-documents", href: "/admin/documents", label: "자료 관리", icon: FolderCog },
   { key: "admin-users", href: "/admin/users", label: "사용자 관리", icon: Users },

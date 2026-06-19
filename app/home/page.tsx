@@ -70,12 +70,12 @@ export default async function HomePage() {
     ["일", "월", "화", "수", "목", "금", "토"][now.getDay()]
   })`;
 
-  const [notices, fitness, conversations] = await Promise.all([
+  const [notices, fitness, conversations, news] = await Promise.all([
     loadRecentNotices(),
     getFitnessState(userId),
     loadRecentConversations(),
+    getRecentNews(3),
   ]);
-  const news = getRecentNews(3);
   const goalPct = Math.min(
     100,
     Math.round((fitness.monthPoints / FITNESS_MONTH_GOAL) * 100)
@@ -249,29 +249,39 @@ export default async function HomePage() {
             </Link>
           </CardHeader>
           <CardContent className="divide-y p-0">
-            {news.map((n) => (
-              <Link
-                key={n.id}
-                href="/news"
-                className="block px-4 py-3 transition-colors hover:bg-accent/40"
-              >
-                <div className="flex items-center gap-1.5">
-                  <Badge
-                    variant={n.region === "해외" ? "default" : "secondary"}
-                    className="shrink-0"
-                  >
-                    {n.region}
-                  </Badge>
-                  <Badge variant="outline" className="shrink-0 font-normal">
-                    {n.category}
-                  </Badge>
-                  <span className="ml-auto shrink-0 text-xs text-muted-foreground">
-                    {n.date}
-                  </span>
-                </div>
-                <p className="mt-1 line-clamp-1 text-sm font-medium">{n.title}</p>
-              </Link>
-            ))}
+            {news.length === 0 ? (
+              <p className="px-4 py-6 text-center text-sm text-muted-foreground">
+                아직 등록된 동향이 없습니다.
+              </p>
+            ) : (
+              news.map((n) => (
+                <Link
+                  key={n.id}
+                  href="/news"
+                  className="block px-4 py-3 transition-colors hover:bg-accent/40"
+                >
+                  <div className="flex items-center gap-1.5">
+                    {n.region && (
+                      <Badge
+                        variant={n.region === "해외" ? "default" : "secondary"}
+                        className="shrink-0"
+                      >
+                        {n.region}
+                      </Badge>
+                    )}
+                    {n.category && (
+                      <Badge variant="outline" className="shrink-0 font-normal">
+                        {n.category}
+                      </Badge>
+                    )}
+                    <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+                      {n.date}
+                    </span>
+                  </div>
+                  <p className="mt-1 line-clamp-1 text-sm font-medium">{n.title}</p>
+                </Link>
+              ))
+            )}
           </CardContent>
         </Card>
       </div>

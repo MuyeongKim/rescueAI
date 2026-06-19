@@ -145,6 +145,38 @@ type LessonProgressInsert = {
   created_at?: string;
 };
 
+// ── news (구조 동향) ──
+type NewsRow = {
+  id: number;
+  title: string;
+  summary: string | null;
+  source: string | null;
+  url: string | null;
+  region: string | null;
+  category: string | null;
+  published_on: string | null;
+  pinned: boolean;
+  hidden: boolean;
+  auto: boolean;
+  created_by: string | null;
+  created_at: string;
+};
+type NewsInsert = {
+  id?: number;
+  title: string;
+  summary?: string | null;
+  source?: string | null;
+  url?: string | null;
+  region?: string | null;
+  category?: string | null;
+  published_on?: string | null;
+  pinned?: boolean;
+  hidden?: boolean;
+  auto?: boolean;
+  created_by?: string | null;
+  created_at?: string;
+};
+
 // ── notices ──
 type NoticesRow = {
   id: number;
@@ -228,6 +260,12 @@ export interface Database {
         Row: NoticesRow;
         Insert: NoticesInsert;
         Update: Partial<NoticesInsert>;
+        Relationships: [];
+      };
+      news: {
+        Row: NewsRow;
+        Insert: NewsInsert;
+        Update: Partial<NewsInsert>;
         Relationships: [];
       };
       workout_logs: {
