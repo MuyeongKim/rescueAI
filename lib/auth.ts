@@ -1,3 +1,4 @@
+import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import type { Database } from "@/lib/database.types";
 import { DEMO, demoUser, demoProfile } from "@/lib/demo";
@@ -26,6 +27,9 @@ export async function getUserAndProfile(): Promise<{
     .maybeSingle();
 
   if (profile) {
+    // 첫 로그인 비번 변경 강제(초기 비번=디지털식별번호). 레이아웃/페이지(RSC)에서 호출되므로
+    // 여기서 redirect 하면 앱 셸 전체에 적용된다. /change-password 페이지는 이 함수를 호출하지 않아 루프 없음.
+    if (profile.must_change_password) redirect("/change-password");
     return { user: { id: user.id, email: user.email }, profile };
   }
 

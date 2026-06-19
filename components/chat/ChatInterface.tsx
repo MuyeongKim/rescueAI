@@ -105,16 +105,17 @@ export function ChatInterface({
     <div className="flex h-full flex-col">
       {/* 상단 바: 대화목록 + 카테고리 필터 */}
       <div className="border-b bg-background/80 px-3 py-2 sm:px-4">
-        <div className="mx-auto flex max-w-3xl items-center gap-2">
+        {/* 모바일에선 컨트롤이 많아 한 줄을 넘칠 수 있어 flex-wrap + 라벨 숨김으로 정리 */}
+        <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
           <Link href="/home" className="md:hidden" aria-label="홈으로">
             <Button variant="ghost" size="icon" className="h-10 w-10">
               <Home className="h-5 w-5" />
             </Button>
           </Link>
           <ConversationList activeId={conversationId} />
-          <span className="ml-1 text-sm text-muted-foreground">분야</span>
+          <span className="ml-1 hidden text-sm text-muted-foreground sm:inline">분야</span>
           <Select value={category} onValueChange={setCategory}>
-            <SelectTrigger className="h-10 w-28">
+            <SelectTrigger className="h-10 w-24 sm:w-28">
               <SelectValue placeholder="전체" />
             </SelectTrigger>
             <SelectContent>
@@ -130,9 +131,9 @@ export function ChatInterface({
 
           {models.length > 1 && (
             <>
-              <span className="ml-1 text-sm text-muted-foreground">모델</span>
+              <span className="ml-1 hidden text-sm text-muted-foreground sm:inline">모델</span>
               <Select value={model} onValueChange={setModel}>
-                <SelectTrigger className="h-10 w-36">
+                <SelectTrigger className="h-10 w-32 sm:w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
