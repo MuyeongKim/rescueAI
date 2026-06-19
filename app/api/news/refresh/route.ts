@@ -44,9 +44,13 @@ function parseRss(xml: string): Raw[] {
       const mm = b.match(new RegExp(`<${tag}[^>]*>([\\s\\S]*?)</${tag}>`));
       return mm ? decode(mm[1]) : "";
     };
-    const title = pick("title");
+    let title = pick("title");
     const url = pick("link");
     const source = pick("source");
+    // Google News 제목 끝의 " - 출처사" 중복 접미 제거(출처는 source 필드로 따로 표시)
+    if (source && title.endsWith(` - ${source}`)) {
+      title = title.slice(0, -(source.length + 3)).trim();
+    }
     const pub = pick("pubDate");
     let date: string | null = null;
     if (pub) {
