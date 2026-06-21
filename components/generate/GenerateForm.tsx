@@ -461,16 +461,15 @@ export function GenerateForm({
           {/* STEP 01 — 무엇을 만들까요 */}
           <section className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none">
             <StepHeader n="01" title="무엇을 만들까요" />
-            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2" role="radiogroup" aria-label="생성할 자료">
-              {GEN_TYPES.map((t) => {
+            {/* 생성 3종 — 인덱싱된 자료로 AI가 파일을 생성(선택 색은 분야 색으로 통일) */}
+            <div className="grid grid-cols-3 gap-2.5" role="radiogroup" aria-label="생성할 자료">
+              {GEN_TYPES.filter((t) => t.key !== "notebooklm").map((t) => {
                 const Icon =
-                  t.key === "notebooklm"
-                    ? Sparkles
-                    : t.key === "slides"
-                      ? Presentation
-                      : t.key === "lesson"
-                        ? MessageSquareText
-                        : FileText;
+                  t.key === "slides"
+                    ? Presentation
+                    : t.key === "lesson"
+                      ? MessageSquareText
+                      : FileText;
                 const active = type === t.key;
                 return (
                   <button
@@ -479,34 +478,62 @@ export function GenerateForm({
                     role="radio"
                     aria-checked={active}
                     onClick={() => setType(t.key)}
-                    className={cn(
-                      "group flex min-h-[56px] items-start gap-3 rounded-xl border p-3.5 text-left transition-all duration-200 motion-reduce:transition-none",
-                      "hover:-translate-y-0.5 hover:shadow-sm motion-reduce:hover:translate-y-0",
+                    style={
                       active
-                        ? "border-primary bg-primary/5 ring-1 ring-primary"
-                        : "border-border hover:border-primary/40"
+                        ? { borderColor: accent, backgroundColor: `${accent}14`, color: accent }
+                        : undefined
+                    }
+                    className={cn(
+                      "group flex min-h-[88px] flex-col items-center justify-center gap-2 rounded-xl border p-3 text-center transition-all duration-200 motion-reduce:transition-none",
+                      "hover:-translate-y-0.5 hover:shadow-sm motion-reduce:hover:translate-y-0",
+                      active ? "shadow-sm" : "border-border hover:border-primary/40"
                     )}
                   >
                     <span
                       className={cn(
-                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors duration-200",
-                        active
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted text-muted-foreground group-hover:text-primary"
+                        "flex h-10 w-10 items-center justify-center rounded-lg transition-colors duration-200",
+                        !active && "bg-muted text-muted-foreground group-hover:text-primary"
                       )}
+                      style={active ? { backgroundColor: accent, color: "#ffffff" } : undefined}
                     >
                       <Icon className="h-5 w-5" />
                     </span>
-                    <span className="min-w-0">
-                      <span className="block font-medium">{t.label}</span>
-                      <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
-                        {t.description}
-                      </span>
+                    <span className="text-sm font-medium">
+                      {t.key === "lesson" ? "교안" : t.key === "slides" ? "슬라이드" : t.label}
                     </span>
                   </button>
                 );
               })}
             </div>
+            {/* 선택한 유형 설명 — 한 줄 (생성 3종일 때) */}
+            {type !== "notebooklm" && (
+              <p className="text-sm text-muted-foreground">{typeMeta.description}</p>
+            )}
+
+            {/* NotebookLM — 외부 도구용 프롬프트라 동등 카드에서 분리한 보조 액션 */}
+            <button
+              type="button"
+              role="radio"
+              aria-checked={type === "notebooklm"}
+              onClick={() => setType("notebooklm")}
+              style={
+                type === "notebooklm"
+                  ? { borderColor: accent, backgroundColor: `${accent}14`, color: accent }
+                  : undefined
+              }
+              className={cn(
+                "mt-1 flex w-full items-center gap-2.5 rounded-lg border border-dashed p-3 text-left text-sm transition-all duration-200 motion-reduce:transition-none",
+                type === "notebooklm"
+                  ? "shadow-sm"
+                  : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
+              )}
+            >
+              <Sparkles className="h-4 w-4 shrink-0" />
+              <span className="flex-1">
+                <span className="font-medium">또는 — NotebookLM 프롬프트</span>
+                <span className="ml-1.5 text-xs opacity-80">붙여넣어 슬라이드 만들기</span>
+              </span>
+            </button>
           </section>
 
           <div className="h-px bg-border/60" />

@@ -48,13 +48,11 @@ export default async function GeneratePage() {
   return (
     <div className="mx-auto max-w-3xl space-y-4 px-3 py-5 sm:px-4">
       <div>
-        <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <Wand2 className="h-5 w-5 text-primary" /> AI 자료제작
+        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
+          <Wand2 className="h-6 w-6 text-primary" /> AI 자료제작
         </h1>
-        <p className="text-sm text-muted-foreground">
-          클릭 몇 번으로 훈련계획 문서·교안·교육 슬라이드를 AI가 만들어 드립니다.
-          NotebookLM용 프롬프트도 뽑아갈 수 있고, 모두 인덱싱된 교육자료(벡터DB)를
-          근거로 생성합니다.
+        <p className="mt-1 text-sm text-muted-foreground">
+          인덱싱된 교육자료를 근거로 훈련계획·교안·슬라이드를 만들어 드립니다.
         </p>
       </div>
 
