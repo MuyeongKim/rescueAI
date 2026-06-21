@@ -8,6 +8,7 @@ import pytest
 def load_rag7(monkeypatch):
     monkeypatch.setenv("NEXT_PUBLIC_SUPABASE_URL", "http://localhost:54321")
     monkeypatch.setenv("SUPABASE_SERVICE_ROLE_KEY", "test-service-role-key")
+    monkeypatch.setenv("EMBEDDING_PREFER_LOCAL", "0")
     install_external_stubs(monkeypatch)
     import rag7
 
@@ -58,6 +59,74 @@ class StubEmbeddings:
 
     def embed_query(self, text):
         return self.query_result
+
+
+class StubResponse:
+    def __init__(self, payload):
+        self.payload = payload
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        return self.payload
+
+
+def test_resolve_ollama_base_url_prefers_local_when_model_exists(monkeypatch):
+    rag7 = load_rag7(monkeypatch)
+    monkeypatch.setenv("EMBEDDING_PREFER_LOCAL", "1")
+
+    def fake_get(url, timeout):
+        assert url == "http://localhost:11434/api/tags"
+        assert timeout == 1.5
+        return StubResponse({"models": [{"name": "bge-m3:latest"}]})
+
+    monkeypatch.setattr(rag7.requests, "get", fake_get)
+
+    selected = rag7.resolve_ollama_base_url(
+        fallback_url="http://100.66.187.122:11434",
+        model="bge-m3:latest",
+        local_url="http://localhost:11434",
+    )
+
+    assert selected == "http://localhost:11434"
+
+
+def test_resolve_ollama_base_url_uses_fallback_when_local_model_missing(monkeypatch):
+    rag7 = load_rag7(monkeypatch)
+    monkeypatch.setenv("EMBEDDING_PREFER_LOCAL", "1")
+
+    monkeypatch.setattr(
+        rag7.requests,
+        "get",
+        lambda *_args, **_kwargs: StubResponse({"models": [{"name": "nomic-embed-text"}]}),
+    )
+
+    selected = rag7.resolve_ollama_base_url(
+        fallback_url="http://100.66.187.122:11434",
+        model="bge-m3:latest",
+        local_url="http://localhost:11434",
+    )
+
+    assert selected == "http://100.66.187.122:11434"
+
+
+def test_resolve_ollama_base_url_uses_fallback_when_local_probe_fails(monkeypatch):
+    rag7 = load_rag7(monkeypatch)
+    monkeypatch.setenv("EMBEDDING_PREFER_LOCAL", "1")
+
+    def fake_get(*_args, **_kwargs):
+        raise rag7.requests.RequestException("local down")
+
+    monkeypatch.setattr(rag7.requests, "get", fake_get)
+
+    selected = rag7.resolve_ollama_base_url(
+        fallback_url="http://100.66.187.122:11434",
+        model="bge-m3:latest",
+        local_url="http://localhost:11434",
+    )
+
+    assert selected == "http://100.66.187.122:11434"
 
 
 def test_safe_embeddings_rejects_dimension_mismatch(monkeypatch):

@@ -371,12 +371,53 @@ EDU_CATEGORIES = [
     "드론 운용", "장비 관리", "현장지휘·공통", "복무·행정",
 ]
 
-# Ollama BGE-M3 임베딩 모델 (1024차원) — 주소도 웹앱과 동일한 EMBEDDING_API_URL 공유
-OLLAMA_BASE_URL = os.getenv("EMBEDDING_API_URL", "http://localhost:11434")
+# Ollama BGE-M3 임베딩 모델 (1024차원) — 기본은 웹앱과 동일한 EMBEDDING_API_URL 공유
 OLLAMA_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3:latest")
+OLLAMA_FALLBACK_BASE_URL = os.getenv("EMBEDDING_API_URL", "http://localhost:11434")
+OLLAMA_LOCAL_BASE_URL = os.getenv("EMBEDDING_LOCAL_API_URL", "http://localhost:11434")
 EMBED_BATCH_SIZE = 64            # Ollama /api/embed 요청당 텍스트 수
 UPLOAD_BATCH_SIZE = 200          # 업로드 루프 배치 크기
 SUPABASE_UPSERT_CHUNK_SIZE = 500 # Supabase upsert chunk 크기
+
+
+def _ollama_model_names_match(installed_name, requested_model):
+    installed = str(installed_name or "").strip()
+    requested = str(requested_model or "").strip()
+    if not installed or not requested:
+        return False
+    if installed == requested:
+        return True
+    return installed.split(":", 1)[0] == requested.split(":", 1)[0]
+
+
+def resolve_ollama_base_url(
+    fallback_url,
+    model,
+    local_url="http://localhost:11434",
+    timeout=1.5,
+):
+    """
+    로컬 Ollama에 요청 모델이 있으면 로컬을 우선 사용하고, 없거나 접속 실패 시 fallback_url을 사용한다.
+    EMBEDDING_PREFER_LOCAL=0 으로 자동 탐지를 끌 수 있다.
+    """
+    fallback_url = (fallback_url or "http://localhost:11434").rstrip("/")
+    local_url = (local_url or "http://localhost:11434").rstrip("/")
+    if os.getenv("EMBEDDING_PREFER_LOCAL", "1").lower() in {"0", "false", "no", "off"}:
+        print(f"ℹ️ 로컬 Ollama 자동 탐지 비활성화: {fallback_url} 사용")
+        return fallback_url
+
+    try:
+        res = requests.get(f"{local_url}/api/tags", timeout=timeout)
+        res.raise_for_status()
+        models = res.json().get("models", [])
+        for item in models:
+            if _ollama_model_names_match(item.get("name") or item.get("model"), model):
+                print(f"🏠 로컬 Ollama 모델 감지됨: {model} @ {local_url}")
+                return local_url
+        print(f"ℹ️ 로컬 Ollama에 {model} 없음: {fallback_url} 사용")
+    except Exception as e:
+        print(f"ℹ️ 로컬 Ollama 확인 실패: {e} — {fallback_url} 사용")
+    return fallback_url
 
 
 def resolve_ollama_request_options(base_url):
@@ -415,6 +456,11 @@ def resolve_ollama_request_options(base_url):
     return {}
 
 
+OLLAMA_BASE_URL = resolve_ollama_base_url(
+    fallback_url=OLLAMA_FALLBACK_BASE_URL,
+    model=OLLAMA_MODEL,
+    local_url=OLLAMA_LOCAL_BASE_URL,
+)
 OLLAMA_REQUEST_OPTIONS = resolve_ollama_request_options(OLLAMA_BASE_URL)
 
 raw_embeddings = FastOllamaEmbeddings(
