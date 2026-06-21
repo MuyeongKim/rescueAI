@@ -142,6 +142,42 @@ def sanitize_for_json(value):
     return str(value)
 
 
+def _pdf_has_text_layer(file_path, min_chars=100):
+    """pypdf로 빠르게 텍스트 레이어 유무만 판별한다(스캔 PDF면 텍스트가 거의 없음).
+    판별 불가/오류면 True(=텍스트 있음으로 간주 → OCR 끔, 기존 빠른 동작 유지)."""
+    try:
+        from pypdf import PdfReader
+
+        reader = PdfReader(file_path)
+        total = 0
+        for page in reader.pages:
+            total += len((page.extract_text() or "").strip())
+            if total >= min_chars:
+                return True
+        return total >= min_chars
+    except Exception:
+        return True
+
+
+def _resolve_do_ocr(file_path, log):
+    """OCR 사용 여부를 자동 결정한다.
+    DOCLING_OCR=auto(기본): PDF는 텍스트 레이어 유무로 자동 판단, 그 외 형식은 OFF.
+    DOCLING_OCR=1/0: 자동 판단을 무시하고 강제 ON/OFF."""
+    mode = os.getenv("DOCLING_OCR", "auto").strip().lower()
+    if mode in {"1", "true", "yes", "on"}:
+        return True
+    if mode in {"0", "false", "no", "off"}:
+        return False
+
+    # auto: 텍스트 문서/오피스 파일은 OCR 불필요, PDF만 스캔 여부로 판단
+    if Path(file_path).suffix.lower() != ".pdf":
+        return False
+    if _pdf_has_text_layer(file_path):
+        return False
+    log("ℹ️ 텍스트 레이어가 거의 없어 스캔 PDF로 판단 — OCR을 켜서 변환합니다(느릴 수 있음).")
+    return True
+
+
 def convert_file_to_markdown(file_path, log_cb=None):
     """Docling으로 변환하되, 현재 환경에서 Docling/Torch가 깨진 PDF는 pypdf로 폴백한다."""
 
@@ -152,9 +188,16 @@ def convert_file_to_markdown(file_path, log_cb=None):
             print(text)
 
     try:
-        from docling.document_converter import DocumentConverter
+        from docling.document_converter import DocumentConverter, PdfFormatOption
+        from docling.datamodel.base_models import InputFormat
+        from docling.datamodel.pipeline_options import PdfPipelineOptions
 
-        converter = DocumentConverter()
+        # OCR은 자동 판단(텍스트 PDF·오피스 문서는 끔→빠름, 스캔 PDF만 켬). DOCLING_OCR로 강제 가능.
+        pdf_options = PdfPipelineOptions()
+        pdf_options.do_ocr = _resolve_do_ocr(file_path, log)
+        converter = DocumentConverter(
+            format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)}
+        )
         result = converter.convert(file_path)
         return result.document.export_to_markdown(), "docling"
     except Exception as docling_error:
@@ -367,7 +410,7 @@ QUERY_NAME = "match_rag_rescue"
 # 웹앱 분야(edu_category) 표준값 — 생성 페이지·챗봇 분야 필터가 이 값을 사용한다.
 # (lib/category.ts 색 지정과도 일치) 새 자료는 이 중에서 고르면 분야 버튼에 바로 나타남.
 EDU_CATEGORIES = [
-    "화재", "수난", "산악", "구급", "화학사고",
+    "화재", "수난", "산악", "구급", "일반구조", "화학사고",
     "드론 운용", "장비 관리", "현장지휘·공통", "복무·행정",
 ]
 
@@ -875,17 +918,20 @@ class RAGIngestionGUI:
         style.configure("TEntry", padding=4)
 
     def browse_file(self):
+        # macOS Cocoa 파일 대화상자는 세미콜론 묶음("*.pdf;*.docx")·"*.*" 를 UTI로 변환 못해
+        # NSInvalidArgumentException(object cannot be nil)으로 크래시한다. 확장자는 튜플로, All은 "*".
         self.file_path = filedialog.askopenfilename(
             filetypes=[
-                ("지원되는 파일", "*.pdf;*.docx;*.pptx;*.txt;*.md;*.html;*.htm;*.jpg;*.png;*.jpeg;*.bmp;*.tiff"),
+                ("지원되는 파일", ("*.pdf", "*.docx", "*.pptx", "*.txt", "*.md",
+                                "*.html", "*.htm", "*.jpg", "*.png", "*.jpeg", "*.bmp", "*.tiff")),
                 ("PDF files", "*.pdf"),
                 ("Word files", "*.docx"),
                 ("PowerPoint files", "*.pptx"),
                 ("Text files", "*.txt"),
                 ("Markdown files", "*.md"),
-                ("HTML files", "*.html;*.htm"),
-                ("Image files", "*.jpg;*.jpeg;*.png;*.bmp;*.tiff"),
-                ("All files", "*.*")
+                ("HTML files", ("*.html", "*.htm")),
+                ("Image files", ("*.jpg", "*.jpeg", "*.png", "*.bmp", "*.tiff")),
+                ("All files", "*"),
             ]
         )
         if self.file_path:
