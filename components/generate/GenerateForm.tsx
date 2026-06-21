@@ -514,7 +514,7 @@ export function GenerateForm({
           className="h-1 w-full transition-colors duration-500 motion-reduce:transition-none"
           style={{ backgroundColor: accent }}
         />
-        <CardContent className="space-y-6 p-4 sm:p-6">
+        <CardContent className="space-y-4 p-4 sm:p-5">
           {/* STEP 01 — 무엇을 만들까요 */}
           <section className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none">
             <StepHeader n="01" title="무엇을 만들까요" />
@@ -541,19 +541,19 @@ export function GenerateForm({
                         : undefined
                     }
                     className={cn(
-                      "group flex min-h-[88px] flex-col items-center justify-center gap-2 rounded-xl border p-3 text-center transition-all duration-200 motion-reduce:transition-none",
+                      "group flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-xl border p-2.5 text-center transition-all duration-200 motion-reduce:transition-none",
                       "hover:-translate-y-0.5 hover:shadow-sm motion-reduce:hover:translate-y-0",
                       active ? "shadow-sm" : "border-border hover:border-primary/40"
                     )}
                   >
                     <span
                       className={cn(
-                        "flex h-10 w-10 items-center justify-center rounded-lg transition-colors duration-200",
+                        "flex h-8 w-8 items-center justify-center rounded-lg transition-colors duration-200",
                         !active && "bg-muted text-muted-foreground group-hover:text-primary"
                       )}
                       style={active ? { backgroundColor: accent, color: "#ffffff" } : undefined}
                     >
-                      <Icon className="h-5 w-5" />
+                      <Icon className="h-4 w-4" />
                     </span>
                     <span className="text-sm font-medium">
                       {t.key === "lesson" ? "교안" : t.key === "slides" ? "슬라이드" : t.label}
@@ -597,7 +597,7 @@ export function GenerateForm({
 
           {/* STEP 02 — 분야·대상·시간 */}
           <section
-            className="animate-in fade-in slide-in-from-bottom-2 space-y-5 duration-500 motion-reduce:animate-none"
+            className="animate-in fade-in slide-in-from-bottom-2 space-y-4 duration-500 motion-reduce:animate-none"
             style={{ animationDelay: "70ms", animationFillMode: "backwards" }}
           >
             <StepHeader n="02" title="분야 · 대상 · 시간" />
