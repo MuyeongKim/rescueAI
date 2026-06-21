@@ -60,3 +60,4 @@ public/pdf.worker.min.mjs
 *.py
 !indexing/**/*.py
 !rag7.py
+!tests/**/*.py

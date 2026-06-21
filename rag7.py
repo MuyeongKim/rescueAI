@@ -3,6 +3,7 @@ import os
 import math
 import shutil
 import subprocess
+import uuid
 from collections import Counter
 from pathlib import Path
 from tqdm import tqdm
@@ -13,20 +14,121 @@ import threading
 import traceback
 import requests
 import tkinter as tk
+import re
 from tkinter import ttk
 from tkinter import filedialog, messagebox
 
 from supabase.client import Client, create_client
 from langchain_community.vectorstores import SupabaseVectorStore
-from langchain_text_splitters import RecursiveCharacterTextSplitter, MarkdownHeaderTextSplitter
 from langchain_core.documents import Document
 
 # Docling 임포트
-from docling.document_converter import DocumentConverter
-
 # =========================
 # ✅ JSON/임베딩 안전화 유틸
 # =========================
+class LocalMarkdownHeaderTextSplitter:
+    """Torch/transformers 의존 없이 #/##/### 기준으로 마크다운을 나눈다."""
+
+    def __init__(self, headers_to_split_on, strip_headers=False):
+        self.header_map = dict(headers_to_split_on)
+        self.strip_headers = strip_headers
+
+    def split_text(self, text):
+        docs = []
+        current_metadata = {}
+        current_lines = []
+
+        def flush():
+            content = "\n".join(current_lines).strip()
+            if content:
+                docs.append(Document(page_content=content, metadata=dict(current_metadata)))
+
+        for line in text.splitlines():
+            match = re.match(r"^(#{1,3})\s+(.+?)\s*$", line)
+            if match and match.group(1) in self.header_map:
+                flush()
+                current_lines = []
+                level = len(match.group(1))
+                header_key = self.header_map[match.group(1)]
+                current_metadata[header_key] = match.group(2).strip()
+                for deeper_level in range(level + 1, 4):
+                    current_metadata.pop(self.header_map.get("#" * deeper_level), None)
+                if not self.strip_headers:
+                    current_lines.append(line)
+                continue
+            current_lines.append(line)
+
+        flush()
+        return docs
+
+
+class LocalRecursiveCharacterTextSplitter:
+    """긴 텍스트를 안정적인 크기/overlap으로 나누는 경량 splitter."""
+
+    def __init__(self, chunk_size=1000, chunk_overlap=200, separators=None):
+        self.chunk_size = int(chunk_size)
+        self.chunk_overlap = max(0, int(chunk_overlap))
+        self.separators = separators or ["\n\n", "\n", ". ", " ", ""]
+
+    def split_text(self, text):
+        text = text.strip()
+        if not text:
+            return []
+        pieces = self._split_recursive(text, self.separators)
+        chunks = []
+        current = ""
+        for piece in pieces:
+            if not piece:
+                continue
+            candidate = piece if not current else f"{current} {piece}"
+            if len(candidate) <= self.chunk_size:
+                current = candidate
+                continue
+            if current:
+                chunks.append(current.strip())
+            current = piece
+        if current:
+            chunks.append(current.strip())
+        return self._apply_overlap(chunks)
+
+    def _split_recursive(self, text, separators):
+        if len(text) <= self.chunk_size:
+            return [text]
+        if not separators:
+            return [text[i : i + self.chunk_size] for i in range(0, len(text), self.chunk_size)]
+
+        sep = separators[0]
+        if sep == "":
+            return [text[i : i + self.chunk_size] for i in range(0, len(text), self.chunk_size)]
+
+        parts = text.split(sep)
+        if len(parts) == 1:
+            return self._split_recursive(text, separators[1:])
+
+        out = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            if len(part) > self.chunk_size:
+                out.extend(self._split_recursive(part, separators[1:]))
+            else:
+                out.append(part)
+        return out
+
+    def _apply_overlap(self, chunks):
+        if self.chunk_overlap <= 0 or len(chunks) <= 1:
+            return chunks
+        overlapped = [chunks[0]]
+        for chunk in chunks[1:]:
+            previous_tail = overlapped[-1][-self.chunk_overlap :].strip()
+            if previous_tail:
+                overlapped.append(f"{previous_tail} {chunk}".strip())
+            else:
+                overlapped.append(chunk)
+        return overlapped
+
+
 def sanitize_for_json(value):
     """Supabase JSON 직렬화에서 깨지는 NaN/Infinity/비표준 타입을 정리한다."""
     if isinstance(value, float):
@@ -38,6 +140,48 @@ def sanitize_for_json(value):
     if isinstance(value, (str, int, bool)) or value is None:
         return value
     return str(value)
+
+
+def convert_file_to_markdown(file_path, log_cb=None):
+    """Docling으로 변환하되, 현재 환경에서 Docling/Torch가 깨진 PDF는 pypdf로 폴백한다."""
+
+    def log(text):
+        if log_cb:
+            log_cb(text)
+        else:
+            print(text)
+
+    try:
+        from docling.document_converter import DocumentConverter
+
+        converter = DocumentConverter()
+        result = converter.convert(file_path)
+        return result.document.export_to_markdown(), "docling"
+    except Exception as docling_error:
+        suffix = Path(file_path).suffix.lower()
+        if suffix != ".pdf":
+            raise RuntimeError(f"Docling 문서 변환 실패: {docling_error}") from docling_error
+        log(f"⚠️ Docling 변환 실패, pypdf 텍스트 추출로 폴백: {docling_error}")
+        return convert_pdf_to_markdown_with_pypdf(file_path), "pypdf"
+
+
+def convert_pdf_to_markdown_with_pypdf(file_path):
+    """텍스트 기반 PDF를 pypdf로 추출해 간단한 마크다운으로 변환한다."""
+    from pypdf import PdfReader
+
+    reader = PdfReader(file_path)
+    lines = [f"# {Path(file_path).stem}"]
+    for page_idx, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        text = text.replace("\x00", " ").strip()
+        if not text:
+            continue
+        lines.append(f"\n## Page {page_idx}\n")
+        lines.append(text)
+    full_text = "\n\n".join(lines).strip()
+    if len(full_text) < 20:
+        raise RuntimeError("pypdf로 추출한 텍스트가 비어 있습니다. 스캔 PDF면 OCR 가능한 환경에서 Docling을 복구해야 합니다.")
+    return full_text
 
 
 class FastOllamaEmbeddings:
@@ -133,7 +277,7 @@ class FastOllamaEmbeddings:
 
 
 class SafeEmbeddings:
-    """임베딩 결과의 NaN/Infinity를 0.0으로 치환해 업로드 실패를 방지한다."""
+    """임베딩 결과를 검증해 잘못된 벡터가 DB에 적재되지 않게 한다."""
 
     def __init__(self, base_embeddings, expected_dim=1024):
         self.base_embeddings = base_embeddings
@@ -161,43 +305,31 @@ class SafeEmbeddings:
             cleaned.append(num)
         return cleaned
 
-    def _fit_vector_dim(self, vector):
-        if not vector:
-            return [0.0] * self.expected_dim
+    def _validate_vector(self, vector):
+        cleaned = self._clean_vector(vector)
         if self.expected_dim is None:
-            self.expected_dim = len(vector)
-            return vector
-        if len(vector) == self.expected_dim:
-            return vector
-        if len(vector) > self.expected_dim:
-            return vector[: self.expected_dim]
-        return vector + [0.0] * (self.expected_dim - len(vector))
+            self.expected_dim = len(cleaned)
+        if len(cleaned) != self.expected_dim:
+            raise ValueError(
+                f"임베딩 차원 불일치: {len(cleaned)} / 기대값 {self.expected_dim}. "
+                "EMBEDDING_MODEL 또는 DB vector 차원을 확인하세요."
+            )
+        return cleaned
 
     def embed_documents(self, texts):
         safe_texts = [self._normalize_text(text) for text in texts]
         try:
             vectors = self.base_embeddings.embed_documents(safe_texts)
-            return [self._fit_vector_dim(self._clean_vector(vec)) for vec in vectors]
         except Exception as batch_error:
-            print(f"⚠️ 배치 임베딩 실패, 문서별 재시도 진행: {batch_error}")
-            fallback_vectors = []
-            for idx, text in enumerate(safe_texts):
-                try:
-                    vec = self.base_embeddings.embed_query(text)
-                    cleaned = self._fit_vector_dim(self._clean_vector(vec))
-                    fallback_vectors.append(cleaned)
-                except Exception as item_error:
-                    print(f"⚠️ 청크 {idx} 임베딩 실패, 0벡터로 대체: {item_error}")
-                    fallback_vectors.append([0.0] * self.expected_dim)
-            return fallback_vectors
+            raise RuntimeError(f"임베딩 실패: 업로드를 중단합니다. {batch_error}") from batch_error
+        return [self._validate_vector(vec) for vec in vectors]
 
     def embed_query(self, text):
         try:
             vector = self.base_embeddings.embed_query(self._normalize_text(text))
-            return self._fit_vector_dim(self._clean_vector(vector))
+            return self._validate_vector(vector)
         except Exception as e:
-            print(f"⚠️ 질의 임베딩 실패, 0벡터로 대체: {e}")
-            return [0.0] * self.expected_dim
+            raise RuntimeError(f"질의 임베딩 실패: {e}") from e
 
 
 # =========================
@@ -303,6 +435,19 @@ def delete_category_data(category, year):
         print(f"🗑️ '{category}/{year}' 기존 데이터 삭제 완료")
     except Exception as e:
         print(f"⚠️ 삭제 중 오류: {e}")
+
+
+def delete_existing_source_data(category, year, source):
+    """재적재 대상 파일과 같은 분야/연도/source 데이터만 삭제한다."""
+    try:
+        supabase.table(TABLE_NAME).delete() \
+            .eq("metadata->>edu_category", category) \
+            .eq("metadata->>year", year) \
+            .eq("metadata->>source", source) \
+            .execute()
+        print(f"🗑️ '{category}/{year}/{source}' 기존 데이터 삭제 완료")
+    except Exception as e:
+        raise RuntimeError(f"기존 데이터 삭제 중 오류: {e}") from e
 
 
 def build_table_metadata_summary(max_rows=5000, page_size=1000):
@@ -419,29 +564,25 @@ def run_ingestion_pipeline(
     set_progress(0)
     set_status("작업 시작")
 
+    source_name = os.path.basename(pdf_file)
     if should_delete:
-        set_status("기존 데이터 삭제 중...")
-        t0 = time.perf_counter()
-        delete_category_data(category_name, year_name)
-        log(f"⏱️ 삭제 소요: {time.perf_counter() - t0:.2f}초")
+        log("ℹ️ 기존 데이터 삭제는 문서 변환·임베딩 검증 성공 후 진행합니다.")
     set_progress(8)
 
-    set_status("Docling 문서 분석 중...")
+    set_status("문서 분석 중...")
     t0 = time.perf_counter()
-    converter = DocumentConverter()
-    result = converter.convert(pdf_file)
-    full_text = result.document.export_to_markdown()
-    log(f"✅ 분석 완료! ({len(full_text)} 자)")
+    full_text, parser_name = convert_file_to_markdown(pdf_file, log_cb=log)
+    log(f"✅ 분석 완료! parser={parser_name}, {len(full_text)} 자")
     log(f"⏱️ 문서 변환 소요: {time.perf_counter() - t0:.2f}초")
     set_progress(30)
 
-    markdown_splitter = MarkdownHeaderTextSplitter(
+    markdown_splitter = LocalMarkdownHeaderTextSplitter(
         headers_to_split_on=[("#", "Header 1"), ("##", "Header 2"), ("###", "Header 3")],
         strip_headers=False
     )
     md_docs = markdown_splitter.split_text(full_text)
 
-    text_splitter = RecursiveCharacterTextSplitter(
+    text_splitter = LocalRecursiveCharacterTextSplitter(
         chunk_size=1000,
         chunk_overlap=200,
         separators=["\n\n", "\n", "。", ". ", " ", ""]
@@ -465,12 +606,12 @@ def run_ingestion_pipeline(
             chunks = text_splitter.split_text(content)
             for chunk in chunks:
                 metadata = {
-                    "source": os.path.basename(pdf_file),
+                    "source": source_name,
                     "category": category_name,      # 원본 분류(기존 n8n 호환)
                     "edu_category": category_name,  # 웹앱 분야 필드 — 생성/챗봇 분야 필터가 사용
                     "year": year_name,
                     "upload_date": upload_date,
-                    "parser": "docling",
+                    "parser": parser_name,
                 }
                 metadata.update(md_doc.metadata)
                 metadata = sanitize_for_json(metadata)
@@ -492,7 +633,8 @@ def run_ingestion_pipeline(
             "total_seconds": total_elapsed,
         }
 
-    set_status(f"임베딩/업로드 중... (0/{math.ceil(len(final_docs) / UPLOAD_BATCH_SIZE)} 배치)")
+    total_batches = math.ceil(len(final_docs) / UPLOAD_BATCH_SIZE)
+    set_status(f"임베딩 중... (0/{total_batches} 배치)")
     t0 = time.perf_counter()
     vector_store = SupabaseVectorStore(
         client=supabase,
@@ -502,15 +644,32 @@ def run_ingestion_pipeline(
         chunk_size=SUPABASE_UPSERT_CHUNK_SIZE,
     )
 
-    total_batches = math.ceil(len(final_docs) / UPLOAD_BATCH_SIZE)
+    embedded_batches = []
     for batch_idx, start in enumerate(
-        tqdm(range(0, len(final_docs), UPLOAD_BATCH_SIZE), desc="📦 업로드"), start=1
+        tqdm(range(0, len(final_docs), UPLOAD_BATCH_SIZE), desc="🧠 임베딩"), start=1
     ):
         batch = final_docs[start : start + UPLOAD_BATCH_SIZE]
-        vector_store.add_documents(batch)
+        vectors = embeddings.embed_documents([doc.page_content for doc in batch])
+        ids = [str(uuid.uuid4()) for _ in batch]
+        embedded_batches.append((batch, vectors, ids))
         ratio = batch_idx / total_batches if total_batches else 1.0
-        set_progress(60 + ratio * 40)
-        set_status(f"임베딩/업로드 중... ({batch_idx}/{total_batches} 배치)")
+        set_progress(60 + ratio * 25)
+        set_status(f"임베딩 중... ({batch_idx}/{total_batches} 배치)")
+
+    if should_delete:
+        set_status("기존 데이터 삭제 중...")
+        delete_t0 = time.perf_counter()
+        delete_existing_source_data(category_name, year_name, source_name)
+        log(f"⏱️ 삭제 소요: {time.perf_counter() - delete_t0:.2f}초")
+
+    set_status(f"업로드 중... (0/{total_batches} 배치)")
+    for batch_idx, (batch, vectors, ids) in enumerate(
+        tqdm(embedded_batches, desc="📦 업로드"), start=1
+    ):
+        vector_store.add_vectors(vectors, batch, ids)
+        ratio = batch_idx / total_batches if total_batches else 1.0
+        set_progress(85 + ratio * 15)
+        set_status(f"업로드 중... ({batch_idx}/{total_batches} 배치)")
 
     upload_elapsed = time.perf_counter() - t0
     total_elapsed = time.perf_counter() - pipeline_start
@@ -562,7 +721,7 @@ class RAGIngestionGUI:
         header.pack(fill="x")
         tk.Label(header, text="🚒  소방 구조 RAG 적재기", bg=self.NAVY, fg="white",
                  font=(self.FONT, 16, "bold")).pack(anchor="w", padx=20, pady=(16, 0))
-        tk.Label(header, text="문서를 분석·임베딩해 벡터DB(rag_2026)에 적재합니다",
+        tk.Label(header, text=f"문서를 분석·임베딩해 벡터DB({TABLE_NAME})에 적재합니다",
                  bg=self.NAVY, fg=self.NAVY_SUB, font=(self.FONT, 9)).pack(anchor="w", padx=20, pady=(2, 16))
 
         # ── 본문 컨테이너 ──
