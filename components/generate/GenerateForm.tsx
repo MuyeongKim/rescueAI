@@ -44,6 +44,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { Skeleton } from "@/components/ui/skeleton";
 
 // 선택형 옵션 버튼 그룹 (터치 48px+)
 function OptionGroup<T extends string>({
@@ -60,23 +61,44 @@ function OptionGroup<T extends string>({
   render?: (v: T) => React.ReactNode;
 }) {
   return (
-    <div className="space-y-2">
-      <Label className="text-sm font-medium">{label}</Label>
+    <div className="space-y-2.5">
+      <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {label}
+      </Label>
       <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={label}>
-        {options.map((opt) => (
-          <Button
-            key={opt}
-            type="button"
-            role="radio"
-            aria-checked={value === opt}
-            variant={value === opt ? "default" : "outline"}
-            className="h-12 px-4 text-base"
-            onClick={() => onChange(opt)}
-          >
-            {render ? render(opt) : opt}
-          </Button>
-        ))}
+        {options.map((opt) => {
+          const active = value === opt;
+          return (
+            <button
+              key={opt}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              onClick={() => onChange(opt)}
+              className={cn(
+                "inline-flex h-12 items-center rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none",
+                "hover:-translate-y-0.5 active:translate-y-0 motion-reduce:hover:translate-y-0",
+                active
+                  ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                  : "border-border bg-background hover:border-primary/40 hover:bg-accent/40"
+              )}
+            >
+              {render ? render(opt) : opt}
+            </button>
+          );
+        })}
       </div>
+    </div>
+  );
+}
+
+// 단계 헤더 — 폼은 "유형 → 설정 → 세부 → 생성" 순서가 있는 흐름이라 번호를 단다.
+function StepHeader({ n, title, hint }: { n: string; title: string; hint?: string }) {
+  return (
+    <div className="flex items-baseline gap-2.5">
+      <span className="font-mono text-xs font-semibold tabular-nums text-primary">{n}</span>
+      <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+      {hint && <span className="text-xs font-normal text-muted-foreground">{hint}</span>}
     </div>
   );
 }
@@ -375,15 +397,23 @@ export function GenerateForm({
   }
 
   const typeMeta = GEN_TYPES.find((t) => t.key === type)!;
+  // 선택한 분야 색을 페이지 액센트로 흘린다(상단 바·분야 칩·생성 버튼). hex 인라인으로 동적 적용.
+  const accent = categoryStyle(category).hex;
 
   return (
     <div className="space-y-5">
-      {/* 1. 무엇을 만들까요 */}
-      <Card>
-        <CardContent className="space-y-5 p-4 sm:p-5">
-          <div className="space-y-2">
-            <Label className="text-sm font-medium">생성할 자료</Label>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2" role="radiogroup">
+      {/* 입력 폼 — 분야 색이 흐르는 단계형 카드 */}
+      <Card className="overflow-hidden border-border/60 shadow-sm">
+        {/* 분야 색 액센트 바 */}
+        <div
+          className="h-1 w-full transition-colors duration-500 motion-reduce:transition-none"
+          style={{ backgroundColor: accent }}
+        />
+        <CardContent className="space-y-6 p-4 sm:p-6">
+          {/* STEP 01 — 무엇을 만들까요 */}
+          <section className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none">
+            <StepHeader n="01" title="무엇을 만들까요" />
+            <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2" role="radiogroup" aria-label="생성할 자료">
               {GEN_TYPES.map((t) => {
                 const Icon =
                   t.key === "notebooklm"
@@ -393,121 +423,227 @@ export function GenerateForm({
                       : t.key === "lesson"
                         ? MessageSquareText
                         : FileText;
+                const active = type === t.key;
                 return (
                   <button
                     key={t.key}
                     type="button"
                     role="radio"
-                    aria-checked={type === t.key}
+                    aria-checked={active}
                     onClick={() => setType(t.key)}
                     className={cn(
-                      "rounded-lg border p-3 text-left transition-colors min-h-[48px]",
-                      type === t.key
-                        ? "border-primary bg-primary/5"
-                        : "hover:border-primary/40 hover:bg-accent/40"
+                      "group flex min-h-[56px] items-start gap-3 rounded-xl border p-3.5 text-left transition-all duration-200 motion-reduce:transition-none",
+                      "hover:-translate-y-0.5 hover:shadow-sm motion-reduce:hover:translate-y-0",
+                      active
+                        ? "border-primary bg-primary/5 ring-1 ring-primary"
+                        : "border-border hover:border-primary/40"
                     )}
                   >
-                    <span className="flex items-center gap-1.5 font-medium">
-                      <Icon className="h-4 w-4 text-primary" />
-                      {t.label}
+                    <span
+                      className={cn(
+                        "flex h-9 w-9 shrink-0 items-center justify-center rounded-lg transition-colors duration-200",
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-muted text-muted-foreground group-hover:text-primary"
+                      )}
+                    >
+                      <Icon className="h-5 w-5" />
                     </span>
-                    <span className="mt-1 block text-xs text-muted-foreground">
-                      {t.description}
+                    <span className="min-w-0">
+                      <span className="block font-medium">{t.label}</span>
+                      <span className="mt-0.5 block text-xs leading-snug text-muted-foreground">
+                        {t.description}
+                      </span>
                     </span>
                   </button>
                 );
               })}
             </div>
-          </div>
+          </section>
 
-          <OptionGroup
-            label="분야"
-            options={categories}
-            value={category}
-            onChange={setCategory}
-            render={(c) => (
-              <span className="flex items-center gap-1.5">
-                <span className={cn("h-2 w-2 rounded-full", categoryStyle(c).dot)} />
-                {c}
-              </span>
-            )}
-          />
-          <OptionGroup label="대상" options={AUDIENCES} value={audience} onChange={setAudience} />
-          <OptionGroup label="교육 시간" options={DURATIONS} value={duration} onChange={setDuration} />
+          <div className="h-px bg-border/60" />
 
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            <div className="space-y-2">
-              <Label htmlFor="topic" className="text-sm font-medium">
-                훈련 내용(주제){" "}
-                <span className="font-normal text-muted-foreground">(선택)</span>
+          {/* STEP 02 — 분야·대상·시간 */}
+          <section
+            className="animate-in fade-in slide-in-from-bottom-2 space-y-5 duration-500 motion-reduce:animate-none"
+            style={{ animationDelay: "70ms", animationFillMode: "backwards" }}
+          >
+            <StepHeader n="02" title="분야 · 대상 · 시간" />
+            {/* 분야 — 선택 시 분야 색으로 강조 */}
+            <div className="space-y-2.5">
+              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                분야
               </Label>
-              <Input
-                id="topic"
-                placeholder="예: 공기호흡기 점검 절차"
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                maxLength={100}
-                className="h-12 text-base"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="date" className="text-sm font-medium">
-                훈련 일자{" "}
-                <span className="font-normal text-muted-foreground">(선택)</span>
-              </Label>
-              <Input
-                id="date"
-                type="date"
-                value={date}
-                onChange={(e) => setDate(e.target.value)}
-                className="h-12 text-base"
-              />
-            </div>
-          </div>
-
-          {/* AI 모델 선택 — 2개 이상 사용 가능할 때만. NotebookLM은 AI를 안 쓰므로 숨김 */}
-          {type !== "notebooklm" && models.length > 1 && (
-            <div className="space-y-2">
-              <Label className="text-sm font-medium">AI 모델</Label>
-              <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="AI 모델">
-                {models.map((m) => (
-                  <Button
-                    key={m.key}
-                    type="button"
-                    role="radio"
-                    aria-checked={model === m.key}
-                    variant={model === m.key ? "default" : "outline"}
-                    className="h-12 flex-col items-start gap-0 px-4 py-1.5"
-                    onClick={() => setModel(m.key)}
-                  >
-                    <span className="text-sm font-medium">{m.label}</span>
-                    {m.note && (
-                      <span className="text-[11px] font-normal opacity-70">{m.note}</span>
-                    )}
-                  </Button>
-                ))}
+              <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="분야">
+                {categories.map((c) => {
+                  const st = categoryStyle(c);
+                  const active = category === c;
+                  return (
+                    <button
+                      key={c}
+                      type="button"
+                      role="radio"
+                      aria-checked={active}
+                      onClick={() => setCategory(c)}
+                      style={
+                        active
+                          ? { borderColor: st.hex, color: st.hex, backgroundColor: `${st.hex}14` }
+                          : undefined
+                      }
+                      className={cn(
+                        "inline-flex h-12 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none",
+                        "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
+                        active ? "shadow-sm" : "border-border hover:bg-accent/40"
+                      )}
+                    >
+                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: st.hex }} />
+                      {c}
+                    </button>
+                  );
+                })}
               </div>
             </div>
-          )}
+            <OptionGroup label="대상" options={AUDIENCES} value={audience} onChange={setAudience} />
+            <OptionGroup label="교육 시간" options={DURATIONS} value={duration} onChange={setDuration} />
+          </section>
 
-          <Button
-            className="h-12 w-full gap-2 text-base"
-            onClick={handleGenerate}
-            disabled={loading || !category}
+          <div className="h-px bg-border/60" />
+
+          {/* STEP 03 — 세부 설정(선택) */}
+          <section
+            className="animate-in fade-in slide-in-from-bottom-2 space-y-4 duration-500 motion-reduce:animate-none"
+            style={{ animationDelay: "140ms", animationFillMode: "backwards" }}
           >
-            {loading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
-            ) : (
-              <Wand2 className="h-4 w-4" />
+            <StepHeader n="03" title="세부 설정" hint="선택" />
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="topic" className="text-sm font-medium">
+                  훈련 내용(주제)
+                </Label>
+                <Input
+                  id="topic"
+                  placeholder="예: 공기호흡기 점검 절차"
+                  value={topic}
+                  onChange={(e) => setTopic(e.target.value)}
+                  maxLength={100}
+                  className="h-12 text-base"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="date" className="text-sm font-medium">
+                  훈련 일자
+                </Label>
+                <Input
+                  id="date"
+                  type="date"
+                  value={date}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="h-12 text-base"
+                />
+              </div>
+            </div>
+
+            {/* AI 모델 선택 — 2개 이상 사용 가능할 때만. NotebookLM은 AI를 안 쓰므로 숨김 */}
+            {type !== "notebooklm" && models.length > 1 && (
+              <div className="space-y-2.5">
+                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  AI 모델
+                </Label>
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="AI 모델">
+                  {models.map((m) => {
+                    const active = model === m.key;
+                    return (
+                      <button
+                        key={m.key}
+                        type="button"
+                        role="radio"
+                        aria-checked={active}
+                        onClick={() => setModel(m.key)}
+                        className={cn(
+                          "flex h-12 flex-col items-start justify-center rounded-xl border px-4 transition-all duration-200 motion-reduce:transition-none",
+                          "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
+                          active
+                            ? "border-primary bg-primary text-primary-foreground shadow-sm"
+                            : "border-border hover:border-primary/40 hover:bg-accent/40"
+                        )}
+                      >
+                        <span className="text-sm font-medium leading-tight">{m.label}</span>
+                        {m.note && (
+                          <span className="text-[11px] font-normal opacity-70">{m.note}</span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
-            {loading ? "생성 중… (수십 초 걸릴 수 있어요)" : `${typeMeta.label} 생성`}
-          </Button>
+          </section>
+
+          {/* 생성 바 — 요약 칩 + 분야 색 CTA */}
+          <div className="space-y-3 pt-1">
+            <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="font-medium">만들 자료</span>
+              <Badge variant="secondary" className="font-normal">
+                {typeMeta.label}
+              </Badge>
+              {category && (
+                <Badge variant="secondary" className="gap-1 font-normal">
+                  <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
+                  {category}
+                </Badge>
+              )}
+              <Badge variant="secondary" className="font-normal">
+                {audience}
+              </Badge>
+              <Badge variant="secondary" className="font-normal">
+                {duration}
+              </Badge>
+            </div>
+            <Button
+              className="h-12 w-full gap-2 text-base font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md hover:brightness-105 active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100"
+              style={category ? { backgroundColor: accent } : undefined}
+              onClick={handleGenerate}
+              disabled={loading || !category}
+            >
+              {loading ? (
+                <Loader2 className="h-5 w-5 animate-spin" />
+              ) : (
+                <Wand2 className="h-5 w-5" />
+              )}
+              {loading ? "생성 중… (수십 초 걸릴 수 있어요)" : `${typeMeta.label} 만들기`}
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
+      {/* 생성 중 스켈레톤 — 수십 초 대기를 채우는 미리보기 골격 */}
+      {loading && (
+        <Card className="animate-in fade-in overflow-hidden border-border/60 shadow-sm duration-300">
+          <div className="h-1 w-full" style={{ backgroundColor: accent }} />
+          <CardHeader className="pb-3">
+            <Skeleton className="h-5 w-2/3" />
+            <Skeleton className="mt-1 h-4 w-40" />
+          </CardHeader>
+          <CardContent className="space-y-5">
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="space-y-2">
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-11/12" />
+                <Skeleton className="h-3 w-4/5" />
+              </div>
+            ))}
+            <p className="text-center text-xs text-muted-foreground">
+              {typeMeta.label}을(를) 만들고 있어요… 자료를 근거로 구성 중입니다.
+            </p>
+          </CardContent>
+        </Card>
+      )}
+
       {/* 2-a. NotebookLM 프롬프트 결과 */}
       {nlmPrompt && (
-        <Card>
+        <Card className="animate-in fade-in slide-in-from-bottom-3 overflow-hidden border-border/60 shadow-sm duration-500 motion-reduce:animate-none">
+          <div className="h-1 w-full" style={{ backgroundColor: accent }} />
           <CardHeader className="pb-3">
             <CardTitle className="flex items-center gap-2 text-base">
               <Sparkles className="h-4 w-4 text-primary" /> NotebookLM 프롬프트
@@ -534,7 +670,13 @@ export function GenerateForm({
 
       {/* 2-b. 슬라이드 결과 — 표준 양식(분야 색) PPTX로 변환 */}
       {deck && (
-        <Card>
+        <Card
+          className={cn(
+            "animate-in fade-in slide-in-from-bottom-3 overflow-hidden border-border/60 shadow-sm duration-500 motion-reduce:animate-none",
+            editing && "ring-1 ring-primary/40"
+          )}
+        >
+          <div className="h-1 w-full" style={{ backgroundColor: accent }} />
           <CardHeader className="pb-3">
             <div className="flex items-start justify-between gap-2">
               {editing ? (
@@ -548,7 +690,7 @@ export function GenerateForm({
                 />
               ) : (
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <Presentation className="h-4 w-4 text-primary" /> {deck.title}
+                  <Presentation className="h-4 w-4" style={{ color: accent }} /> {deck.title}
                 </CardTitle>
               )}
               <Button
@@ -640,7 +782,13 @@ export function GenerateForm({
 
       {/* 2-c. 생성 문서 결과 */}
       {doc && (
-        <Card>
+        <Card
+          className={cn(
+            "animate-in fade-in slide-in-from-bottom-3 overflow-hidden border-border/60 shadow-sm duration-500 motion-reduce:animate-none",
+            editing && "ring-1 ring-primary/40"
+          )}
+        >
+          <div className="h-1 w-full" style={{ backgroundColor: accent }} />
           <CardHeader className="pb-3">
             <div className="flex items-start justify-between gap-2">
               {editing ? (
@@ -653,7 +801,9 @@ export function GenerateForm({
                   aria-label="문서 제목"
                 />
               ) : (
-                <CardTitle className="text-base">{doc.title}</CardTitle>
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <FileText className="h-4 w-4" style={{ color: accent }} /> {doc.title}
+                </CardTitle>
               )}
               <Button
                 variant={editing ? "default" : "outline"}
