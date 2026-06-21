@@ -160,6 +160,20 @@ ${TYPE_GUIDE[req.type]}
 - 한국어로, 현장에서 바로 쓸 수 있게 구체적으로 작성하세요.`;
 }
 
+// ── 저장된 생성물 (이력) ──
+// content 는 kind 에 따라 { sections, sources } | { slides, sources } | { prompt } 형태.
+export type SavedMaterial = {
+  id: number;
+  kind: GenType;
+  category: string | null;
+  audience: string | null;
+  duration: string | null;
+  topic: string | null;
+  title: string;
+  content: unknown;
+  created_at: string;
+};
+
 // ── 부분 재생성 (섹션/슬라이드 1개) ──
 export const regeneratedSectionSchema = z.object({
   heading: z.string().describe("섹션 제목 (번호 포함, 예: '3. 단계별 진행')"),

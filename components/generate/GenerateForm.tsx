@@ -12,6 +12,7 @@ import {
   Pencil,
   Presentation,
   RefreshCw,
+  Save,
   Sparkles,
   Wand2,
 } from "lucide-react";
@@ -139,12 +140,16 @@ export function GenerateForm({
   const [regenIdx, setRegenIdx] = useState<number | null>(null); // 재생성 패널이 열린 항목
   const [regenLoading, setRegenLoading] = useState<number | null>(null);
   const [regenText, setRegenText] = useState(""); // 직접 입력 지시
+  const [resultKind, setResultKind] = useState<GenType | null>(null); // 현재 결과의 유형(저장용)
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
 
   const genReq = { type, category, audience, duration, topic, date, model };
   const subtitle = `대상: ${audience} · 교육 시간: ${duration}${date ? ` · ${date}` : ""}`;
 
   // 결과 부분 편집 — 편집 내용은 그대로 다운로드/복사에 반영된다(빌더가 state를 받음).
   function patchSection(i: number, patch: Partial<GeneratedSection>) {
+    setSaved(false);
     setDoc((prev) =>
       prev
         ? { ...prev, sections: prev.sections.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
@@ -152,6 +157,7 @@ export function GenerateForm({
     );
   }
   function patchSlide(i: number, patch: Partial<GeneratedSlide>) {
+    setSaved(false);
     setDeck((prev) =>
       prev
         ? { ...prev, slides: prev.slides.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
@@ -159,6 +165,7 @@ export function GenerateForm({
     );
   }
   function patchBullet(slideI: number, bulletI: number, value: string) {
+    setSaved(false);
     setDeck((prev) =>
       prev
         ? {
@@ -309,6 +316,8 @@ export function GenerateForm({
     setCopied(false);
     setEditing(false);
     setRegenIdx(null);
+    setSaved(false);
+    setResultKind(null);
     setDoc(null);
     setDeck(null);
     setNlmPrompt(null);
@@ -316,6 +325,7 @@ export function GenerateForm({
     // NotebookLM 프롬프트는 AI 호출 없이 즉시 조립 — 인덱싱된 자료 목록 포함
     if (type === "notebooklm") {
       setNlmPrompt(buildNotebookLmPrompt(genReq, docsByCategory[category] ?? []));
+      setResultKind("notebooklm");
       return;
     }
 
@@ -336,10 +346,48 @@ export function GenerateForm({
       const json = await res.json();
       if (type === "slides") setDeck(json as GeneratedSlideDeck);
       else setDoc(json as GeneratedDoc);
+      setResultKind(type);
     } catch {
       toast.error("생성 중 오류가 발생했습니다.");
     } finally {
       setLoading(false);
+    }
+  }
+
+  // 생성물 저장 — 현재 결과(편집 반영분)를 개인 이력에 저장.
+  async function handleSave() {
+    if (!resultKind) return;
+    const payload =
+      resultKind === "slides" && deck
+        ? { title: deck.title, content: { slides: deck.slides, sources: deck.sources } }
+        : nlmPrompt && resultKind === "notebooklm"
+          ? {
+              title: `${category} ${typeMeta.label}${topic ? ` — ${topic}` : ""}`.slice(0, 200),
+              content: { prompt: nlmPrompt },
+            }
+          : doc
+            ? { title: doc.title, content: { sections: doc.sections, sources: doc.sources } }
+            : null;
+    if (!payload) return;
+
+    setSaving(true);
+    try {
+      const res = await fetch("/api/generate/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ kind: resultKind, category, audience, duration, topic, ...payload }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error("저장 실패", { description: err?.error ?? "잠시 후 다시 시도해 주세요." });
+        return;
+      }
+      setSaved(true);
+      toast.success("저장했습니다", { description: "‘저장한 자료’에서 다시 볼 수 있어요." });
+    } catch {
+      toast.error("저장 중 오류가 발생했습니다.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -656,14 +704,31 @@ export function GenerateForm({
             <pre className="whitespace-pre-wrap rounded-lg bg-muted p-4 text-sm leading-relaxed">
               {nlmPrompt}
             </pre>
-            <Button
-              variant="outline"
-              className="h-12 w-full gap-2 text-base"
-              onClick={() => handleCopy(nlmPrompt)}
-            >
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              프롬프트 복사
-            </Button>
+            <div className="flex flex-col gap-2 sm:flex-row">
+              <Button
+                variant="outline"
+                className="h-12 flex-1 gap-2 text-base"
+                onClick={() => handleCopy(nlmPrompt)}
+              >
+                {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                프롬프트 복사
+              </Button>
+              <Button
+                variant="outline"
+                className="h-12 flex-1 gap-2 text-base"
+                disabled={saving || saved}
+                onClick={handleSave}
+              >
+                {saved ? (
+                  <Check className="h-4 w-4" />
+                ) : saving ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Save className="h-4 w-4" />
+                )}
+                {saved ? "저장됨" : "저장"}
+              </Button>
+            </div>
           </CardContent>
         </Card>
       )}
@@ -693,15 +758,34 @@ export function GenerateForm({
                   <Presentation className="h-4 w-4" style={{ color: accent }} /> {deck.title}
                 </CardTitle>
               )}
-              <Button
-                variant={editing ? "default" : "outline"}
-                size="sm"
-                className="shrink-0 gap-1.5"
-                onClick={() => setEditing((v) => !v)}
-              >
-                {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
-                {editing ? "완료" : "편집"}
-              </Button>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={saving || saved}
+                  onClick={handleSave}
+                >
+                  {saved ? (
+                    <Check className="h-4 w-4" />
+                  ) : saving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  {saved ? "저장됨" : "저장"}
+                </Button>
+                <Button
+                  variant={editing ? "default" : "outline"}
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setEditing((v) => !v)}
+                >
+                  {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+                  {editing ? "완료" : "편집"}
+                </Button>
+              </div>
             </div>
             <CardDescription className="flex flex-wrap items-center gap-1.5">
               슬라이드 {deck.slides.length}장 · 근거:
@@ -805,15 +889,34 @@ export function GenerateForm({
                   <FileText className="h-4 w-4" style={{ color: accent }} /> {doc.title}
                 </CardTitle>
               )}
-              <Button
-                variant={editing ? "default" : "outline"}
-                size="sm"
-                className="shrink-0 gap-1.5"
-                onClick={() => setEditing((v) => !v)}
-              >
-                {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
-                {editing ? "완료" : "편집"}
-              </Button>
+              <div className="flex shrink-0 items-center gap-1.5">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="gap-1.5"
+                  disabled={saving || saved}
+                  onClick={handleSave}
+                >
+                  {saved ? (
+                    <Check className="h-4 w-4" />
+                  ) : saving ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Save className="h-4 w-4" />
+                  )}
+                  {saved ? "저장됨" : "저장"}
+                </Button>
+                <Button
+                  variant={editing ? "default" : "outline"}
+                  size="sm"
+                  className="gap-1.5"
+                  onClick={() => setEditing((v) => !v)}
+                >
+                  {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+                  {editing ? "완료" : "편집"}
+                </Button>
+              </div>
             </div>
             <CardDescription className="flex flex-wrap items-center gap-1.5">
               근거:

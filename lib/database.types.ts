@@ -217,6 +217,31 @@ type WorkoutLogsInsert = {
   created_at?: string;
 };
 
+type GeneratedMaterialsRow = {
+  id: number;
+  user_id: string | null;
+  kind: string;
+  category: string | null;
+  audience: string | null;
+  duration: string | null;
+  topic: string | null;
+  title: string;
+  content: unknown; // {sections|slides|prompt, sources}
+  created_at: string;
+};
+type GeneratedMaterialsInsert = {
+  id?: number;
+  user_id?: string | null;
+  kind: string;
+  category?: string | null;
+  audience?: string | null;
+  duration?: string | null;
+  topic?: string | null;
+  title: string;
+  content: unknown;
+  created_at?: string;
+};
+
 export interface Database {
   public: {
     Tables: {
@@ -272,6 +297,12 @@ export interface Database {
         Row: WorkoutLogsRow;
         Insert: WorkoutLogsInsert;
         Update: Partial<WorkoutLogsInsert>;
+        Relationships: [];
+      };
+      generated_materials: {
+        Row: GeneratedMaterialsRow;
+        Insert: GeneratedMaterialsInsert;
+        Update: Partial<GeneratedMaterialsInsert>;
         Relationships: [];
       };
     };

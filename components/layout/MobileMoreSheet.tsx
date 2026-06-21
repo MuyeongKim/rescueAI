@@ -6,6 +6,7 @@ import {
   CircleUser,
   FileText,
   FolderCog,
+  FolderOpen,
   Megaphone,
   Menu,
   Newspaper,
@@ -26,6 +27,7 @@ import {
 // 모바일 하단 탭바의 "더보기" — 탭(6개 제한)에 못 들어간 메뉴 전부의 진입점.
 // 새 페이지를 만들면 여기(또는 탭)에 반드시 추가해 모바일 동선을 보장한다.
 const MORE_ITEMS = [
+  { key: "saved", href: "/generate/saved", label: "저장한 자료", icon: FolderOpen },
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
   { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
   { key: "docs", href: "/docs", label: "자료실", icon: FileText },
