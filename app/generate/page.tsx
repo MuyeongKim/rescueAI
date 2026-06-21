@@ -71,7 +71,7 @@ export default async function GeneratePage({
   const recentSaved = initialMaterial ? [] : await listMyMaterials(5);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4 px-3 py-5 sm:px-4">
+    <div className="mx-auto max-w-3xl space-y-3 px-3 py-4 sm:px-4">
       <div>
         <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
           <Wand2 className="h-6 w-6 text-primary" /> AI 자료제작

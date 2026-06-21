@@ -514,7 +514,7 @@ export function GenerateForm({
           className="h-1 w-full transition-colors duration-500 motion-reduce:transition-none"
           style={{ backgroundColor: accent }}
         />
-        <CardContent className="space-y-4 p-4 sm:p-5">
+        <CardContent className="space-y-3 p-4 sm:p-5">
           {/* STEP 01 — 무엇을 만들까요 */}
           <section className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none">
             <StepHeader n="01" title="무엇을 만들까요" />
@@ -597,7 +597,7 @@ export function GenerateForm({
 
           {/* STEP 02 — 분야·대상·시간 */}
           <section
-            className="animate-in fade-in slide-in-from-bottom-2 space-y-4 duration-500 motion-reduce:animate-none"
+            className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none"
             style={{ animationDelay: "70ms", animationFillMode: "backwards" }}
           >
             <StepHeader n="02" title="분야 · 대상 · 시간" />
@@ -643,12 +643,12 @@ export function GenerateForm({
 
           {/* STEP 03 — 세부 설정(선택) */}
           <section
-            className="animate-in fade-in slide-in-from-bottom-2 space-y-4 duration-500 motion-reduce:animate-none"
+            className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none"
             style={{ animationDelay: "140ms", animationFillMode: "backwards" }}
           >
             <StepHeader n="03" title="세부 설정" hint="선택" />
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div className="space-y-2">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
                 <Label htmlFor="topic" className="text-sm font-medium">
                   훈련 내용(주제)
                 </Label>
@@ -658,10 +658,10 @@ export function GenerateForm({
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   maxLength={100}
-                  className="h-12 text-base"
+                  className="h-10 text-base"
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-1.5">
                 <Label htmlFor="date" className="text-sm font-medium">
                   훈련 일자
                 </Label>
@@ -670,7 +670,7 @@ export function GenerateForm({
                   type="date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
-                  className="h-12 text-base"
+                  className="h-10 text-base"
                 />
               </div>
             </div>
@@ -692,7 +692,7 @@ export function GenerateForm({
                         aria-checked={active}
                         onClick={() => setModel(m.key)}
                         className={cn(
-                          "flex h-12 flex-col items-start justify-center rounded-xl border px-4 transition-all duration-200 motion-reduce:transition-none",
+                          "flex h-11 flex-col items-start justify-center rounded-xl border px-4 transition-all duration-200 motion-reduce:transition-none",
                           "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
                           active
                             ? "border-primary bg-primary text-primary-foreground shadow-sm"
@@ -712,7 +712,7 @@ export function GenerateForm({
           </section>
 
           {/* 생성 바 — 요약 칩 + 분야 색 CTA */}
-          <div className="space-y-3 pt-1">
+          <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
               <span className="font-medium">만들 자료</span>
               <Badge variant="secondary" className="font-normal">
