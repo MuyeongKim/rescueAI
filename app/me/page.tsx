@@ -4,6 +4,7 @@ import {
   ChevronRight,
   CircleUser,
   Dumbbell,
+  FolderOpen,
   NotebookPen,
   Siren,
   Target,
@@ -11,6 +12,7 @@ import {
 
 import { getUserAndProfile } from "@/lib/auth";
 import { getFitnessState } from "@/lib/fitness-server";
+import { countMyMaterials } from "@/lib/generated-materials";
 import {
   Card,
   CardContent,
@@ -31,6 +33,7 @@ export default async function MePage() {
   const { user, profile } = await getUserAndProfile();
   const userId = user?.id ?? "";
   const fitness = await getFitnessState(userId);
+  const savedCount = await countMyMaterials();
 
   const name = profile?.full_name || user?.email?.split("@")[0] || "구조대원";
 
@@ -59,6 +62,25 @@ export default async function MePage() {
               <p className="text-sm text-muted-foreground">{profile.division}</p>
             )}
           </div>
+        </CardContent>
+      </Card>
+
+      {/* AI 자료제작 — 저장한 자료 바로가기 */}
+      <Card>
+        <CardContent className="p-2">
+          <Link
+            href="/generate/saved"
+            className="flex h-12 items-center gap-2 rounded-md px-3 text-sm font-medium transition-colors hover:bg-accent/60"
+          >
+            <FolderOpen className="h-4 w-4 text-primary" />
+            저장한 자료
+            {savedCount > 0 && (
+              <Badge variant="secondary" className="font-normal">
+                {savedCount}
+              </Badge>
+            )}
+            <ChevronRight className="ml-auto h-4 w-4 text-muted-foreground" />
+          </Link>
         </CardContent>
       </Card>
 

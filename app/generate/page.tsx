@@ -1,4 +1,5 @@
-import { Wand2 } from "lucide-react";
+import Link from "next/link";
+import { ChevronRight, FolderOpen, Wand2 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/server";
 import { DEMO, demoDocuments } from "@/lib/demo";
@@ -6,7 +7,9 @@ import { ragTableEnabled, listRag2026Categories } from "@/lib/rag2026";
 import { COURSE_CATEGORIES } from "@/lib/courses";
 import { availableModels } from "@/lib/llm";
 import type { SavedMaterial } from "@/lib/generate";
+import { listMyMaterials } from "@/lib/generated-materials";
 import { GenerateForm } from "@/components/generate/GenerateForm";
+import { SavedList } from "@/components/generate/SavedList";
 
 export const dynamic = "force-dynamic";
 
@@ -64,6 +67,8 @@ export default async function GeneratePage({
   const categories = Object.keys(docsByCategory);
   const models = availableModels();
   const initialMaterial = await loadMaterial(searchParams?.m);
+  // 재편집 중이 아닐 때만 최근 저장 자료 섹션을 보여준다.
+  const recentSaved = initialMaterial ? [] : await listMyMaterials(5);
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 px-3 py-5 sm:px-4">
@@ -86,6 +91,23 @@ export default async function GeneratePage({
           models={models}
           initialMaterial={initialMaterial}
         />
+      )}
+
+      {recentSaved.length > 0 && (
+        <section className="space-y-3 pt-2">
+          <div className="flex items-center justify-between">
+            <h2 className="flex items-center gap-2 text-base font-semibold">
+              <FolderOpen className="h-4 w-4 text-primary" /> 저장한 자료
+            </h2>
+            <Link
+              href="/generate/saved"
+              className="flex items-center gap-0.5 text-sm font-medium text-primary hover:underline"
+            >
+              전체 보기 <ChevronRight className="h-4 w-4" />
+            </Link>
+          </div>
+          <SavedList initial={recentSaved} />
+        </section>
       )}
     </div>
   );

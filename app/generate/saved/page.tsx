@@ -1,25 +1,13 @@
 import Link from "next/link";
 import { FolderOpen } from "lucide-react";
 
-import { createClient } from "@/lib/supabase/server";
-import { DEMO } from "@/lib/demo";
-import type { SavedMaterial } from "@/lib/generate";
+import { listMyMaterials } from "@/lib/generated-materials";
 import { SavedList } from "@/components/generate/SavedList";
 
 export const dynamic = "force-dynamic";
 
 export default async function SavedMaterialsPage() {
-  let items: SavedMaterial[] = [];
-  if (!DEMO) {
-    const supabase = await createClient();
-    // RLS 로 본인 행만 반환된다.
-    const { data } = await supabase
-      .from("generated_materials")
-      .select("id, kind, category, audience, duration, topic, title, content, created_at")
-      .order("created_at", { ascending: false })
-      .limit(100);
-    items = (data ?? []) as unknown as SavedMaterial[];
-  }
+  const items = await listMyMaterials(100);
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 px-3 py-5 sm:px-4">
