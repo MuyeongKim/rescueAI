@@ -792,7 +792,7 @@ class RAGIngestionGUI:
 
     def __init__(self):
         self.root = tk.Tk()
-        self.root.title("소방 구조 RAG 적재기")
+        self.root.title("전북소방 구조 교육훈련 RAG 입력기")
         self.root.geometry("600x830")
         self.root.minsize(560, 720)
         self.root.configure(bg=self.BG)
@@ -808,7 +808,7 @@ class RAGIngestionGUI:
         # ── 헤더 ──
         header = tk.Frame(self.root, bg=self.NAVY)
         header.pack(fill="x")
-        tk.Label(header, text="🚒  소방 구조 RAG 적재기", bg=self.NAVY, fg="white",
+        tk.Label(header, text="🚒  전북소방 구조 교육훈련 RAG 입력기", bg=self.NAVY, fg="white",
                  font=(self.FONT, 16, "bold")).pack(anchor="w", padx=20, pady=(16, 0))
         tk.Label(header, text=f"문서를 분석·임베딩해 벡터DB({TABLE_NAME})에 적재합니다",
                  bg=self.NAVY, fg=self.NAVY_SUB, font=(self.FONT, 9)).pack(anchor="w", padx=20, pady=(2, 16))
