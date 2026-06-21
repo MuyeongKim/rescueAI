@@ -5,6 +5,7 @@ import type { GenType } from "@/lib/generate";
 const KINDS: GenType[] = ["plan", "lesson", "slides", "notebooklm"];
 
 type SaveBody = {
+  id?: number; // 있으면 재편집 저장(해당 행 업데이트)
   kind?: GenType;
   category?: string | null;
   audience?: string | null;
@@ -14,7 +15,8 @@ type SaveBody = {
   content?: unknown;
 };
 
-// 생성물 저장 — 본인 세션으로 insert(RLS with check 가 user_id 위조 차단). 서비스 롤 미사용.
+// 생성물 저장 — 본인 세션으로 insert(신규) 또는 update(재편집). RLS 가 본인 행만 허용/검증.
+// 서비스 롤 미사용.
 export async function POST(req: Request) {
   let body: SaveBody = {};
   try {
@@ -38,18 +40,32 @@ export async function POST(req: Request) {
   } = await supabase.auth.getUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
 
+  const fields = {
+    kind,
+    category: body.category ?? null,
+    audience: body.audience ?? null,
+    duration: body.duration ?? null,
+    topic: body.topic?.slice(0, 100) ?? null,
+    title: title.slice(0, 200),
+    content: body.content,
+  };
+
+  // 재편집 저장: id 가 있으면 해당 행 업데이트(RLS 로 본인 것만).
+  if (typeof body.id === "number" && Number.isInteger(body.id)) {
+    const { error } = await supabase
+      .from("generated_materials")
+      .update(fields)
+      .eq("id", body.id);
+    if (error) {
+      console.error("[generate/save] update 실패:", error.message);
+      return Response.json({ error: "저장 중 오류가 발생했습니다." }, { status: 500 });
+    }
+    return Response.json({ id: body.id });
+  }
+
   const { data, error } = await supabase
     .from("generated_materials")
-    .insert({
-      user_id: user.id,
-      kind,
-      category: body.category ?? null,
-      audience: body.audience ?? null,
-      duration: body.duration ?? null,
-      topic: body.topic?.slice(0, 100) ?? null,
-      title: title.slice(0, 200),
-      content: body.content,
-    })
+    .insert({ user_id: user.id, ...fields })
     .select("id")
     .single();
 

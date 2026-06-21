@@ -5,9 +5,24 @@ import { DEMO, demoDocuments } from "@/lib/demo";
 import { ragTableEnabled, listRag2026Categories } from "@/lib/rag2026";
 import { COURSE_CATEGORIES } from "@/lib/courses";
 import { availableModels } from "@/lib/llm";
+import type { SavedMaterial } from "@/lib/generate";
 import { GenerateForm } from "@/components/generate/GenerateForm";
 
 export const dynamic = "force-dynamic";
+
+// 저장본 재편집(?m=<id>) — RLS 로 본인 행만 반환된다.
+async function loadMaterial(id?: string): Promise<SavedMaterial | undefined> {
+  if (DEMO || !id) return undefined;
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) return undefined;
+  const supabase = await createClient();
+  const { data } = await supabase
+    .from("generated_materials")
+    .select("id, kind, category, audience, duration, topic, title, content, created_at")
+    .eq("id", n)
+    .maybeSingle();
+  return (data as unknown as SavedMaterial) ?? undefined;
+}
 
 // 인덱싱된 자료가 있는 분야와 분야별 자료 제목을 모은다.
 // 자료 제목은 NotebookLM 프롬프트의 "업로드할 자료" 안내에 쓰인다.
@@ -40,10 +55,15 @@ async function loadDocsByCategory(): Promise<Record<string, string[]>> {
   return Object.fromEntries(ordered.map((c) => [c, byCat.get(c)!]));
 }
 
-export default async function GeneratePage() {
+export default async function GeneratePage({
+  searchParams,
+}: {
+  searchParams: { m?: string };
+}) {
   const docsByCategory = await loadDocsByCategory();
   const categories = Object.keys(docsByCategory);
   const models = availableModels();
+  const initialMaterial = await loadMaterial(searchParams?.m);
 
   return (
     <div className="mx-auto max-w-3xl space-y-4 px-3 py-5 sm:px-4">
@@ -56,12 +76,16 @@ export default async function GeneratePage() {
         </p>
       </div>
 
-      {categories.length === 0 ? (
+      {categories.length === 0 && !initialMaterial ? (
         <p className="rounded-lg border py-12 text-center text-sm text-muted-foreground">
           아직 인덱싱된 자료가 없습니다. 자료를 올리면 분야가 자동으로 나타납니다.
         </p>
       ) : (
-        <GenerateForm docsByCategory={docsByCategory} models={models} />
+        <GenerateForm
+          docsByCategory={docsByCategory}
+          models={models}
+          initialMaterial={initialMaterial}
+        />
       )}
     </div>
   );

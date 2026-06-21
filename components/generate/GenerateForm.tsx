@@ -30,6 +30,7 @@ import {
   type GeneratedSection,
   type GeneratedSlide,
   type GeneratedSlideDeck,
+  type SavedMaterial,
 } from "@/lib/generate";
 import { categoryStyle } from "@/lib/category";
 import { cn } from "@/lib/utils";
@@ -104,6 +105,39 @@ function StepHeader({ n, title, hint }: { n: string; title: string; hint?: strin
   );
 }
 
+// 저장본(SavedMaterial)을 폼 결과 상태로 복원한다(재편집 진입).
+function hydrateMaterial(m?: SavedMaterial | null): {
+  doc: GeneratedDoc | null;
+  deck: GeneratedSlideDeck | null;
+  nlm: string | null;
+} {
+  if (!m) return { doc: null, deck: null, nlm: null };
+  const c = (m.content ?? {}) as {
+    sections?: GeneratedDoc["sections"];
+    slides?: GeneratedSlideDeck["slides"];
+    sources?: GeneratedDoc["sources"];
+    prompt?: string;
+  };
+  if (m.kind === "slides") {
+    return {
+      doc: null,
+      deck: { title: m.title, slides: c.slides ?? [], sources: c.sources ?? [] },
+      nlm: null,
+    };
+  }
+  if (m.kind === "notebooklm") return { doc: null, deck: null, nlm: c.prompt ?? "" };
+  return {
+    doc: { title: m.title, sections: c.sections ?? [], sources: c.sources ?? [] },
+    deck: null,
+    nlm: null,
+  };
+}
+
+const asAudience = (v?: string | null): Audience =>
+  AUDIENCES.includes(v as Audience) ? (v as Audience) : "일반 대원";
+const asDuration = (v?: string | null): Duration =>
+  DURATIONS.includes(v as Duration) ? (v as Duration) : "2시간";
+
 function docToText(doc: GeneratedDoc): string {
   const body = doc.sections
     .map((s) => `${s.heading}\n${s.content}`)
@@ -119,30 +153,39 @@ function docToText(doc: GeneratedDoc): string {
 export function GenerateForm({
   docsByCategory,
   models = [],
+  initialMaterial,
 }: {
   docsByCategory: Record<string, string[]>;
   models?: { key: string; label: string; note?: string }[];
+  initialMaterial?: SavedMaterial; // 저장본 재편집으로 진입 시 복원할 자료
 }) {
   const categories = Object.keys(docsByCategory);
-  const [type, setType] = useState<GenType>("plan");
-  const [category, setCategory] = useState<string>(categories[0] ?? "");
-  const [audience, setAudience] = useState<Audience>("일반 대원");
-  const [duration, setDuration] = useState<Duration>("2시간");
-  const [topic, setTopic] = useState("");
+  const hydrated = hydrateMaterial(initialMaterial);
+  const [type, setType] = useState<GenType>(initialMaterial?.kind ?? "plan");
+  const [category, setCategory] = useState<string>(
+    initialMaterial?.category ?? categories[0] ?? ""
+  );
+  const [audience, setAudience] = useState<Audience>(asAudience(initialMaterial?.audience));
+  const [duration, setDuration] = useState<Duration>(asDuration(initialMaterial?.duration));
+  const [topic, setTopic] = useState(initialMaterial?.topic ?? "");
   const [date, setDate] = useState("");
   const [model, setModel] = useState<string>(models[0]?.key ?? "");
   const [loading, setLoading] = useState(false);
-  const [doc, setDoc] = useState<GeneratedDoc | null>(null);
-  const [deck, setDeck] = useState<GeneratedSlideDeck | null>(null);
-  const [nlmPrompt, setNlmPrompt] = useState<string | null>(null);
+  const [doc, setDoc] = useState<GeneratedDoc | null>(hydrated.doc);
+  const [deck, setDeck] = useState<GeneratedSlideDeck | null>(hydrated.deck);
+  const [nlmPrompt, setNlmPrompt] = useState<string | null>(hydrated.nlm);
   const [copied, setCopied] = useState(false);
-  const [editing, setEditing] = useState(false);
+  // 재편집 진입 시 문서/슬라이드는 편집 모드로 연다(프롬프트는 편집 UI 없음).
+  const [editing, setEditing] = useState(
+    !!initialMaterial && initialMaterial.kind !== "notebooklm"
+  );
   const [regenIdx, setRegenIdx] = useState<number | null>(null); // 재생성 패널이 열린 항목
   const [regenLoading, setRegenLoading] = useState<number | null>(null);
   const [regenText, setRegenText] = useState(""); // 직접 입력 지시
-  const [resultKind, setResultKind] = useState<GenType | null>(null); // 현재 결과의 유형(저장용)
+  const [resultKind, setResultKind] = useState<GenType | null>(initialMaterial?.kind ?? null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [loadedId, setLoadedId] = useState<number | null>(initialMaterial?.id ?? null); // 재편집 대상 id
 
   const genReq = { type, category, audience, duration, topic, date, model };
   const subtitle = `대상: ${audience} · 교육 시간: ${duration}${date ? ` · ${date}` : ""}`;
@@ -318,6 +361,7 @@ export function GenerateForm({
     setRegenIdx(null);
     setSaved(false);
     setResultKind(null);
+    setLoadedId(null); // 새 생성은 저장 안 된 새 결과
     setDoc(null);
     setDeck(null);
     setNlmPrompt(null);
@@ -375,15 +419,28 @@ export function GenerateForm({
       const res = await fetch("/api/generate/save", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ kind: resultKind, category, audience, duration, topic, ...payload }),
+        body: JSON.stringify({
+          id: loadedId ?? undefined,
+          kind: resultKind,
+          category,
+          audience,
+          duration,
+          topic,
+          ...payload,
+        }),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
         toast.error("저장 실패", { description: err?.error ?? "잠시 후 다시 시도해 주세요." });
         return;
       }
+      // 신규 저장이면 id 를 받아 이후 저장은 같은 행을 수정(중복 저장 방지).
+      const json = await res.json().catch(() => null);
+      if (json?.id) setLoadedId(json.id);
       setSaved(true);
-      toast.success("저장했습니다", { description: "‘저장한 자료’에서 다시 볼 수 있어요." });
+      toast.success(loadedId ? "수정 저장했습니다" : "저장했습니다", {
+        description: "‘저장한 자료’에서 다시 볼 수 있어요.",
+      });
     } catch {
       toast.error("저장 중 오류가 발생했습니다.");
     } finally {
@@ -753,7 +810,7 @@ export function GenerateForm({
                 ) : (
                   <Save className="h-4 w-4" />
                 )}
-                {saved ? "저장됨" : "저장"}
+                {saved ? "저장됨" : loadedId ? "수정 저장" : "저장"}
               </Button>
             </div>
           </CardContent>
@@ -801,7 +858,7 @@ export function GenerateForm({
                   ) : (
                     <Save className="h-4 w-4" />
                   )}
-                  {saved ? "저장됨" : "저장"}
+                  {saved ? "저장됨" : loadedId ? "수정 저장" : "저장"}
                 </Button>
                 <Button
                   variant={editing ? "default" : "outline"}
@@ -932,7 +989,7 @@ export function GenerateForm({
                   ) : (
                     <Save className="h-4 w-4" />
                   )}
-                  {saved ? "저장됨" : "저장"}
+                  {saved ? "저장됨" : loadedId ? "수정 저장" : "저장"}
                 </Button>
                 <Button
                   variant={editing ? "default" : "outline"}

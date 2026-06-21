@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   ChevronDown,
@@ -8,6 +9,7 @@ import {
   Download,
   FileText,
   Loader2,
+  Pencil,
   Presentation,
   Sparkles,
   Trash2,
@@ -48,6 +50,7 @@ type DeckContent = { slides?: GeneratedSlideDeck["slides"]; sources?: GeneratedS
 type NlmContent = { prompt?: string };
 
 export function SavedList({ initial }: { initial: SavedMaterial[] }) {
+  const router = useRouter();
   const [items, setItems] = useState(initial);
   const [openId, setOpenId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
@@ -191,6 +194,18 @@ export function SavedList({ initial }: { initial: SavedMaterial[] }) {
                       ? "PPTX"
                       : "한글(hwpx)"}
                 </Button>
+                {it.kind !== "notebooklm" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={busy}
+                    onClick={() => router.push(`/generate?m=${it.id}`)}
+                  >
+                    <Pencil className="h-4 w-4" /> 편집
+                  </Button>
+                )}
                 <Button
                   type="button"
                   variant="ghost"
