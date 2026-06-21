@@ -38,6 +38,13 @@ const STYLES: Record<string, CategoryStyle> = {
     text: "text-rose-700",
     hex: "#f43f5e",
   },
+  일반구조: {
+    badge: "bg-blue-100 text-blue-700 border-blue-200",
+    dot: "bg-blue-500",
+    tint: "bg-blue-100",
+    text: "text-blue-700",
+    hex: "#3b82f6",
+  },
   화학사고: {
     badge: "bg-violet-100 text-violet-700 border-violet-200",
     dot: "bg-violet-500",
