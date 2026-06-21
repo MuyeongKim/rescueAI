@@ -9,61 +9,12 @@ import {
   generatedSlidesSchema,
   type GenerateRequest,
   type GeneratedDoc,
-  type GeneratedDocSource,
   type GeneratedSlideDeck,
 } from "@/lib/generate";
 import { DEMO, demoGeneratedDoc, demoGeneratedSlides } from "@/lib/demo";
-import { ragTableEnabled, fetchRag2026Context } from "@/lib/rag2026";
+import { fetchCategoryContext } from "@/lib/generate-context";
 
 export const maxDuration = 60;
-
-// 분야 자료의 청크를 모아 생성 컨텍스트 + 출처 목록을 만든다.
-async function fetchCategoryContext(
-  category: string,
-  limit = 40
-): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
-  // RAG_TABLE=rag_2026: 외부에서 임베딩해 둔 기존 테이블 사용
-  if (ragTableEnabled()) return fetchRag2026Context(category, limit);
-
-  const supabase = await createClient();
-  const { data: docs } = await supabase
-    .from("documents")
-    .select("id, title")
-    .eq("category", category)
-    .limit(50);
-  if (!docs || docs.length === 0) return { contextText: "", sources: [] };
-
-  const titleById = new Map<number, string>(docs.map((d) => [d.id, d.title]));
-  const { data: chunks } = await supabase
-    .from("chunks")
-    .select("content, page_num, document_id")
-    .in("document_id", docs.map((d) => d.id))
-    .limit(limit);
-  if (!chunks || chunks.length === 0) return { contextText: "", sources: [] };
-
-  const contextText = chunks
-    .map(
-      (c) =>
-        `[${titleById.get(c.document_id ?? -1) ?? "자료"} p.${c.page_num ?? "-"}]\n${c.content}`
-    )
-    .join("\n\n---\n\n");
-
-  const seen = new Set<string>();
-  const sources: GeneratedDocSource[] = [];
-  for (const c of chunks) {
-    if (c.document_id == null) continue;
-    const key = `${c.document_id}::${c.page_num ?? "-"}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    sources.push({
-      document_id: c.document_id,
-      doc: titleById.get(c.document_id) ?? "자료",
-      page: c.page_num,
-    });
-    if (sources.length >= 5) break;
-  }
-  return { contextText, sources };
-}
 
 // 인덱싱 자료를 근거로 훈련계획/교안을 생성한다. (NotebookLM 프롬프트는 클라이언트에서 조립)
 export async function POST(req: Request) {
@@ -122,7 +73,7 @@ export async function POST(req: Request) {
     model: body.model,
   };
 
-  const { contextText, sources } = await fetchCategoryContext(category);
+  const { contextText, sources } = await fetchCategoryContext(category, 40, genReq.topic);
   if (!contextText) {
     return Response.json(
       { error: "해당 분야에 인덱싱된 자료가 없어 생성할 수 없습니다." },

@@ -10,7 +10,7 @@ const CATEGORY_FIELD = "edu_category";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { toPgVector } from "@/lib/embeddings";
+import { getQueryEmbedding, toPgVector } from "@/lib/embeddings";
 import { getChatModel } from "@/lib/llm";
 import type { DocSource } from "@/lib/database.types";
 import type { SearchResult } from "@/lib/rag";
@@ -193,6 +193,62 @@ async function llmRerank(
   }
 }
 
+// 하이브리드 후보 검색: ① 벡터(RPC) + ② 키워드 full-text 병렬 → ③ RRF 융합.
+// 챗봇(searchRag2026)과 자료제작(fetchRag2026Context)이 동일 검색을 공유하는 단일 출처.
+async function hybridCandidates(
+  supabase: ReturnType<typeof createAdminClient>,
+  embedding: number[],
+  keywordQuery: string,
+  category: string | null | undefined,
+  candidateCount: number
+): Promise<RagRow[]> {
+  const [vecRes, kwRes] = await Promise.all([
+    (supabase.rpc as CallableFunction)(MATCH_FN, {
+      query_embedding: toPgVector(embedding),
+      match_count: candidateCount,
+      match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
+      filter: category ? { [CATEGORY_FIELD]: category } : {},
+    }),
+    (async () => {
+      if (!keywordQuery) return { data: [], error: null };
+      let q = (supabase.from as CallableFunction)(RAG_TABLE)
+        .select("id, content, metadata")
+        .textSearch("content", keywordQuery, { type: "websearch", config: "simple" })
+        .limit(candidateCount);
+      if (category) q = q.eq(`metadata->>${CATEGORY_FIELD}`, category);
+      return q;
+    })(),
+  ]);
+
+  if (vecRes.error) console.error("[rag2026] vector error:", vecRes.error.message);
+  if (kwRes.error) console.error("[rag2026] keyword error:", kwRes.error.message);
+
+  const vecRows = (vecRes.data ?? []) as RagRow[];
+  const kwRows = (kwRes.data ?? []) as RagRow[];
+  return rrfFuse([vecRows, kwRows]);
+}
+
+// 정제된 청크들을 생성용 컨텍스트 문자열 + 출처(파일 단위 중복 제거)로 조립한다.
+function buildContextFromRefined(
+  refined: { meta: RagRow["metadata"]; text: string }[],
+  maxSources: number
+): { contextText: string; sources: GeneratedDocSource[] } {
+  const contextText = refined
+    .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
+    .join("\n\n---\n\n");
+
+  const seen = new Set<string>();
+  const sources: GeneratedDocSource[] = [];
+  for (const r of refined) {
+    const key = r.meta?.source ?? "자료";
+    if (seen.has(key)) continue;
+    seen.add(key);
+    sources.push({ document_id: 0, doc: labelOf(r.meta), page: null });
+    if (sources.length >= maxSources) break;
+  }
+  return { contextText, sources };
+}
+
 // 하이브리드 검색(벡터+키워드 RRF) + LLM 재순위 → 컨텍스트 + 출처 (lib/rag.ts SearchResult)
 export async function searchRag2026(
   query: string,
@@ -206,33 +262,8 @@ export async function searchRag2026(
   const candidateCount = Math.max(40, topK * 6);
   const kwQuery = buildKeywordQuery(query, keywordTerms);
 
-  // ① 벡터 검색(RPC) + ② 키워드 full-text(websearch/simple) 병렬
-  const [vecRes, kwRes] = await Promise.all([
-    (supabase.rpc as CallableFunction)(MATCH_FN, {
-      query_embedding: toPgVector(embedding),
-      match_count: candidateCount,
-      match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
-      filter: category ? { [CATEGORY_FIELD]: category } : {},
-    }),
-    (async () => {
-      if (!kwQuery) return { data: [], error: null };
-      let q = (supabase.from as CallableFunction)(RAG_TABLE)
-        .select("id, content, metadata")
-        .textSearch("content", kwQuery, { type: "websearch", config: "simple" })
-        .limit(candidateCount);
-      if (category) q = q.eq(`metadata->>${CATEGORY_FIELD}`, category);
-      return q;
-    })(),
-  ]);
-
-  if (vecRes.error) console.error("[rag2026] vector error:", vecRes.error.message);
-  if (kwRes.error) console.error("[rag2026] keyword error:", kwRes.error.message);
-
-  const vecRows = (vecRes.data ?? []) as RagRow[];
-  const kwRows = (kwRes.data ?? []) as RagRow[];
-
-  // ③ RRF 융합 → ④ 정제·노이즈 제외(후보 12) → ⑤ LLM 재순위(상위 8)
-  const fused = rrfFuse([vecRows, kwRows]);
+  // ①② 하이브리드 후보 → ③ RRF 융합 → ④ 정제·노이즈 제외(후보 12) → ⑤ LLM 재순위(상위 8)
+  const fused = await hybridCandidates(supabase, embedding, kwQuery, category, candidateCount);
   if (fused.length === 0) return { contextText: "", sources: [], matched: 0 };
   const refined = refine(fused, 12);
   if (refined.length === 0) return { contextText: "", sources: [], matched: 0 };
@@ -261,13 +292,41 @@ export async function searchRag2026(
   return { contextText, sources, matched: top.length };
 }
 
-// 분야 자료를 모아 생성(AI 자료제작) 컨텍스트를 만든다 (벡터 검색 없이 카테고리 일괄).
+// 자료제작용 청크 수 — 문서/슬라이드는 챗봇 답변보다 넓은 커버리지가 필요(챗봇 8 vs 생성 24).
+const GEN_KEEP = 24;
+
+// 분야 자료를 모아 생성(AI 자료제작) 컨텍스트를 만든다.
+// topic 이 있으면 챗봇과 동일한 하이브리드 검색으로 "주제 관련" 청크를 우선 모으고,
+// 없거나(분야 전반) 검색 결과가 비면 분야 전체 청크로 폴백한다.
 export async function fetchRag2026Context(
   category: string,
-  limit = 40
+  limit = 40,
+  topic?: string
 ): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
   const supabase = createAdminClient();
-  // 노이즈 제외 후에도 limit 만큼 남도록 후보를 2배로 받는다.
+  const topicTrimmed = topic?.trim();
+
+  // ① 주제 기반: "분야 + 주제"를 임베딩해 하이브리드 검색 → 정제 → 컨텍스트 조립
+  if (topicTrimmed) {
+    try {
+      const embedding = await getQueryEmbedding(`${category} ${topicTrimmed}`);
+      const kwQuery = buildKeywordQuery(topicTrimmed);
+      const fused = await hybridCandidates(
+        supabase,
+        embedding,
+        kwQuery,
+        category,
+        Math.max(60, GEN_KEEP * 2)
+      );
+      const refined = refine(fused, GEN_KEEP);
+      if (refined.length > 0) return buildContextFromRefined(refined, 5);
+      // 주제 검색 결과가 없으면 분야 전체로 폴백
+    } catch (e) {
+      console.error("[rag2026] 주제 기반 검색 실패, 분야 전체로 폴백:", e);
+    }
+  }
+
+  // ② 분야 전체(폴백/주제 미지정): 노이즈 제외 후에도 limit 만큼 남도록 후보를 2배로 받는다.
   const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
     .select("content, metadata")
     .eq(`metadata->>${CATEGORY_FIELD}`, category)
@@ -281,21 +340,7 @@ export async function fetchRag2026Context(
   // 정제·노이즈제외 (생성 컨텍스트도 깨끗한 본문만). limit 만큼 의미 청크 확보.
   const refined = refine(rows, limit);
   if (refined.length === 0) return { contextText: "", sources: [] };
-
-  const contextText = refined
-    .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
-    .join("\n\n---\n\n");
-
-  const seen = new Set<string>();
-  const sources: GeneratedDocSource[] = [];
-  for (const r of refined) {
-    const key = r.meta?.source ?? "자료";
-    if (seen.has(key)) continue;
-    seen.add(key);
-    sources.push({ document_id: 0, doc: labelOf(r.meta), page: null });
-    if (sources.length >= 5) break;
-  }
-  return { contextText, sources };
+  return buildContextFromRefined(refined, 5);
 }
 
 // 분야 → 원본 파일명 목록 (AI 자료제작 선택지·NotebookLM 자료 목록용)

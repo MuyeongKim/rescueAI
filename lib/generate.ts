@@ -160,6 +160,89 @@ ${TYPE_GUIDE[req.type]}
 - 한국어로, 현장에서 바로 쓸 수 있게 구체적으로 작성하세요.`;
 }
 
+// ── 부분 재생성 (섹션/슬라이드 1개) ──
+export const regeneratedSectionSchema = z.object({
+  heading: z.string().describe("섹션 제목 (번호 포함, 예: '3. 단계별 진행')"),
+  content: z.string().describe("섹션 본문. 줄바꿈(\\n)으로 항목 구분"),
+});
+
+export const regeneratedSlideSchema = z.object({
+  title: z.string().describe("슬라이드 제목 (간결하게)"),
+  bullets: z.array(z.string().describe("핵심 문장 (한 줄, 40자 이내)")).min(1).max(4),
+  notes: z.string().describe("발표자 노트 — 교관이 읽을 설명 대본 2~4문장"),
+});
+
+// 부분 재생성 지시(프리셋) — 클라이언트가 보내는 자연어 지시. 직접 입력도 허용.
+export const REGEN_INSTRUCTIONS = [
+  { key: "detail", label: "더 자세히", text: "내용을 더 구체적이고 자세하게, 단계와 수치를 보강해 작성" },
+  { key: "concise", label: "더 간결히", text: "핵심만 남겨 더 간결하고 명확하게 작성" },
+  { key: "example", label: "현장 사례 추가", text: "현장 적용 사례나 예시를 포함해 작성" },
+] as const;
+
+// 섹션 1개 재생성 프롬프트 — 전체 구성(outline) 안에서 해당 섹션만 다시 쓴다.
+export function buildSectionRegenPrompt(args: {
+  category: string;
+  audience: Audience;
+  duration: Duration;
+  docTitle: string;
+  outline: string[];
+  index: number;
+  currentHeading: string;
+  currentContent: string;
+  instruction?: string;
+}): string {
+  const outlineText = args.outline.map((h, i) => `${i + 1}. ${h}`).join("\n");
+  const instr = args.instruction?.trim()
+    ? `\n[수정 지시] ${args.instruction.trim()}`
+    : "";
+  return `전북소방본부 ${args.category} 분야 교육 문서 "${args.docTitle}"의 한 섹션만 다시 작성합니다.
+
+[문서 전체 구성]
+${outlineText}
+
+[다시 작성할 섹션] ${args.index + 1}번째 — "${args.currentHeading}"
+[현재 내용]
+${args.currentContent}${instr}
+
+[작성 규칙]
+- 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
+- 다른 섹션과 중복되지 않게, 이 섹션의 역할에 충실하게 작성하세요.
+- 대상 수준(${args.audience})·교육 시간(${args.duration})에 맞춰 한국어로 작성하세요.
+- 이 섹션 하나만 JSON으로 반환하세요(heading, content).`;
+}
+
+// 슬라이드 1개 재생성 프롬프트 — 전체 슬라이드 구성 안에서 해당 1장만 다시 쓴다.
+export function buildSlideRegenPrompt(args: {
+  category: string;
+  audience: Audience;
+  duration: Duration;
+  deckTitle: string;
+  outline: string[];
+  index: number;
+  current: GeneratedSlide;
+  instruction?: string;
+}): string {
+  const outlineText = args.outline.map((t, i) => `${i + 1}. ${t}`).join("\n");
+  const instr = args.instruction?.trim()
+    ? `\n[수정 지시] ${args.instruction.trim()}`
+    : "";
+  return `전북소방본부 ${args.category} 분야 발표 "${args.deckTitle}"의 슬라이드 한 장만 다시 작성합니다.
+
+[발표 전체 구성]
+${outlineText}
+
+[다시 작성할 슬라이드] ${args.index + 1}번째 — "${args.current.title}"
+[현재 내용]
+${args.current.bullets.map((b) => `· ${b}`).join("\n")}
+(노트: ${args.current.notes})${instr}
+
+[작성 규칙]
+- 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
+- 다른 슬라이드와 중복되지 않게 작성하세요.
+- 제목 + 핵심 문장 최대 4개(한 줄씩) + 발표자 노트(2~4문장).
+- 대상 수준(${args.audience})에 맞는 용어로 한국어로, 이 슬라이드 하나만 JSON으로 반환하세요.`;
+}
+
 // NotebookLM에 붙여넣는 프롬프트 — AI 호출 없이 조립(데모·내부망에서도 동일 동작).
 // docTitles: 인덱싱(벡터DB)된 해당 분야 자료 제목 — 어떤 자료를 업로드할지 안내에 포함.
 export function buildNotebookLmPrompt(

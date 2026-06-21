@@ -9,7 +9,9 @@ import {
   FileText,
   Loader2,
   MessageSquareText,
+  Pencil,
   Presentation,
+  RefreshCw,
   Sparkles,
   Wand2,
 } from "lucide-react";
@@ -18,17 +20,21 @@ import {
   AUDIENCES,
   DURATIONS,
   GEN_TYPES,
+  REGEN_INSTRUCTIONS,
   buildNotebookLmPrompt,
   type Audience,
   type Duration,
   type GenType,
   type GeneratedDoc,
+  type GeneratedSection,
+  type GeneratedSlide,
   type GeneratedSlideDeck,
 } from "@/lib/generate";
 import { categoryStyle } from "@/lib/category";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import {
   Card,
@@ -107,12 +113,180 @@ export function GenerateForm({
   const [deck, setDeck] = useState<GeneratedSlideDeck | null>(null);
   const [nlmPrompt, setNlmPrompt] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [regenIdx, setRegenIdx] = useState<number | null>(null); // 재생성 패널이 열린 항목
+  const [regenLoading, setRegenLoading] = useState<number | null>(null);
+  const [regenText, setRegenText] = useState(""); // 직접 입력 지시
 
   const genReq = { type, category, audience, duration, topic, date, model };
   const subtitle = `대상: ${audience} · 교육 시간: ${duration}${date ? ` · ${date}` : ""}`;
 
+  // 결과 부분 편집 — 편집 내용은 그대로 다운로드/복사에 반영된다(빌더가 state를 받음).
+  function patchSection(i: number, patch: Partial<GeneratedSection>) {
+    setDoc((prev) =>
+      prev
+        ? { ...prev, sections: prev.sections.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
+        : prev
+    );
+  }
+  function patchSlide(i: number, patch: Partial<GeneratedSlide>) {
+    setDeck((prev) =>
+      prev
+        ? { ...prev, slides: prev.slides.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
+        : prev
+    );
+  }
+  function patchBullet(slideI: number, bulletI: number, value: string) {
+    setDeck((prev) =>
+      prev
+        ? {
+            ...prev,
+            slides: prev.slides.map((s, j) =>
+              j === slideI
+                ? { ...s, bullets: s.bullets.map((b, k) => (k === bulletI ? value : b)) }
+                : s
+            ),
+          }
+        : prev
+    );
+  }
+
+  // AI 부분 재생성 — 섹션/슬라이드 1개만 다시 생성해 해당 부분만 교체한다.
+  async function handleRegen(
+    kind: "section" | "slide",
+    index: number,
+    instruction?: string
+  ) {
+    const outline =
+      kind === "section"
+        ? (doc?.sections.map((s) => s.heading) ?? [])
+        : (deck?.slides.map((s) => s.title) ?? []);
+    const current = kind === "section" ? doc?.sections[index] : deck?.slides[index];
+    const docTitle = kind === "section" ? doc?.title : deck?.title;
+    if (!current) return;
+
+    setRegenLoading(index);
+    try {
+      const res = await fetch("/api/generate/section", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind,
+          category,
+          audience,
+          duration,
+          topic,
+          model,
+          docTitle,
+          outline,
+          index,
+          current,
+          instruction,
+        }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error("재생성 실패", {
+          description: err?.error ?? "잠시 후 다시 시도해 주세요.",
+        });
+        return;
+      }
+      const json = await res.json();
+      if (kind === "section") patchSection(index, json as GeneratedSection);
+      else patchSlide(index, json as GeneratedSlide);
+      toast.success("다시 생성했습니다");
+      setRegenIdx(null);
+      setRegenText("");
+    } catch {
+      toast.error("재생성 중 오류가 발생했습니다.");
+    } finally {
+      setRegenLoading(null);
+    }
+  }
+
+  // 편집 모드에서 항목별 재생성 컨트롤 (프리셋 + 직접 입력)
+  function renderRegen(kind: "section" | "slide", index: number) {
+    const isOpen = regenIdx === index;
+    const isLoading = regenLoading === index;
+    if (!isOpen) {
+      return (
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="h-8 gap-1.5 text-xs text-muted-foreground"
+          disabled={regenLoading !== null}
+          onClick={() => {
+            setRegenIdx(index);
+            setRegenText("");
+          }}
+        >
+          <RefreshCw className="h-3.5 w-3.5" /> AI로 다시 생성
+        </Button>
+      );
+    }
+    return (
+      <div className="space-y-2 rounded-md border border-dashed p-2">
+        <div className="flex flex-wrap gap-1.5">
+          {REGEN_INSTRUCTIONS.map((ins) => (
+            <Button
+              key={ins.key}
+              type="button"
+              variant="outline"
+              size="sm"
+              className="h-8 gap-1 text-xs"
+              disabled={isLoading}
+              onClick={() => handleRegen(kind, index, ins.text)}
+            >
+              {isLoading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+              {ins.label}
+            </Button>
+          ))}
+        </div>
+        <div className="flex gap-1.5">
+          <Input
+            value={regenText}
+            onChange={(e) => setRegenText(e.target.value)}
+            placeholder="직접 지시 (예: 표로 정리)"
+            className="h-8 text-xs"
+            disabled={isLoading}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && regenText.trim())
+                handleRegen(kind, index, regenText.trim());
+            }}
+          />
+          <Button
+            type="button"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={isLoading || !regenText.trim()}
+            onClick={() => handleRegen(kind, index, regenText.trim())}
+          >
+            적용
+          </Button>
+          <Button
+            type="button"
+            variant="ghost"
+            size="sm"
+            className="h-8 text-xs"
+            disabled={isLoading}
+            onClick={() => setRegenIdx(null)}
+          >
+            닫기
+          </Button>
+        </div>
+      </div>
+    );
+  }
+
   async function handleGenerate() {
     setCopied(false);
+    setEditing(false);
+    setRegenIdx(null);
     setDoc(null);
     setDeck(null);
     setNlmPrompt(null);
@@ -362,9 +536,31 @@ export function GenerateForm({
       {deck && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="flex items-center gap-2 text-base">
-              <Presentation className="h-4 w-4 text-primary" /> {deck.title}
-            </CardTitle>
+            <div className="flex items-start justify-between gap-2">
+              {editing ? (
+                <Input
+                  value={deck.title}
+                  onChange={(e) =>
+                    setDeck((prev) => (prev ? { ...prev, title: e.target.value } : prev))
+                  }
+                  className="h-9 text-base font-semibold"
+                  aria-label="발표 제목"
+                />
+              ) : (
+                <CardTitle className="flex items-center gap-2 text-base">
+                  <Presentation className="h-4 w-4 text-primary" /> {deck.title}
+                </CardTitle>
+              )}
+              <Button
+                variant={editing ? "default" : "outline"}
+                size="sm"
+                className="shrink-0 gap-1.5"
+                onClick={() => setEditing((v) => !v)}
+              >
+                {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+                {editing ? "완료" : "편집"}
+              </Button>
+            </div>
             <CardDescription className="flex flex-wrap items-center gap-1.5">
               슬라이드 {deck.slides.length}장 · 근거:
               {deck.sources.map((s, i) => (
@@ -379,19 +575,54 @@ export function GenerateForm({
             <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
               {deck.slides.map((s, i) => (
                 <div key={i} className="rounded-lg border p-3">
-                  <p className="mb-1 flex items-baseline gap-2 font-semibold">
-                    <span className="text-xs text-muted-foreground">{i + 1}</span>
-                    {s.title}
-                  </p>
-                  <ul className="list-disc space-y-0.5 pl-5 text-sm text-muted-foreground">
-                    {s.bullets.map((b, j) => (
-                      <li key={j}>{b}</li>
-                    ))}
-                  </ul>
-                  {s.notes && (
-                    <p className="mt-2 border-t pt-2 text-xs text-muted-foreground">
-                      🎤 {s.notes}
-                    </p>
+                  {editing ? (
+                    <div className="space-y-2">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-xs text-muted-foreground">{i + 1}</span>
+                        <Input
+                          value={s.title}
+                          onChange={(e) => patchSlide(i, { title: e.target.value })}
+                          className="h-9 font-semibold"
+                          aria-label={`슬라이드 ${i + 1} 제목`}
+                        />
+                      </div>
+                      <div className="space-y-1 pl-5">
+                        {s.bullets.map((b, j) => (
+                          <Input
+                            key={j}
+                            value={b}
+                            onChange={(e) => patchBullet(i, j, e.target.value)}
+                            className="h-9 text-sm"
+                            aria-label={`슬라이드 ${i + 1} 항목 ${j + 1}`}
+                          />
+                        ))}
+                      </div>
+                      <Textarea
+                        value={s.notes}
+                        onChange={(e) => patchSlide(i, { notes: e.target.value })}
+                        className="min-h-[60px] text-xs"
+                        aria-label={`슬라이드 ${i + 1} 발표자 노트`}
+                        placeholder="발표자 노트"
+                      />
+                      {renderRegen("slide", i)}
+                    </div>
+                  ) : (
+                    <>
+                      <p className="mb-1 flex items-baseline gap-2 font-semibold">
+                        <span className="text-xs text-muted-foreground">{i + 1}</span>
+                        {s.title}
+                      </p>
+                      <ul className="list-disc space-y-0.5 pl-5 text-sm text-muted-foreground">
+                        {s.bullets.map((b, j) => (
+                          <li key={j}>{b}</li>
+                        ))}
+                      </ul>
+                      {s.notes && (
+                        <p className="mt-2 border-t pt-2 text-xs text-muted-foreground">
+                          🎤 {s.notes}
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
               ))}
@@ -411,7 +642,29 @@ export function GenerateForm({
       {doc && (
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-base">{doc.title}</CardTitle>
+            <div className="flex items-start justify-between gap-2">
+              {editing ? (
+                <Input
+                  value={doc.title}
+                  onChange={(e) =>
+                    setDoc((prev) => (prev ? { ...prev, title: e.target.value } : prev))
+                  }
+                  className="h-9 text-base font-semibold"
+                  aria-label="문서 제목"
+                />
+              ) : (
+                <CardTitle className="text-base">{doc.title}</CardTitle>
+              )}
+              <Button
+                variant={editing ? "default" : "outline"}
+                size="sm"
+                className="shrink-0 gap-1.5"
+                onClick={() => setEditing((v) => !v)}
+              >
+                {editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+                {editing ? "완료" : "편집"}
+              </Button>
+            </div>
             <CardDescription className="flex flex-wrap items-center gap-1.5">
               근거:
               {doc.sources.map((s, i) => (
@@ -424,11 +677,31 @@ export function GenerateForm({
           </CardHeader>
           <CardContent className="space-y-4">
             {doc.sections.map((s, i) => (
-              <section key={i}>
-                <h3 className="mb-1 font-semibold">{s.heading}</h3>
-                <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
-                  {s.content}
-                </p>
+              <section key={i} className="space-y-1">
+                {editing ? (
+                  <>
+                    <Input
+                      value={s.heading}
+                      onChange={(e) => patchSection(i, { heading: e.target.value })}
+                      className="h-9 font-semibold"
+                      aria-label={`섹션 ${i + 1} 제목`}
+                    />
+                    <Textarea
+                      value={s.content}
+                      onChange={(e) => patchSection(i, { content: e.target.value })}
+                      className="min-h-[120px] text-sm leading-relaxed"
+                      aria-label={`섹션 ${i + 1} 본문`}
+                    />
+                    {renderRegen("section", i)}
+                  </>
+                ) : (
+                  <>
+                    <h3 className="mb-1 font-semibold">{s.heading}</h3>
+                    <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+                      {s.content}
+                    </p>
+                  </>
+                )}
               </section>
             ))}
             <div className="flex flex-col gap-2 pt-2 sm:flex-row">
