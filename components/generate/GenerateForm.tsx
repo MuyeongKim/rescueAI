@@ -78,7 +78,7 @@ function OptionGroup<T extends string>({
               aria-checked={active}
               onClick={() => onChange(opt)}
               className={cn(
-                "inline-flex h-12 items-center rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none",
+                "inline-flex h-11 items-center rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none",
                 "hover:-translate-y-0.5 active:translate-y-0 motion-reduce:hover:translate-y-0",
                 active
                   ? "border-primary bg-primary text-primary-foreground shadow-sm"
@@ -623,7 +623,7 @@ export function GenerateForm({
                           : undefined
                       }
                       className={cn(
-                        "inline-flex h-12 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none",
+                        "inline-flex h-11 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none",
                         "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
                         active ? "shadow-sm" : "border-border hover:bg-accent/40"
                       )}
