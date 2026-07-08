@@ -52,6 +52,8 @@ export function WorkoutForm() {
       setDuration("");
       setNote("");
       router.refresh();
+    } catch {
+      toast.error("네트워크 오류로 기록하지 못했습니다. 다시 시도해 주세요.");
     } finally {
       setPending(false);
     }

@@ -40,6 +40,8 @@ export function UserRoleSelect({
       }
       toast.success("권한을 변경했습니다.");
       router.refresh();
+    } catch {
+      toast.error("네트워크 오류로 변경하지 못했습니다.");
     } finally {
       setPending(false);
     }

@@ -33,7 +33,7 @@ import {
   type SavedMaterial,
 } from "@/lib/generate";
 import { categoryStyle } from "@/lib/category";
-import { cn } from "@/lib/utils";
+import { cn, sanitizeFilename } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -484,7 +484,7 @@ export function GenerateForm({
     try {
       // docx는 무거워서 다운로드 시점에만 로드
       const { buildDocxBlob } = await import("@/lib/docx");
-      downloadBlob(await buildDocxBlob(doc), `${doc.title.slice(0, 50)}.docx`);
+      downloadBlob(await buildDocxBlob(doc), `${sanitizeFilename(doc.title)}.docx`);
     } catch {
       toast.error("문서 파일 생성에 실패했습니다");
     }

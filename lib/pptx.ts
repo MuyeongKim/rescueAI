@@ -3,6 +3,7 @@
 import pptxgen from "pptxgenjs";
 import type { GeneratedSlideDeck } from "@/lib/generate";
 import { categoryStyle } from "@/lib/category";
+import { sanitizeFilename } from "@/lib/utils";
 
 const FONT = "Pretendard";
 const DARK = "1F2937"; // 본문 잉크
@@ -100,5 +101,5 @@ export async function downloadPptx(
     );
   }
 
-  await pres.writeFile({ fileName: `${deck.title.slice(0, 50)}.pptx` });
+  await pres.writeFile({ fileName: `${sanitizeFilename(deck.title)}.pptx` });
 }

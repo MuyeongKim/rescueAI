@@ -55,6 +55,8 @@ export function NoticeManager({ notices }: { notices: Notice[] }) {
       setContent("");
       setPinned(false);
       router.refresh();
+    } catch {
+      toast.error("네트워크 오류로 등록하지 못했습니다.");
     } finally {
       setPending(false);
     }
@@ -62,17 +64,21 @@ export function NoticeManager({ notices }: { notices: Notice[] }) {
 
   async function remove(id: number) {
     if (!confirm("이 공지를 삭제할까요?")) return;
-    const res = await fetch("/api/admin/notices", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-    if (!res.ok) {
-      toast.error(await res.text());
-      return;
+    try {
+      const res = await fetch("/api/admin/notices", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) {
+        toast.error(await res.text());
+        return;
+      }
+      toast.success("공지를 삭제했습니다.");
+      router.refresh();
+    } catch {
+      toast.error("네트워크 오류로 삭제하지 못했습니다.");
     }
-    toast.success("공지를 삭제했습니다.");
-    router.refresh();
   }
 
   return (

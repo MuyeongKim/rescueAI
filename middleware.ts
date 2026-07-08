@@ -6,7 +6,6 @@ const PROTECTED_PREFIXES = [
   "/chat",
   "/docs",
   "/admin",
-  "/courses",
   "/generate",
   "/news",
   "/dispatch",

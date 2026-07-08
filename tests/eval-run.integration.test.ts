@@ -3,7 +3,7 @@
 //   RUN_INTEGRATION=1 npx vitest run tests/eval-run.integration.test.ts --reporter=verbose
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { describe, it, beforeAll } from "vitest";
+import { describe, it, beforeAll, expect } from "vitest";
 import { generateText } from "ai";
 
 function loadEnv() {
@@ -57,6 +57,9 @@ describe.skipIf(process.env.RUN_INTEGRATION !== "1")("평가셋 러너(운영 �
       }
     }
     const acc = items.length ? Math.round((pass / items.length) * 100) : 0;
-    console.log(`\n정확도: ${pass}/${items.length} = ${acc}%  (목표 60% 이상)`);
+    const minAcc = Number(process.env.EVAL_MIN_ACCURACY ?? 60);
+    console.log(`\n정확도: ${pass}/${items.length} = ${acc}%  (목표 ${minAcc}% 이상)`);
+    // 회귀 방어: 목표 정확도 미달 시 실패(기존엔 assert 가 없어 0%여도 통과했음)
+    expect(acc).toBeGreaterThanOrEqual(minAcc);
   }, 300_000);
 });

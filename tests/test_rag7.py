@@ -84,7 +84,7 @@ def test_resolve_ollama_base_url_prefers_local_when_model_exists(monkeypatch):
     monkeypatch.setattr(rag7.requests, "get", fake_get)
 
     selected = rag7.resolve_ollama_base_url(
-        fallback_url="http://100.66.187.122:11434",
+        fallback_url="http://fallback.example:11434",
         model="bge-m3:latest",
         local_url="http://localhost:11434",
     )
@@ -103,12 +103,12 @@ def test_resolve_ollama_base_url_uses_fallback_when_local_model_missing(monkeypa
     )
 
     selected = rag7.resolve_ollama_base_url(
-        fallback_url="http://100.66.187.122:11434",
+        fallback_url="http://fallback.example:11434",
         model="bge-m3:latest",
         local_url="http://localhost:11434",
     )
 
-    assert selected == "http://100.66.187.122:11434"
+    assert selected == "http://fallback.example:11434"
 
 
 def test_resolve_ollama_base_url_uses_fallback_when_local_probe_fails(monkeypatch):
@@ -121,12 +121,12 @@ def test_resolve_ollama_base_url_uses_fallback_when_local_probe_fails(monkeypatc
     monkeypatch.setattr(rag7.requests, "get", fake_get)
 
     selected = rag7.resolve_ollama_base_url(
-        fallback_url="http://100.66.187.122:11434",
+        fallback_url="http://fallback.example:11434",
         model="bge-m3:latest",
         local_url="http://localhost:11434",
     )
 
-    assert selected == "http://100.66.187.122:11434"
+    assert selected == "http://fallback.example:11434"
 
 
 def test_safe_embeddings_rejects_dimension_mismatch(monkeypatch):

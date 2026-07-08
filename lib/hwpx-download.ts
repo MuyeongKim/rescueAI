@@ -1,11 +1,12 @@
 import type { GeneratedDoc } from "@/lib/generate";
+import { sanitizeFilename } from "@/lib/utils";
 
 // 한글(hwpx) 다운로드 공용 헬퍼 (클라이언트 전용).
 // 1순위: 미니서버 hwp-writer-api(/api/hwp 중계) — python-hwpx 가 만든 정식 hwpx.
 // 폴백: 서버 미설정/장애 시 로컬 빌더(lib/hwpx.ts)로 브라우저에서 직접 생성.
 // 반환값으로 어느 경로를 썼는지 알려 호출부가 안내 토스트를 띄울 수 있게 한다.
 export async function downloadHwpx(doc: GeneratedDoc): Promise<"server" | "local"> {
-  const filename = `${doc.title.slice(0, 50)}.hwpx`;
+  const filename = `${sanitizeFilename(doc.title)}.hwpx`;
 
   try {
     const res = await fetch("/api/hwp", {

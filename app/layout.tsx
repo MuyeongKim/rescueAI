@@ -12,7 +12,7 @@ export const metadata: Metadata = {
 export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
-  maximumScale: 1,
+  // maximumScale 로 확대를 막지 않는다(WCAG 1.4.4 — 저시력 사용자 확대 허용)
   themeColor: "#cc3f14",
 };
 

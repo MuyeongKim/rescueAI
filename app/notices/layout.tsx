@@ -9,8 +9,8 @@ export default async function NoticesLayout({
   const { user, profile } = await getUserAndProfile();
   return (
     <div className="flex h-screen">
-      {/* 공지는 홈에서 진입하는 보조 화면 — 활성 메뉴 없음 */}
-      <AppSidebar email={user?.email} isAdmin={isAdmin(profile)} />
+      {/* 공지는 데스크톱 사이드바엔 없지만, 모바일 더보기 시트·탭에선 활성 표시되게 active 전달 */}
+      <AppSidebar email={user?.email} isAdmin={isAdmin(profile)} active="notices" />
       <main className="flex-1 overflow-auto pb-14 md:pb-0">{children}</main>
     </div>
   );

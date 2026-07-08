@@ -98,25 +98,33 @@ export function NewsManager({ items }: { items: NewsItem[] }) {
   }
 
   async function toggle(id: number, field: "pinned" | "hidden", value: boolean) {
-    const res = await fetch("/api/admin/news", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "toggle", id, field, value }),
-    });
-    if (!res.ok) return toast.error(await res.text());
-    router.refresh();
+    try {
+      const res = await fetch("/api/admin/news", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "toggle", id, field, value }),
+      });
+      if (!res.ok) return toast.error(await res.text());
+      router.refresh();
+    } catch {
+      toast.error("네트워크 오류로 변경하지 못했습니다.");
+    }
   }
 
   async function remove(id: number, t: string) {
     if (!confirm(`'${t}' 동향을 삭제할까요?`)) return;
-    const res = await fetch("/api/admin/news", {
-      method: "DELETE",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-    if (!res.ok) return toast.error(await res.text());
-    toast.success("삭제되었습니다.");
-    router.refresh();
+    try {
+      const res = await fetch("/api/admin/news", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id }),
+      });
+      if (!res.ok) return toast.error(await res.text());
+      toast.success("삭제되었습니다.");
+      router.refresh();
+    } catch {
+      toast.error("네트워크 오류로 삭제하지 못했습니다.");
+    }
   }
 
   return (

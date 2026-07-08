@@ -30,6 +30,7 @@ export type NavKey =
   | "docs"
   | "fitness"
   | "me"
+  | "notices"
   | "admin"
   | "admin-news"
   | "admin-dispatch"

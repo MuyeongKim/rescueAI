@@ -46,6 +46,7 @@ export function ChatInterface({
   const [model, setModel] = useState<string>(models[0]?.key ?? "");
   const convIdRef = useRef<string | undefined>(conversationId);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
 
   const {
     messages,
@@ -77,9 +78,12 @@ export function ChatInterface({
     }
   }, [data]);
 
-  // 새 메시지마다 하단으로 스크롤
+  // 새 메시지/토큰마다 하단으로 스크롤 — 단, 사용자가 위로 올려 읽는 중이면 방해하지 않는다.
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    const el = scrollRef.current;
+    if (!el) return;
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+    if (nearBottom) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
   const requestBody = () => ({
@@ -150,7 +154,7 @@ export function ChatInterface({
       </div>
 
       {/* 메시지 목록 */}
-      <div className="flex-1 overflow-y-auto">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-3 py-4 sm:px-4">
           {empty ? (
             <div className="flex flex-col items-center gap-6 py-10 text-center">
