@@ -97,7 +97,9 @@ async function embedOpenAI(text: string): Promise<number[]> {
     input: text,
     dimensions: EMBEDDING_DIM, // text-embedding-3-* 는 차원 축소 지원
   });
-  return res.data[0].embedding;
+  const vec = res.data?.[0]?.embedding;
+  if (!vec) throw new Error("OpenAI 임베딩 응답이 비어 있습니다.");
+  return vec;
 }
 
 // 자체 호스팅 BGE-M3 임베딩 서비스 호출 (indexing/serve.py 와 호환)
@@ -115,7 +117,9 @@ async function embedBGE(text: string): Promise<number[]> {
     throw new Error(`BGE 임베딩 서비스 오류: ${res.status} ${await res.text()}`);
   }
   const json = (await res.json()) as { embeddings: number[][] };
-  return json.embeddings[0];
+  const vec = json.embeddings?.[0];
+  if (!vec) throw new Error("BGE 임베딩 응답이 비어 있습니다.");
+  return vec;
 }
 
 // Ollama 임베딩 (홈서버 등 자체 호스팅, 예: bge-m3)
@@ -137,7 +141,9 @@ async function embedOllama(text: string): Promise<number[]> {
     throw new Error(`Ollama 임베딩 오류: ${res.status} ${await res.text()}`);
   }
   const json = (await res.json()) as { embeddings: number[][] };
-  return json.embeddings[0];
+  const vec = json.embeddings?.[0];
+  if (!vec) throw new Error("Ollama 임베딩 응답이 비어 있습니다.");
+  return vec;
 }
 
 // pgvector 입력 형식: '[0.1,0.2,...]' 문자열

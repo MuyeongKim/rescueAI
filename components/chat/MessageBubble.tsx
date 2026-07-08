@@ -86,7 +86,8 @@ export function MessageBubble({ message }: { message: Message }) {
       const res = await fetch("/api/feedback", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ messageId, feedback: next ?? value }),
+        // next===null 이면 0(취소)을 보내 서버가 평가를 지운다
+        body: JSON.stringify({ messageId, feedback: next ?? 0 }),
       });
       if (!res.ok) throw new Error(await res.text());
       setFeedback(next);

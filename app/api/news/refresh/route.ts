@@ -26,11 +26,12 @@ function decode(s: string): string {
     .replace(/<!\[CDATA\[/g, "")
     .replace(/\]\]>/g, "")
     .replace(/<[^>]+>/g, "")
-    .replace(/&amp;/g, "&")
+    // &amp; 는 반드시 마지막에 — 먼저 풀면 "&amp;lt;" 가 "<" 로 이중 언이스케이프됨
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
     .trim();
 }
 
@@ -111,10 +112,13 @@ async function refresh(): Promise<{ added: number; scanned: number }> {
     auto: true,
     hidden: false,
   }));
-  // 기존 url 은 위에서 이미 제외했으므로 단순 insert (부분 유니크 인덱스가 최종 방어).
-  const { error } = await admin.from("news").insert(rows);
+  // upsert(onConflict url, 중복 무시) — cron 과 관리자 수동 버튼이 겹쳐 url 유니크 충돌이 나도
+  // 배치 전체가 500 으로 실패하지 않게 한다(신규 행은 저장, 중복은 조용히 건너뜀).
+  const { error } = await admin
+    .from("news")
+    .upsert(rows, { onConflict: "url", ignoreDuplicates: true });
   if (error) {
-    console.error("[news/refresh] insert 실패:", error.message);
+    console.error("[news/refresh] upsert 실패:", error.message);
     throw new Error(error.message);
   }
   return { added: rows.length, scanned: candidates.length };

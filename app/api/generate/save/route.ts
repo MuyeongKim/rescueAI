@@ -30,6 +30,10 @@ export async function POST(req: Request) {
   if (!kind || !KINDS.includes(kind) || !title || body.content == null) {
     return new Response("잘못된 요청입니다.", { status: 400 });
   }
+  // content 크기 상한(약 500KB) — 비정상적으로 큰 payload 저장 차단
+  if (JSON.stringify(body.content).length > 500_000) {
+    return new Response("저장할 내용이 너무 큽니다.", { status: 413 });
+  }
 
   // 데모 모드: DB 없이 저장 성공으로 처리(UI 흐름 확인용)
   if (DEMO) return Response.json({ id: 0, demo: true });
@@ -52,13 +56,18 @@ export async function POST(req: Request) {
 
   // 재편집 저장: id 가 있으면 해당 행 업데이트(RLS 로 본인 것만).
   if (typeof body.id === "number" && Number.isInteger(body.id)) {
-    const { error } = await supabase
+    const { data, error } = await supabase
       .from("generated_materials")
       .update(fields)
-      .eq("id", body.id);
+      .eq("id", body.id)
+      .select("id");
     if (error) {
       console.error("[generate/save] update 실패:", error.message);
       return Response.json({ error: "저장 중 오류가 발생했습니다." }, { status: 500 });
+    }
+    // RLS 로 0행 매칭(남의 것·없는 id)이면 성공으로 오인하지 않게 404
+    if (!data || data.length === 0) {
+      return Response.json({ error: "저장할 자료를 찾을 수 없습니다." }, { status: 404 });
     }
     return Response.json({ id: body.id });
   }

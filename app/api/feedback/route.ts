@@ -18,15 +18,16 @@ export async function POST(req: Request) {
   }
 
   const { messageId, feedback } = body;
-  if (typeof messageId !== "number" || (feedback !== 1 && feedback !== -1)) {
-    return new Response("messageId(number)와 feedback(1|-1)이 필요합니다.", {
+  // feedback: 1=👍, -1=👎, 0=평가 취소(null 로 저장)
+  if (typeof messageId !== "number" || (feedback !== 1 && feedback !== -1 && feedback !== 0)) {
+    return new Response("messageId(number)와 feedback(1|-1|0)이 필요합니다.", {
       status: 400,
     });
   }
 
   const { error } = await supabase
     .from("messages")
-    .update({ feedback })
+    .update({ feedback: feedback === 0 ? null : feedback })
     .eq("id", messageId);
 
   if (error) {

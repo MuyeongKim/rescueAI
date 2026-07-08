@@ -102,9 +102,10 @@ export async function POST(req: Request) {
 
   // 6) user 메시지 선행 저장 (스트림 실패해도 질문은 보존)
   if (!ephemeral) {
-    await supabase
+    const { error: umErr } = await supabase
       .from("messages")
       .insert({ conversation_id: convId, role: "user", content: question });
+    if (umErr) console.error("[chat] user 메시지 저장 실패:", umErr.message);
   }
 
   const startedAt = Date.now();
