@@ -5,9 +5,11 @@ import {
   MAX_DURATION_MIN,
   calcPoints,
 } from "@/lib/fitness";
+import { kstDateStr } from "@/lib/kst";
 
+// 오늘(KST) — 서버 TZ(UTC)와 무관하게 한국 날짜 기준으로 소급/상한을 판정한다.
 function today(): string {
-  return new Date().toISOString().slice(0, 10);
+  return kstDateStr();
 }
 
 // 운동 기록 등록. 마일리지는 서버에서 계산(일일 상한 반영). RLS로 본인 기록만.

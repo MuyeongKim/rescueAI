@@ -1,6 +1,7 @@
 // 키 없는 데모/미리보기 모드. NEXT_PUBLIC_DEMO_MODE=1 일 때 Supabase/Anthropic/OpenAI 호출 없이
 // 목 데이터로 전체 UI를 둘러볼 수 있게 한다. 실제 흐름 코드는 if (DEMO) 가드로만 분기.
 import { calcWeekly } from "@/lib/fitness";
+import { kstDateStr } from "@/lib/kst";
 import type { DocSource } from "@/lib/database.types";
 import type { GeneratedDoc, GeneratedSlideDeck } from "@/lib/generate";
 
@@ -221,7 +222,7 @@ const DAY_MS = 86_400_000;
 export function getDemoAdminStats() {
   const daily: { date: string; count: number }[] = [];
   for (let i = 29; i >= 0; i--) {
-    const d = new Date(Date.now() - i * DAY_MS).toISOString().slice(0, 10);
+    const d = kstDateStr(new Date(Date.now() - i * DAY_MS));
     // 보기 좋은 가짜 추이
     const count = [2, 3, 5, 4, 6, 8, 7, 5, 9, 11][i % 10];
     daily.push({ date: d, count });

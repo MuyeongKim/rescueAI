@@ -8,17 +8,13 @@ import {
   type LeaderboardEntry,
   type WorkoutLog,
 } from "@/lib/fitness";
-
-function monthStart(): string {
-  const d = new Date();
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`;
-}
+import { kstMonthStartStr } from "@/lib/kst";
 
 // 현재 사용자의 마일리지 현황 + 이번 달 리더보드를 한 번에 조립한다. RLS로 본인 기록만.
 export async function getFitnessState(userId: string): Promise<FitnessState> {
   if (DEMO) return getDemoFitnessState();
   const supabase = await createClient();
-  const since = monthStart();
+  const since = kstMonthStartStr();
 
   const [logsRes, lbRes] = await Promise.all([
     supabase

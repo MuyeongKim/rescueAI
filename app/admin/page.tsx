@@ -11,6 +11,7 @@ import {
 
 import { createAdminClient } from "@/lib/supabase/admin";
 import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { kstDateStr, kstMonthStartStr } from "@/lib/kst";
 import { DEMO, getDemoAdminStats } from "@/lib/demo";
 import type { DocSource } from "@/lib/database.types";
 import {
@@ -97,7 +98,7 @@ async function loadAdminStats() {
       admin.from("documents").select("id, category"),
     ]);
 
-  const monthStartStr = `${new Date().toISOString().slice(0, 7)}-01`;
+  const monthStartStr = kstMonthStartStr();
   const [fitnessMonthRes, fitnessCountRes] = await Promise.all([
     admin
       .from("workout_logs")
@@ -142,13 +143,15 @@ async function loadAdminStats() {
     .sort((a, b) => b.count - a.count);
 
   const dayCount = new Map<string, number>();
+  // 일별 집계는 KST 날짜로 버킷팅(버킷 키·라벨 모두 KST 로 일치시킴)
   for (const r of dailyRes.data ?? []) {
-    const day = (r.created_at ?? "").slice(0, 10);
-    if (day) dayCount.set(day, (dayCount.get(day) ?? 0) + 1);
+    if (!r.created_at) continue;
+    const day = kstDateStr(new Date(r.created_at));
+    dayCount.set(day, (dayCount.get(day) ?? 0) + 1);
   }
   const daily: { date: string; count: number }[] = [];
   for (let i = 29; i >= 0; i--) {
-    const d = new Date(Date.now() - i * DAY_MS).toISOString().slice(0, 10);
+    const d = kstDateStr(new Date(Date.now() - i * DAY_MS));
     daily.push({ date: d, count: dayCount.get(d) ?? 0 });
   }
 

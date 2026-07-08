@@ -18,6 +18,7 @@ import { getFitnessState } from "@/lib/fitness-server";
 import { createClient } from "@/lib/supabase/server";
 import { isNewNotice } from "@/lib/notices";
 import { getRecentNews } from "@/lib/news";
+import { kstDate } from "@/lib/kst";
 import { DEMO, demoNotices, demoConversations } from "@/lib/demo";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -65,9 +66,10 @@ export default async function HomePage() {
   const name = profile?.full_name || user?.email?.split("@")[0] || "구조대원";
   const meta = [profile?.division, profile?.rank, profile?.team].filter(Boolean).join(" · ");
 
-  const now = new Date();
-  const dateStr = `${now.getFullYear()}년 ${now.getMonth() + 1}월 ${now.getDate()}일 (${
-    ["일", "월", "화", "수", "목", "금", "토"][now.getDay()]
+  // KST 기준(서버가 UTC 여도 한국 날짜·요일이 나오게)
+  const now = kstDate();
+  const dateStr = `${now.getUTCFullYear()}년 ${now.getUTCMonth() + 1}월 ${now.getUTCDate()}일 (${
+    ["일", "월", "화", "수", "목", "금", "토"][now.getUTCDay()]
   })`;
 
   const [notices, fitness, conversations, news] = await Promise.all([
