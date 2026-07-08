@@ -165,3 +165,37 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* 로그인 히어로 모션 — 출동 신호(비컨) 확산 + 오로라 드리프트 + 진입 상승.
+   폐쇄망이라 전부 CSS. prefers-reduced-motion 존중. */
+@keyframes beacon-ring {
+  0% { transform: scale(0.4); opacity: 0.5; }
+  100% { transform: scale(2.6); opacity: 0; }
+}
+@keyframes hero-drift {
+  0%, 100% { background-position: 0% 50%; }
+  50% { background-position: 100% 50%; }
+}
+@keyframes rise-in {
+  from { opacity: 0; transform: translateY(14px); }
+  to { opacity: 1; transform: none; }
+}
+
+@layer utilities {
+  .hero-aurora {
+    background-size: 200% 200%;
+    animation: hero-drift 20s ease-in-out infinite;
+  }
+  .beacon-ring {
+    animation: beacon-ring 3.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  }
+  .anim-rise {
+    opacity: 0;
+    animation: rise-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .hero-aurora,
+    .beacon-ring { animation: none; }
+    .anim-rise { opacity: 1; animation: none; }
+  }
+}
