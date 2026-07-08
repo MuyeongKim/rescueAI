@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 import {
   AUDIENCES,
   DURATIONS,
+  buildGenerateSystemPrompt,
   buildSectionRegenPrompt,
   buildSlideRegenPrompt,
   regeneratedSectionSchema,
@@ -95,7 +96,7 @@ export async function POST(req: Request) {
   }
 
   try {
-    const system = `다음은 전북소방 ${category} 분야 교육자료입니다. 이 자료만 근거로 작성하세요.\n\n[참고 자료]\n${contextText}`;
+    const system = buildGenerateSystemPrompt(category, contextText);
     const model = getChatModel(body.model);
 
     if (kind === "slide") {
