@@ -51,7 +51,11 @@ export async function POST(req: Request) {
     return new Response("Bad Request", { status: 400 });
   }
 
-  const messages: Message[] = body.messages ?? [];
+  // 클라이언트가 주입한 system/tool 메시지 제거 — 환각 가드레일(§9.2)은 서버(buildSystemPrompt)가
+  // 단독으로 넣는다. user/assistant 만 남겨 클라이언트가 시스템 지시를 덮어쓰지 못하게 한다.
+  const messages: Message[] = (body.messages ?? []).filter(
+    (m) => m.role === "user" || m.role === "assistant"
+  );
   const category: string | null = body.category ?? null;
   const modelKey: string | undefined = body.model || undefined;
 

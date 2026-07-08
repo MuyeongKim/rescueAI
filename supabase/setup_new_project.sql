@@ -158,6 +158,20 @@ create policy "own profile select" on profiles for select using (auth.uid() = id
 drop policy if exists "own profile update" on profiles;
 create policy "own profile update" on profiles for update using (auth.uid() = id);
 
+-- role 자가 승격 차단(0010): service_role(관리자 API) 외의 role 변경은 조용히 원복.
+create or replace function protect_profile_role()
+returns trigger language plpgsql as $$
+begin
+  if new.role is distinct from old.role and current_user <> 'service_role' then
+    new.role := old.role;
+  end if;
+  return new;
+end; $$;
+drop trigger if exists profiles_protect_role on public.profiles;
+create trigger profiles_protect_role
+  before update on public.profiles
+  for each row execute function protect_profile_role();
+
 -- 본인 대화
 drop policy if exists "own conversations" on conversations;
 create policy "own conversations" on conversations for all using (auth.uid() = user_id);
