@@ -147,7 +147,7 @@ export async function expandQuery(
       keywords: Array.isArray(object.keywords) ? object.keywords : [],
     };
   } catch (e) {
-    console.error("[rag2026] 쿼리 확장 실패, 원문 사용:", e);
+    console.error("[rag-external] 쿼리 확장 실패, 원문 사용:", e);
     return { embedText: query, keywords: [] };
   }
 }
@@ -188,13 +188,13 @@ async function llmRerank(
     }
     return picked;
   } catch (e) {
-    console.error("[rag2026] 재순위 실패, 융합 순서 유지:", e);
+    console.error("[rag-external] 재순위 실패, 융합 순서 유지:", e);
     return items.slice(0, keep);
   }
 }
 
 // 하이브리드 후보 검색: ① 벡터(RPC) + ② 키워드 full-text 병렬 → ③ RRF 융합.
-// 챗봇(searchRag2026)과 자료제작(fetchRag2026Context)이 동일 검색을 공유하는 단일 출처.
+// 챗봇(searchExternalRag)과 자료제작(fetchExternalRagContext)이 동일 검색을 공유하는 단일 출처.
 async function hybridCandidates(
   supabase: ReturnType<typeof createAdminClient>,
   embedding: number[],
@@ -220,8 +220,8 @@ async function hybridCandidates(
     })(),
   ]);
 
-  if (vecRes.error) console.error("[rag2026] vector error:", vecRes.error.message);
-  if (kwRes.error) console.error("[rag2026] keyword error:", kwRes.error.message);
+  if (vecRes.error) console.error("[rag-external] vector error:", vecRes.error.message);
+  if (kwRes.error) console.error("[rag-external] keyword error:", kwRes.error.message);
 
   const vecRows = (vecRes.data ?? []) as RagRow[];
   const kwRows = (kwRes.data ?? []) as RagRow[];
@@ -250,7 +250,7 @@ function buildContextFromRefined(
 }
 
 // 하이브리드 검색(벡터+키워드 RRF) + LLM 재순위 → 컨텍스트 + 출처 (lib/rag.ts SearchResult)
-export async function searchRag2026(
+export async function searchExternalRag(
   query: string,
   embedding: number[],
   topK: number,
@@ -298,7 +298,7 @@ const GEN_KEEP = 24;
 // 분야 자료를 모아 생성(AI 자료제작) 컨텍스트를 만든다.
 // topic 이 있으면 챗봇과 동일한 하이브리드 검색으로 "주제 관련" 청크를 우선 모으고,
 // 없거나(분야 전반) 검색 결과가 비면 분야 전체 청크로 폴백한다.
-export async function fetchRag2026Context(
+export async function fetchExternalRagContext(
   category: string,
   limit = 40,
   topic?: string
@@ -322,7 +322,7 @@ export async function fetchRag2026Context(
       if (refined.length > 0) return buildContextFromRefined(refined, 5);
       // 주제 검색 결과가 없으면 분야 전체로 폴백
     } catch (e) {
-      console.error("[rag2026] 주제 기반 검색 실패, 분야 전체로 폴백:", e);
+      console.error("[rag-external] 주제 기반 검색 실패, 분야 전체로 폴백:", e);
     }
   }
 
@@ -333,7 +333,7 @@ export async function fetchRag2026Context(
     .limit(limit * 2);
 
   if (error) {
-    console.error("[rag2026] fetch context error:", error.message);
+    console.error("[rag-external] fetch context error:", error.message);
     return { contextText: "", sources: [] };
   }
   const rows = (data ?? []) as RagRow[];
@@ -345,7 +345,7 @@ export async function fetchRag2026Context(
 
 // 분야 → 원본 파일명 목록 (AI 자료제작 선택지·NotebookLM 자료 목록용)
 // Supabase REST는 요청당 최대 1000행이라, 전체 분야를 빠짐없이 모으려면 페이지네이션 필요.
-export async function listRag2026Categories(): Promise<Record<string, string[]>> {
+export async function listExternalRagCategories(): Promise<Record<string, string[]>> {
   const supabase = createAdminClient();
   const PAGE = 1000;
   const byCat = new Map<string, Set<string>>();
@@ -355,7 +355,7 @@ export async function listRag2026Categories(): Promise<Record<string, string[]>>
       .select(`category:metadata->>${CATEGORY_FIELD}, source:metadata->>source`)
       .range(from, from + PAGE - 1);
     if (error) {
-      console.error("[rag2026] list categories error:", error.message);
+      console.error("[rag-external] list categories error:", error.message);
       break;
     }
     const rows = (data ?? []) as { category: string | null; source: string | null }[];

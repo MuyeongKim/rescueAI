@@ -3,7 +3,7 @@ import { ChevronRight, FolderOpen, Wand2 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/server";
 import { DEMO, demoDocuments } from "@/lib/demo";
-import { ragTableEnabled, listRag2026Categories } from "@/lib/rag2026";
+import { ragTableEnabled, listExternalRagCategories } from "@/lib/rag-external";
 import { COURSE_CATEGORIES } from "@/lib/courses";
 import { availableModels } from "@/lib/llm";
 import type { SavedMaterial } from "@/lib/generate";
@@ -30,8 +30,8 @@ async function loadMaterial(id?: string): Promise<SavedMaterial | undefined> {
 // 인덱싱된 자료가 있는 분야와 분야별 자료 제목을 모은다.
 // 자료 제목은 NotebookLM 프롬프트의 "업로드할 자료" 안내에 쓰인다.
 async function loadDocsByCategory(): Promise<Record<string, string[]>> {
-  // RAG_TABLE=rag_2026: 기존 임베딩 테이블의 분야·원본 파일 목록 사용
-  if (!DEMO && ragTableEnabled()) return listRag2026Categories();
+  // RAG_TABLE=rag_rescue: 기존 임베딩 테이블의 분야·원본 파일 목록 사용
+  if (!DEMO && ragTableEnabled()) return listExternalRagCategories();
 
   let rows: { title: string; category: string | null }[];
   if (DEMO) {

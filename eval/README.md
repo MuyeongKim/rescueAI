@@ -2,7 +2,7 @@
 
 PRD §2/§12 의 "평가셋 50문항 정확도 60% 이상"(AC-11) 측정용 오프라인 도구.
 
-검색·답변은 **앱과 동일한 운영 경로**(쿼리 확장 → Ollama bge-m3 임베딩 → `match_rag_2026`
+검색·답변은 **앱과 동일한 운영 경로**(쿼리 확장 → Ollama bge-m3 임베딩 → `match_rag_rescue`
 하이브리드 검색 + LLM 재순위 → Gemini 답변)를 그대로 호출한다. 그 로직은 TypeScript(`@/lib/*`)라
 `run.mjs`(standalone)에서 직접 import 할 수 없어, 실제 lib 코드를 import 하는 vitest 통합 러너
 (`tests/eval-run.integration.test.ts`)에 위임한다 — 파이프라인 단일 출처 유지(중복 구현 금지).

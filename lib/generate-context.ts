@@ -1,18 +1,18 @@
 // 자료제작 생성 컨텍스트 조회 — 전체 생성(/api/generate)과 부분 재생성(/api/generate/section)의 단일 출처.
 // 서버 전용(supabase/server·admin 의존). 클라이언트에서 import 하지 말 것.
 import { createClient } from "@/lib/supabase/server";
-import { ragTableEnabled, fetchRag2026Context } from "@/lib/rag2026";
+import { ragTableEnabled, fetchExternalRagContext } from "@/lib/rag-external";
 import type { GeneratedDocSource } from "@/lib/generate";
 
 // 분야 자료의 청크를 모아 생성 컨텍스트 + 출처 목록을 만든다.
-// topic 이 있으면 주제 관련 청크를 우선 검색한다(rag_2026 경로).
+// topic 이 있으면 주제 관련 청크를 우선 검색한다(rag_rescue 경로).
 export async function fetchCategoryContext(
   category: string,
   limit = 40,
   topic?: string
 ): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
-  // RAG_TABLE=rag_2026: 외부에서 임베딩해 둔 기존 테이블 사용
-  if (ragTableEnabled()) return fetchRag2026Context(category, limit, topic);
+  // RAG_TABLE=rag_rescue: 외부에서 임베딩해 둔 기존 테이블 사용
+  if (ragTableEnabled()) return fetchExternalRagContext(category, limit, topic);
 
   const supabase = await createClient();
   const { data: docs } = await supabase

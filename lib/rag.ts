@@ -1,6 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { getQueryEmbedding, toPgVector } from "@/lib/embeddings";
-import { ragTableEnabled, searchRag2026, expandQuery } from "@/lib/rag2026";
+import { ragTableEnabled, searchExternalRag, expandQuery } from "@/lib/rag-external";
 import type { DocSource } from "@/lib/database.types";
 
 // 근거가 없을 때의 표준 답변 문구 (환각 차단). 평가/테스트에서 참조.
@@ -36,10 +36,10 @@ export async function searchContext(
   const { embedText, keywords } = await expandQuery(query);
   const embedding = await getQueryEmbedding(embedText);
 
-  // RAG_TABLE=rag_2026: 외부에서 임베딩해 둔 기존 테이블로 검색 (홈서버 BGE 임베딩)
+  // RAG_TABLE=rag_rescue: 외부에서 임베딩해 둔 기존 테이블로 검색 (홈서버 BGE 임베딩)
   // 하이브리드(벡터+키워드 RRF) + LLM 재순위를 위해 원문 query·확장 키워드도 함께 넘긴다.
   if (ragTableEnabled()) {
-    return searchRag2026(query, embedding, topK, category, keywords);
+    return searchExternalRag(query, embedding, topK, category, keywords);
   }
 
   const supabase = await createClient();
