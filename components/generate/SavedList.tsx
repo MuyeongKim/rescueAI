@@ -55,15 +55,6 @@ export function SavedList({ initial }: { initial: SavedMaterial[] }) {
   const [openId, setOpenId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
-  function downloadBlob(blob: Blob, filename: string) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
-    a.click();
-    URL.revokeObjectURL(url);
-  }
-
   async function handleDownload(it: SavedMaterial) {
     setBusyId(it.id);
     try {
@@ -90,8 +81,11 @@ export function SavedList({ initial }: { initial: SavedMaterial[] }) {
           sections: c.sections ?? [],
           sources: c.sources ?? [],
         };
-        const { buildHwpxBlob } = await import("@/lib/hwpx");
-        downloadBlob(await buildHwpxBlob(doc), `${doc.title.slice(0, 50)}.hwpx`);
+        // 미니서버(hwp-writer-api) 우선, 실패 시 로컬 생성 폴백
+        const { downloadHwpx } = await import("@/lib/hwpx-download");
+        if ((await downloadHwpx(doc)) === "local") {
+          toast.info("한글 작성 서버 미연결 — 기본 양식으로 생성했습니다");
+        }
       }
     } catch {
       toast.error("다운로드에 실패했습니다");

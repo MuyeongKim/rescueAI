@@ -493,9 +493,12 @@ export function GenerateForm({
   async function handleHwpx() {
     if (!doc) return;
     try {
-      // hwpx 빌더도 다운로드 시점에만 로드
-      const { buildHwpxBlob } = await import("@/lib/hwpx");
-      downloadBlob(await buildHwpxBlob(doc), `${doc.title.slice(0, 50)}.hwpx`);
+      // 미니서버(hwp-writer-api) 우선, 실패 시 로컬 생성 폴백
+      const { downloadHwpx } = await import("@/lib/hwpx-download");
+      const via = await downloadHwpx(doc);
+      if (via === "local") {
+        toast.info("한글 작성 서버 미연결 — 기본 양식으로 생성했습니다");
+      }
     } catch {
       toast.error("한글 파일 생성에 실패했습니다");
     }
