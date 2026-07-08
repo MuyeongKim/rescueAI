@@ -15,8 +15,9 @@
 - **Vercel AI SDK v4** (`ai`, `@ai-sdk/anthropic`) — `useChat` / `streamText` 스트리밍
 - **Anthropic Claude** (`ANTHROPIC_MODEL`, 기본 `claude-sonnet-4-5`)
 - **Supabase** (PostgreSQL + pgvector + Auth + Storage), `@supabase/supabase-js` + `@supabase/ssr`
-- **임베딩**: 기본 OpenAI `text-embedding-3-small` @ **1024차원** / 옵션 BGE-M3(자체 호스팅).
-  `EMBEDDING_PROVIDER` 로 전환. **인덱서와 웹앱은 같은 제공자/차원을 써야 함.**
+- **임베딩**: 기본 Google `gemini-embedding-001` @ **1024차원**(MRL 절단) / 옵션 OpenAI `text-embedding-3-small`·BGE-M3·Ollama(자체 호스팅).
+  `EMBEDDING_PROVIDER`(auto|google|openai|bge|ollama) 로 전환 — auto 는 Ollama 우선·불가 시 Google 폴백.
+  **인덱서(rag7.py)와 웹앱은 같은 제공자/모델/차원을 써야 함**(폴백 중 검색 품질 무의미 — 앱 생존용).
 - **차트** recharts · **PDF** react-pdf · **날짜** date-fns
 - **인덱싱** Python (`indexing/`, 웹앱과 분리)
 

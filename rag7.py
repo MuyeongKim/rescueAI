@@ -319,6 +319,66 @@ class FastOllamaEmbeddings:
         return self._embed_batch([prompt])[0]
 
 
+class GoogleGenAIEmbeddings:
+    """
+    Google Generative AI 임베딩 (gemini-embedding-001). 웹앱(lib/embeddings.ts)과 동일 모델·차원.
+    - 문서 적재: taskType=RETRIEVAL_DOCUMENT / 쿼리: RETRIEVAL_QUERY (웹앱과 대칭)
+    - outputDimensionality=1024 로 MRL 절단 → DB vector(1024) 스키마와 일치
+    langchain 의존 없이 REST(batchEmbedContents)만 사용한다.
+    """
+
+    BASE = "https://generativelanguage.googleapis.com/v1beta"
+
+    def __init__(self, model="gemini-embedding-001", api_key="", output_dim=1024, batch_size=100, timeout=120):
+        if not api_key:
+            raise SystemExit(
+                "GOOGLE_GENERATIVE_AI_API_KEY 가 필요합니다 (EMBEDDING_PROVIDER=google).\n"
+                ".env.local 에 설정하세요."
+            )
+        self.model = model
+        self.api_key = api_key
+        self.output_dim = int(output_dim)
+        self.batch_size = max(1, int(batch_size))
+        self.timeout = timeout
+        self.session = requests.Session()
+
+    def _embed(self, texts, task_type):
+        vectors = []
+        model_path = f"models/{self.model}"
+        for i in range(0, len(texts), self.batch_size):
+            sub = texts[i : i + self.batch_size]
+            payload = {
+                "requests": [
+                    {
+                        "model": model_path,
+                        "content": {"parts": [{"text": t}]},
+                        "taskType": task_type,
+                        "outputDimensionality": self.output_dim,
+                    }
+                    for t in sub
+                ]
+            }
+            res = self.session.post(
+                f"{self.BASE}/{model_path}:batchEmbedContents?key={self.api_key}",
+                json=payload,
+                timeout=self.timeout,
+            )
+            if res.status_code != 200:
+                raise ValueError(f"Google 임베딩 호출 실패: {res.status_code}, {res.text}")
+            data = res.json()
+            embeddings = data.get("embeddings")
+            if not isinstance(embeddings, list) or len(embeddings) != len(sub):
+                raise ValueError(f"Google 임베딩 응답 형식/개수 오류: {data}")
+            vectors.extend(e.get("values", []) for e in embeddings)
+        return vectors
+
+    def embed_documents(self, texts):
+        return self._embed(list(texts), "RETRIEVAL_DOCUMENT")
+
+    def embed_query(self, text):
+        return self._embed([text], "RETRIEVAL_QUERY")[0]
+
+
 class SafeEmbeddings:
     """임베딩 결과를 검증해 잘못된 벡터가 DB에 적재되지 않게 한다."""
 
@@ -499,19 +559,65 @@ def resolve_ollama_request_options(base_url):
     return {}
 
 
-OLLAMA_BASE_URL = resolve_ollama_base_url(
-    fallback_url=OLLAMA_FALLBACK_BASE_URL,
-    model=OLLAMA_MODEL,
-    local_url=OLLAMA_LOCAL_BASE_URL,
-)
-OLLAMA_REQUEST_OPTIONS = resolve_ollama_request_options(OLLAMA_BASE_URL)
+def _ollama_reachable(base_url, timeout=3.0):
+    """Ollama 서버 생존 확인 (auto 모드 폴백 판단용)."""
+    try:
+        res = requests.get(f"{base_url.rstrip('/')}/api/tags", timeout=timeout)
+        return res.status_code == 200
+    except requests.RequestException:
+        return False
 
-raw_embeddings = FastOllamaEmbeddings(
-    model=OLLAMA_MODEL,
-    base_url=OLLAMA_BASE_URL,
-    batch_size=EMBED_BATCH_SIZE,
-    request_options=OLLAMA_REQUEST_OPTIONS,
-)
+
+# 임베딩 제공자 — 웹앱(lib/embeddings.ts)과 반드시 동일해야 검색이 된다.
+# auto: Ollama(홈서버) 우선, 접속 불가면 Google 폴백 — 실행 시작 시 1회만 결정한다
+#       (적재 도중 제공자가 바뀌면 벡터가 섞여 코퍼스가 오염되므로 중간 전환은 하지 않는다).
+# 기본 google(gemini-embedding-001). 홈서버 Ollama bge-m3 를 쓰려면 EMBEDDING_PROVIDER=ollama.
+# 그 외 값(openai/bge 등)은 웹앱과 다른 벡터가 조용히 적재되는 사고를 막기 위해 즉시 중단한다.
+EMBEDDING_PROVIDER = os.getenv("EMBEDDING_PROVIDER", "google").strip().lower()
+
+_AUTO_OLLAMA_BASE_URL = None  # auto 모드에서 이미 탐지한 주소 재사용(이중 핑 방지)
+if EMBEDDING_PROVIDER == "auto":
+    _AUTO_OLLAMA_BASE_URL = resolve_ollama_base_url(
+        fallback_url=OLLAMA_FALLBACK_BASE_URL,
+        model=OLLAMA_MODEL,
+        local_url=OLLAMA_LOCAL_BASE_URL,
+    )
+    if _ollama_reachable(_AUTO_OLLAMA_BASE_URL):
+        EMBEDDING_PROVIDER = "ollama"
+    else:
+        print(f"⚠️ auto: Ollama 접속 불가({_AUTO_OLLAMA_BASE_URL}) → Google 임베딩으로 폴백합니다.")
+        print("⚠️ 주의: 기존 rag_rescue 가 bge-m3(Ollama) 벡터라면 Google 로 적재 시 벡터가 섞여")
+        print("   검색이 망가집니다. 의도한 전환이 아니면 Ollama 서버를 살린 뒤 다시 실행하세요.")
+        EMBEDDING_PROVIDER = "google"
+
+if EMBEDDING_PROVIDER == "google":
+    print("🔷 임베딩 제공자: Google (gemini-embedding-001, 1024차원)")
+    raw_embeddings = GoogleGenAIEmbeddings(
+        model=os.getenv("GOOGLE_EMBEDDING_MODEL", "gemini-embedding-001"),
+        api_key=os.getenv("GOOGLE_GENERATIVE_AI_API_KEY", ""),
+        output_dim=1024,
+    )
+elif EMBEDDING_PROVIDER == "ollama":
+    # Ollama 서버 탐지는 실제로 Ollama 를 쓸 때만 수행 (google 모드에서 불필요한 핑 방지).
+    # auto 모드에서 이미 탐지했으면 그 주소를 재사용한다.
+    OLLAMA_BASE_URL = _AUTO_OLLAMA_BASE_URL or resolve_ollama_base_url(
+        fallback_url=OLLAMA_FALLBACK_BASE_URL,
+        model=OLLAMA_MODEL,
+        local_url=OLLAMA_LOCAL_BASE_URL,
+    )
+    OLLAMA_REQUEST_OPTIONS = resolve_ollama_request_options(OLLAMA_BASE_URL)
+    print(f"🔶 임베딩 제공자: Ollama ({OLLAMA_MODEL} @ {OLLAMA_BASE_URL})")
+    raw_embeddings = FastOllamaEmbeddings(
+        model=OLLAMA_MODEL,
+        base_url=OLLAMA_BASE_URL,
+        batch_size=EMBED_BATCH_SIZE,
+        request_options=OLLAMA_REQUEST_OPTIONS,
+    )
+else:
+    raise SystemExit(
+        f"지원하지 않는 EMBEDDING_PROVIDER='{EMBEDDING_PROVIDER}' — rag7.py 는 google | ollama 만 지원합니다.\n"
+        "웹앱(lib/embeddings.ts)과 다른 모델로 적재하면 검색이 조용히 망가지므로 중단합니다."
+    )
 embeddings = SafeEmbeddings(raw_embeddings)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
