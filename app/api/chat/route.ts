@@ -8,6 +8,7 @@ import {
 } from "ai";
 import { createClient } from "@/lib/supabase/server";
 import { searchContext, buildSystemPrompt } from "@/lib/rag";
+import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { DEMO, demoChatAnswer, demoChatSources } from "@/lib/demo";
 import type { DocSource } from "@/lib/database.types";
 
@@ -38,6 +39,10 @@ export async function POST(req: Request) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
+
+  // LLM 호출 남용 방지 (분당 30회/사용자)
+  const rl = rateLimit(`chat:${user.id}`, 30, 60_000);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   let body: {
     messages?: Message[];
@@ -146,6 +151,9 @@ export async function POST(req: Request) {
         },
       });
 
+      // 클라이언트가 중간에 끊거나(Stop·탭 닫기) 연결이 끊겨도 스트림을 끝까지 소비해
+      // onFinish(assistant 메시지 저장)가 반드시 실행되게 한다. 없으면 질문만 남고 답변 유실.
+      result.consumeStream();
       result.mergeIntoDataStream(dataStream);
     },
     onError: (error) => {

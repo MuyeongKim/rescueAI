@@ -14,6 +14,7 @@ import {
 } from "@/lib/generate";
 import { DEMO, demoGeneratedDoc, demoGeneratedSlides } from "@/lib/demo";
 import { fetchCategoryContext } from "@/lib/generate-context";
+import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 export const maxDuration = 60;
 
@@ -49,6 +50,10 @@ export async function POST(req: Request) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
+
+  // 문서 생성은 비용이 크므로 더 타이트하게 (분당 10회/사용자)
+  const rl = rateLimit(`generate:${user.id}`, 10, 60_000);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   const type = body.type;
   const category = (body.category ?? "").trim();

@@ -5,6 +5,7 @@ import {
   CircleUser,
   Dumbbell,
   FolderOpen,
+  LogOut,
   NotebookPen,
   Siren,
   Target,
@@ -176,6 +177,21 @@ export default async function MePage() {
       <Card className="md:hidden">
         <CardContent className="p-2">
           <ThemeToggle />
+        </CardContent>
+      </Card>
+
+      {/* 로그아웃 — 모바일 탭바·사이드바가 없어 여기가 유일한 로그아웃 동선(데스크톱은 사이드바) */}
+      <Card className="md:hidden">
+        <CardContent className="p-2">
+          <form action="/auth/signout" method="post">
+            <button
+              type="submit"
+              className="flex h-12 w-full items-center gap-2 rounded-md px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/60"
+            >
+              <LogOut className="h-4 w-4 shrink-0" />
+              로그아웃
+            </button>
+          </form>
         </CardContent>
       </Card>
 
