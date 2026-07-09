@@ -48,7 +48,7 @@ export function SourceBadge({ source }: { source: DocSource }) {
           <div className="rounded-md border bg-muted/30 p-3 text-sm leading-relaxed whitespace-pre-wrap">
             {source.content}
           </div>
-          {/* 외부 임베딩 자료(rag_2026 등)는 원문 뷰어가 없어 document_id=0 — 링크 숨김 */}
+          {/* 외부 임베딩 자료(rag_rescue 등)는 원문 뷰어가 없어 document_id=0 — 링크 숨김 */}
           {source.document_id > 0 && (
             <Link href={href} className="block">
               <Button className="h-12 w-full gap-2 text-base">

@@ -156,6 +156,16 @@ def process_file(sb, path: Path, manifest: dict):
 
     meta = meta_for(path, manifest)
 
+    # 임베딩을 삭제·삽입보다 먼저 수행한다 — 실패/차원불일치 시 기존 데이터를 지우거나
+    # 청크 0개짜리 문서를 남기지 않아 유실·고아 문서를 방지한다.
+    print("  청크 " + str(len(all_chunks)) + "개 임베딩…")
+    embs = embed_texts([c.content for c in all_chunks])
+    if embs and len(embs[0]) != EMBEDDING_DIM:
+        sys.exit(
+            "임베딩 차원 불일치: %d (기대 %d). EMBEDDING_PROVIDER/모델 확인."
+            % (len(embs[0]), EMBEDDING_DIM)
+        )
+
     # 멱등성: 같은 파일명 문서가 있으면 삭제(연쇄로 chunks 삭제) 후 재적재
     existing = sb.table("documents").select("id").eq("original_filename", path.name).execute()
     for row in existing.data or []:
@@ -181,14 +191,6 @@ def process_file(sb, path: Path, manifest: dict):
         .execute()
     )
     doc_id = inserted.data[0]["id"]
-
-    print("  청크 " + str(len(all_chunks)) + "개 임베딩…")
-    embs = embed_texts([c.content for c in all_chunks])
-    if embs and len(embs[0]) != EMBEDDING_DIM:
-        sys.exit(
-            "임베딩 차원 불일치: %d (기대 %d). EMBEDDING_PROVIDER/모델 확인."
-            % (len(embs[0]), EMBEDDING_DIM)
-        )
 
     rows = []
     for c, e in zip(all_chunks, embs):

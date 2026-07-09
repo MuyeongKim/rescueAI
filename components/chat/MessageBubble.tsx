@@ -3,7 +3,7 @@
 import { useState, type ReactNode } from "react";
 import Link from "next/link";
 import type { Message } from "ai";
-import { ThumbsUp, ThumbsDown, Flame } from "lucide-react";
+import { ThumbsUp, ThumbsDown, Flame, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import type { DocSource } from "@/lib/database.types";
 import { cn } from "@/lib/utils";
@@ -28,7 +28,8 @@ function linkifyCitations(content: string, sources: DocSource[]): ReactNode {
         (s.page == null || s.page === page) &&
         (title.includes(s.doc) || s.doc.includes(title.trim()))
     );
-    if (!src) continue;
+    // 원문 뷰어가 없는 외부 자료(document_id<=0)는 /docs/0 깨진 링크가 되므로 링크화하지 않고 원문 유지
+    if (!src || src.document_id <= 0) continue;
 
     const idx = m.index ?? 0;
     if (idx > last) nodes.push(content.slice(last, idx));
@@ -53,6 +54,7 @@ type ChatAnnotation = {
   conversationId?: string;
   sources?: DocSource[];
   feedback?: number | null;
+  degraded?: boolean; // 검색 인프라 장애로 근거가 제한적일 수 있음
 };
 
 function extractAnnotation(message: Message): ChatAnnotation | null {
@@ -69,6 +71,7 @@ export function MessageBubble({ message }: { message: Message }) {
   const annotation = extractAnnotation(message);
   const sources = annotation?.sources ?? [];
   const messageId = annotation?.messageId ?? null;
+  const degraded = annotation?.degraded ?? false;
 
   const [feedback, setFeedback] = useState<number | null>(
     annotation?.feedback ?? null
@@ -124,6 +127,13 @@ export function MessageBubble({ message }: { message: Message }) {
             <span className="text-muted-foreground">생각하는 중…</span>
           )}
         </div>
+
+        {degraded && (
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+            자료 검색이 일시적으로 원활하지 않아 근거가 제한적일 수 있습니다.
+          </div>
+        )}
 
         {sources.length > 0 && (
           <div className="flex flex-wrap items-center gap-1.5">

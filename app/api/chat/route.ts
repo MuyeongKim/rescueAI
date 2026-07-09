@@ -7,7 +7,7 @@ import {
   type Message,
 } from "ai";
 import { createClient } from "@/lib/supabase/server";
-import { searchContext, buildSystemPrompt } from "@/lib/rag";
+import { searchContext, buildSystemPrompt, NOT_FOUND_MESSAGE } from "@/lib/rag";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { DEMO, demoChatAnswer, demoChatSources } from "@/lib/demo";
 import type { DocSource } from "@/lib/database.types";
@@ -69,14 +69,18 @@ export async function POST(req: Request) {
   if (!question) return new Response("질문이 비어 있습니다.", { status: 400 });
 
   // 1~3) RAG 검색 + 컨텍스트 조립 (실패 시 빈 컨텍스트로 우아하게 강등)
+  // ragFailed: 검색 인프라 장애(임베딩/DB 예외)와 "근거 없음"(정상 검색·결과 0)을 구분한다.
+  // 장애면 답변은 진행하되 degraded 플래그로 UI 가 "검색이 원활하지 않음"을 안내한다.
   let contextText = "";
   let sources: DocSource[] = [];
+  let ragFailed = false;
   try {
     const r = await searchContext(question, category);
     contextText = r.contextText;
     sources = r.sources;
   } catch (e) {
-    console.error("[chat] RAG 실패 — 컨텍스트 없이 진행:", e);
+    ragFailed = true;
+    console.error("[chat] RAG 인프라 장애 — 컨텍스트 없이 진행:", e);
   }
 
   // 7) 대화 보장 (없으면 신규 생성, 제목=첫 질문 앞부분)
@@ -126,6 +130,9 @@ export async function POST(req: Request) {
         temperature: 0.2,
         onFinish: async ({ text }) => {
           const latencyMs = Date.now() - startedAt;
+          // "확인되지 않습니다" 답변에는 출처를 붙이지 않는다(검색됐지만 무관한 출처가
+          // 근거 없음 답변과 모순되어 보이는 문제 방지).
+          const effectiveSources = text.includes(NOT_FOUND_MESSAGE) ? [] : sources;
           let saved: { id: number } | null = null;
           if (!ephemeral) {
             const { data, error } = await supabase
@@ -134,7 +141,7 @@ export async function POST(req: Request) {
                 conversation_id: convId,
                 role: "assistant",
                 content: text,
-                sources: sources.length > 0 ? sources : null,
+                sources: effectiveSources.length > 0 ? effectiveSources : null,
                 latency_ms: latencyMs,
               })
               .select("id")
@@ -147,7 +154,8 @@ export async function POST(req: Request) {
           dataStream.writeMessageAnnotation({
             messageId: saved?.id ?? null,
             conversationId: convId,
-            sources,
+            sources: effectiveSources,
+            degraded: ragFailed,
           });
         },
       });
