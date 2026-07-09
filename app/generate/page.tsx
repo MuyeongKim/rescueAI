@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, FolderOpen, Wand2 } from "lucide-react";
+import { ChevronRight, FolderOpen, Users, Wand2 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/server";
 import { DEMO, demoDocuments } from "@/lib/demo";
@@ -79,6 +79,13 @@ export default async function GeneratePage({
         <p className="mt-1 text-sm text-muted-foreground">
           인덱싱된 교육자료를 근거로 훈련계획·교안·슬라이드를 만들어 드립니다.
         </p>
+        <Link
+          href="/generate/shared"
+          className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+        >
+          <Users className="h-4 w-4" /> 동료가 만든 자료 보기
+          <ChevronRight className="h-4 w-4" />
+        </Link>
       </div>
 
       {categories.length === 0 && !initialMaterial ? (

@@ -8,6 +8,7 @@ import {
   Menu,
   Newspaper,
   Siren,
+  Users,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -27,6 +28,7 @@ const MORE_ITEMS = [
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
   { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
   { key: "docs", href: "/docs", label: "자료실", icon: FileText },
+  { key: "generate-shared", href: "/generate/shared", label: "공유 자료실", icon: Users },
   { key: "notices", href: "/notices", label: "공지사항", icon: Megaphone },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
 ];

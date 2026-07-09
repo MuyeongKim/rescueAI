@@ -227,6 +227,8 @@ type GeneratedMaterialsRow = {
   topic: string | null;
   title: string;
   content: unknown; // {sections|slides|prompt, sources}
+  shared: boolean;
+  author_name: string | null;
   created_at: string;
 };
 type GeneratedMaterialsInsert = {
@@ -239,6 +241,8 @@ type GeneratedMaterialsInsert = {
   topic?: string | null;
   title: string;
   content: unknown;
+  shared?: boolean;
+  author_name?: string | null;
   created_at?: string;
 };
 
@@ -332,6 +336,10 @@ export interface Database {
           page_num: number | null;
           rrf_score: number;
         }[];
+      };
+      popular_questions: {
+        Args: { days?: number; min_count?: number; max_rows?: number };
+        Returns: { question: string; cnt: number }[];
       };
     };
     Enums: Record<string, never>;

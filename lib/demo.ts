@@ -44,6 +44,15 @@ export const demoConversations = [
   { id: "demo-conv-2", title: "급류 구조 시 접근 방법", updated_at: "2026-05-29T17:40:00.000Z" },
 ];
 
+// 챗봇 빈 화면에 보여줄 인기 질문(데모) — 실제로는 popular_questions RPC 집계
+export const demoPopularQuestions = [
+  "공기호흡기 착용 전 점검 절차를 알려줘",
+  "급류 구조 시 요구조자 접근 방법은?",
+  "유압전개기 안전 사용 수칙",
+  "로프 하강 시 확보물 설치 기준",
+  "산악 조난자 저체온증 응급처치",
+];
+
 export const demoChatSources: DocSource[] = [
   { document_id: 6, doc: "공기호흡기 착용 절차", page: 3, content: "사용 전 면체 밀착 점검, 잔압계로 충전 압력(보통 300bar 내외) 확인, 경보장치 작동 여부를 점검한다." },
   { document_id: 6, doc: "공기호흡기 착용 절차", page: 4, content: "양압 작동 상태에서 면체 누설 여부를 확인하고, 잔압 경보가 정상 작동하는지 확인 후 진입한다." },

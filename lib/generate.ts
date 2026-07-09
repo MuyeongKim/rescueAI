@@ -200,6 +200,8 @@ export type SavedMaterial = {
   topic: string | null;
   title: string;
   content: unknown;
+  shared?: boolean;
+  author_name?: string | null;
   created_at: string;
 };
 

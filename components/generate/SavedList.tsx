@@ -6,11 +6,13 @@ import { toast } from "sonner";
 import {
   ChevronDown,
   Copy,
+  CopyPlus,
   Download,
   FileText,
   Loader2,
   Pencil,
   Presentation,
+  Share2,
   Sparkles,
   Trash2,
 } from "lucide-react";
@@ -49,7 +51,14 @@ type DocContent = { sections?: GeneratedDoc["sections"]; sources?: GeneratedDoc[
 type DeckContent = { slides?: GeneratedSlideDeck["slides"]; sources?: GeneratedSlideDeck["sources"] };
 type NlmContent = { prompt?: string };
 
-export function SavedList({ initial }: { initial: SavedMaterial[] }) {
+export function SavedList({
+  initial,
+  mode = "own",
+}: {
+  initial: SavedMaterial[];
+  /** own: 내 자료(편집·삭제·공유토글) / shared: 공유 갤러리(읽기전용·복제) */
+  mode?: "own" | "shared";
+}) {
   const router = useRouter();
   const [items, setItems] = useState(initial);
   const [openId, setOpenId] = useState<number | null>(null);
@@ -113,6 +122,58 @@ export function SavedList({ initial }: { initial: SavedMaterial[] }) {
     }
   }
 
+  // 내 자료 공유/해제 토글
+  async function toggleShare(it: SavedMaterial) {
+    setBusyId(it.id);
+    const next = !it.shared;
+    try {
+      const res = await fetch("/api/generate/save", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: it.id, shared: next }),
+      });
+      if (!res.ok) {
+        toast.error(await res.text());
+        return;
+      }
+      setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, shared: next } : x)));
+      toast.success(next ? "공유했습니다. 동료가 볼 수 있어요." : "공유를 해제했습니다.");
+    } catch {
+      toast.error("네트워크 오류로 변경하지 못했습니다.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  // 공유 자료를 내 자료로 복제(편집 가능하게)
+  async function cloneToMine(it: SavedMaterial) {
+    setBusyId(it.id);
+    try {
+      const res = await fetch("/api/generate/save", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          kind: it.kind,
+          category: it.category,
+          audience: it.audience,
+          duration: it.duration,
+          topic: it.topic,
+          title: it.title,
+          content: it.content,
+        }),
+      });
+      if (!res.ok) {
+        toast.error("복제에 실패했습니다");
+        return;
+      }
+      toast.success("내 자료로 복제했습니다. ‘저장한 자료’에서 편집할 수 있어요.");
+    } catch {
+      toast.error("네트워크 오류로 복제하지 못했습니다");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
   return (
     <div className="space-y-3">
       {items.map((it) => {
@@ -149,7 +210,15 @@ export function SavedList({ initial }: { initial: SavedMaterial[] }) {
                         {it.category}
                       </Badge>
                     )}
+                    {mode === "shared" && it.author_name && (
+                      <span className="text-muted-foreground">· {it.author_name}</span>
+                    )}
                     <span>{formatDate(it.created_at)}</span>
+                    {mode === "own" && it.shared && (
+                      <Badge variant="secondary" className="gap-1 font-normal text-primary">
+                        <Share2 className="h-3 w-3" /> 공유 중
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </div>
@@ -188,7 +257,7 @@ export function SavedList({ initial }: { initial: SavedMaterial[] }) {
                       ? "PPTX"
                       : "한글(hwpx)"}
                 </Button>
-                {it.kind !== "notebooklm" && (
+                {mode === "own" && it.kind !== "notebooklm" && (
                   <Button
                     type="button"
                     variant="outline"
@@ -200,16 +269,42 @@ export function SavedList({ initial }: { initial: SavedMaterial[] }) {
                     <Pencil className="h-4 w-4" /> 편집
                   </Button>
                 )}
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="sm"
-                  className="ml-auto gap-1.5 text-destructive hover:text-destructive"
-                  disabled={busy}
-                  onClick={() => handleDelete(it.id)}
-                >
-                  <Trash2 className="h-4 w-4" /> 삭제
-                </Button>
+                {mode === "shared" && (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-1.5"
+                    disabled={busy}
+                    onClick={() => cloneToMine(it)}
+                  >
+                    <CopyPlus className="h-4 w-4" /> 내 자료로 복제
+                  </Button>
+                )}
+                {mode === "own" && (
+                  <>
+                    <Button
+                      type="button"
+                      variant={it.shared ? "secondary" : "outline"}
+                      size="sm"
+                      className="gap-1.5"
+                      disabled={busy}
+                      onClick={() => toggleShare(it)}
+                    >
+                      <Share2 className="h-4 w-4" /> {it.shared ? "공유 해제" : "공유"}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="ml-auto gap-1.5 text-destructive hover:text-destructive"
+                      disabled={busy}
+                      onClick={() => handleDelete(it.id)}
+                    >
+                      <Trash2 className="h-4 w-4" /> 삭제
+                    </Button>
+                  </>
+                )}
               </div>
 
               {open && (

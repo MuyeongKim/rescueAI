@@ -106,3 +106,48 @@ export async function DELETE(req: Request) {
   }
   return Response.json({ ok: true });
 }
+
+// 공유 토글 — 본인 자료를 다른 대원에게 공개/비공개(RLS 로 본인 것만).
+// 공유 시 작성자 이름을 비정규화 저장(profiles 는 본인만 읽혀 목록에서 이름을 못 가져오므로).
+export async function PATCH(req: Request) {
+  let body: { id?: number; shared?: boolean };
+  try {
+    body = await req.json();
+  } catch {
+    return new Response("Bad Request", { status: 400 });
+  }
+  if (typeof body.id !== "number" || typeof body.shared !== "boolean") {
+    return new Response("id(number)와 shared(boolean)가 필요합니다.", { status: 400 });
+  }
+  if (DEMO) return Response.json({ ok: true, demo: true });
+
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return new Response("Unauthorized", { status: 401 });
+
+  const patch: { shared: boolean; author_name?: string } = { shared: body.shared };
+  if (body.shared) {
+    const { data: prof } = await supabase
+      .from("profiles")
+      .select("full_name")
+      .eq("id", user.id)
+      .maybeSingle();
+    patch.author_name = prof?.full_name ?? user.email?.split("@")[0] ?? "구조대원";
+  }
+
+  const { data, error } = await supabase
+    .from("generated_materials")
+    .update(patch)
+    .eq("id", body.id)
+    .select("id");
+  if (error) {
+    console.error("[generate/save] 공유 토글 실패:", error.message);
+    return Response.json({ error: "공유 설정에 실패했습니다." }, { status: 500 });
+  }
+  if (!data || data.length === 0) {
+    return Response.json({ error: "자료를 찾을 수 없습니다." }, { status: 404 });
+  }
+  return Response.json({ ok: true, shared: body.shared });
+}

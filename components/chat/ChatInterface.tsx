@@ -20,7 +20,8 @@ import { ConversationList } from "@/components/chat/ConversationList";
 
 const DEFAULT_CATEGORIES = ["산악", "수난", "화재", "구급"];
 
-const EXAMPLES = [
+// 인기 질문이 없을 때(집계 부족) 폴백으로 보여줄 기본 예시
+const FALLBACK_EXAMPLES = [
   "공기호흡기 착용 전 점검 절차를 알려줘",
   "수난 구조 시 요구조자 접근 방법은?",
   "유압전개기 안전 사용 수칙",
@@ -32,6 +33,7 @@ export function ChatInterface({
   initialInput,
   categories,
   models = [],
+  popular = [],
 }: {
   conversationId?: string;
   initialMessages?: Message[];
@@ -41,6 +43,8 @@ export function ChatInterface({
   categories?: string[];
   /** 사용 가능한 LLM 모델(자격증명 있는 것만) — 서버 availableModels() */
   models?: { key: string; label: string; note?: string }[];
+  /** 인기 질문(대원들이 자주 묻는 것) — 없으면 기본 예시로 폴백 */
+  popular?: string[];
 }) {
   const [category, setCategory] = useState<string>("전체");
   const [model, setModel] = useState<string>(models[0]?.key ?? "");
@@ -104,6 +108,8 @@ export function ChatInterface({
   }
 
   const empty = messages.length === 0;
+  const examples = popular.length > 0 ? popular : FALLBACK_EXAMPLES;
+  const examplesTitle = popular.length > 0 ? "대원들이 자주 묻는 질문" : "이렇게 물어보세요";
 
   return (
     <div className="flex h-full flex-col">
@@ -166,7 +172,10 @@ export function ChatInterface({
                 </p>
               </div>
               <div className="flex w-full flex-col gap-2">
-                {EXAMPLES.map((q) => (
+                <p className="text-left text-xs font-medium text-muted-foreground">
+                  {examplesTitle}
+                </p>
+                {examples.map((q) => (
                   <button
                     key={q}
                     type="button"
