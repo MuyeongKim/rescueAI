@@ -33,37 +33,11 @@ import {
   DailyQuestionsChart,
   CategoryCitationsChart,
 } from "@/components/admin/StatsChart";
+import { StatCard } from "@/components/StatCard";
 
 export const dynamic = "force-dynamic";
 
 const DAY_MS = 86_400_000;
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  sub,
-}: {
-  icon: typeof Users;
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          {label}
-        </CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold tabular-nums tracking-tight">{value}</div>
-        {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
-      </CardContent>
-    </Card>
-  );
-}
 
 // 실데이터 집계 (service-role). DEMO 모드에서는 호출되지 않는다.
 async function loadAdminStats() {

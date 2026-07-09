@@ -4,13 +4,9 @@ import {
   LogOut,
   MessageSquare,
   FileText,
-  BarChart3,
   Home,
   Dumbbell,
-  Megaphone,
   CircleUser,
-  FolderCog,
-  Users,
   Wand2,
   Newspaper,
   Siren,
@@ -18,6 +14,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { MobileMoreSheet } from "@/components/layout/MobileMoreSheet";
+import { ADMIN_NAV_ITEMS } from "@/components/layout/admin-nav-items";
 import { cn } from "@/lib/utils";
 import { hasRecentNotice } from "@/lib/notices";
 
@@ -61,14 +58,8 @@ const NAV_ITEMS: NavItem[] = [
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
 ];
 
-const ADMIN_ITEMS: NavItem[] = [
-  { key: "admin", href: "/admin", label: "통계", icon: BarChart3 },
-  { key: "admin-news", href: "/admin/news", label: "동향 관리", icon: Newspaper },
-  { key: "admin-dispatch", href: "/admin/dispatch", label: "출동통계 분석", icon: Siren },
-  { key: "admin-documents", href: "/admin/documents", label: "자료 관리", icon: FolderCog },
-  { key: "admin-users", href: "/admin/users", label: "사용자 관리", icon: Users },
-  { key: "admin-notices", href: "/admin/notices", label: "공지 작성", icon: Megaphone },
-];
+// 관리자 메뉴는 admin-nav-items 단일 출처에서 가져온다(사이드바·모바일·상단탭 공유).
+const ADMIN_ITEMS = ADMIN_NAV_ITEMS;
 
 export async function AppSidebar({
   email,
@@ -85,7 +76,13 @@ export async function AppSidebar({
   const mobileItems = NAV_ITEMS.filter((i) => i.mobile);
   const newNotice = await hasRecentNotice();
 
-  const renderItem = (item: NavItem) => {
+  // NAV_ITEMS(NavItem)·ADMIN_ITEMS(AdminNavItem) 공용 렌더 — key 는 string 으로 넓혀 둘 다 수용.
+  const renderItem = (item: {
+    key: string;
+    href: string;
+    label: string;
+    icon: NavItem["icon"];
+  }) => {
     const Icon = item.icon;
     const isActive = active === item.key;
     return (

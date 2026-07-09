@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 
 import { getUserAndProfile } from "@/lib/auth";
+import { FITNESS_MONTH_GOAL } from "@/lib/fitness";
 import { getFitnessState } from "@/lib/fitness-server";
 import { createClient } from "@/lib/supabase/server";
 import { isNewNotice } from "@/lib/notices";
@@ -25,8 +26,6 @@ import { Badge } from "@/components/ui/badge";
 import { ProgressBar } from "@/components/learning/ProgressBar";
 
 export const dynamic = "force-dynamic";
-
-const FITNESS_MONTH_GOAL = 300;
 
 type NoticePreview = { id: number; title: string; pinned: boolean; created_at: string };
 type ConvPreview = { id: string; title: string | null; updated_at: string };

@@ -17,6 +17,8 @@ export const ACTIVITIES = [
 export const DAILY_POINT_CAP = 120;
 /** 1회 입력 가능한 최대 운동 시간(분) — DB check 제약과 동일 */
 export const MAX_DURATION_MIN = 360;
+/** 월간 체력 목표(마일리지) — 홈·마이페이지 목표 게이지 공용 */
+export const FITNESS_MONTH_GOAL = 300;
 
 /** 오늘 이미 적립한 점수를 반영해 이번 기록의 적립 마일리지를 계산한다. */
 export function calcPoints(durationMin: number, todayAwarded: number): number {

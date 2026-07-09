@@ -2,18 +2,16 @@
 
 import Link from "next/link";
 import {
-  BarChart3,
   CircleUser,
   FileText,
-  FolderCog,
   Megaphone,
   Menu,
   Newspaper,
   Siren,
-  Users,
 } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { ADMIN_NAV_ITEMS } from "@/components/layout/admin-nav-items";
 import {
   Sheet,
   SheetClose,
@@ -33,14 +31,8 @@ const MORE_ITEMS = [
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
 ];
 
-const ADMIN_MORE_ITEMS = [
-  { key: "admin", href: "/admin", label: "통계", icon: BarChart3 },
-  { key: "admin-news", href: "/admin/news", label: "동향 관리", icon: Newspaper },
-  { key: "admin-dispatch", href: "/admin/dispatch", label: "출동통계 분석", icon: Siren },
-  { key: "admin-documents", href: "/admin/documents", label: "자료 관리", icon: FolderCog },
-  { key: "admin-users", href: "/admin/users", label: "사용자 관리", icon: Users },
-  { key: "admin-notices", href: "/admin/notices", label: "공지 작성", icon: Megaphone },
-];
+// 관리자 메뉴는 admin-nav-items 단일 출처 공유
+const ADMIN_MORE_ITEMS = ADMIN_NAV_ITEMS;
 
 export function MobileMoreSheet({
   isAdmin,

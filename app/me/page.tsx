@@ -12,6 +12,7 @@ import {
 } from "lucide-react";
 
 import { getUserAndProfile } from "@/lib/auth";
+import { FITNESS_MONTH_GOAL } from "@/lib/fitness";
 import { getFitnessState } from "@/lib/fitness-server";
 import { countMyMaterials } from "@/lib/generated-materials";
 import {
@@ -26,9 +27,6 @@ import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { ProgressBar } from "@/components/learning/ProgressBar";
 
 export const dynamic = "force-dynamic";
-
-// 체력 목표 달성제 — 월간 마일리지 목표(개인 설정은 DB 연동 후, 지금은 기본값).
-const FITNESS_MONTH_GOAL = 300;
 
 export default async function MePage() {
   const { user, profile } = await getUserAndProfile();

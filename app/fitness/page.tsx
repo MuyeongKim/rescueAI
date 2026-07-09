@@ -1,4 +1,4 @@
-import { CalendarCheck, Dumbbell, Flame, Medal, TrendingUp } from "lucide-react";
+import { CalendarCheck, Flame, Medal, TrendingUp } from "lucide-react";
 
 import { getUserAndProfile } from "@/lib/auth";
 import { DAILY_POINT_CAP } from "@/lib/fitness";
@@ -21,35 +21,9 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { WorkoutForm } from "@/components/fitness/WorkoutForm";
 import { WeeklyMileageChart } from "@/components/fitness/FitnessChart";
+import { StatCard } from "@/components/StatCard";
 
 export const dynamic = "force-dynamic";
-
-function StatCard({
-  icon: Icon,
-  label,
-  value,
-  sub,
-}: {
-  icon: typeof Dumbbell;
-  label: string;
-  value: string;
-  sub?: string;
-}) {
-  return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
-          {label}
-        </CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
-      </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold tabular-nums tracking-tight">{value}</div>
-        {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
-      </CardContent>
-    </Card>
-  );
-}
 
 export default async function FitnessPage() {
   const { user } = await getUserAndProfile();
