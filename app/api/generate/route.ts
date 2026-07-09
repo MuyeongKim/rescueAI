@@ -76,6 +76,7 @@ export async function POST(req: Request) {
     duration,
     topic: body.topic?.slice(0, 100),
     date: /^\d{4}-\d{2}-\d{2}$/.test(body.date ?? "") ? body.date : undefined,
+    place: body.place?.slice(0, 100),
     model: body.model,
   };
 

@@ -41,8 +41,19 @@ export type GenerateRequest = {
   duration: Duration;
   topic?: string; // 선택: 훈련 내용/주제(예: "공기호흡기 점검")
   date?: string; // 선택: 훈련 일자 (YYYY-MM-DD)
+  place?: string; // 선택: 훈련 장소(훈련계획 양식용)
   model?: string; // 선택: LLM 모델 키 (lib/llm.ts MODEL_OPTIONS, 미지정 시 서버 기본)
 };
+
+// 훈련계획 양식(training_plan.hwpx)의 AI 생성 섹션 — 제목이 고정이라 템플릿 매핑이 확정적이다.
+// 이 순서·제목으로 정확히 생성되어야 /api/hwp 가 자리표시자에 안전하게 매핑한다.
+export const TRAINING_PLAN_SECTIONS = [
+  "훈련목표",
+  "훈련내용",
+  "필요장비",
+  "안전관리",
+  "훈련평가",
+] as const;
 
 // ── 생성 결과 ──
 export const generatedDocSchema = z.object({
@@ -172,15 +183,35 @@ export function buildGeneratePrompt(req: GenerateRequest): string {
 - 대상 수준(${req.audience})에 맞는 용어와 난이도로, 한국어로 작성하세요.`;
   }
 
-  return `전북소방본부 ${req.category} 분야 ${
-    req.type === "plan" ? "훈련계획" : "교육자료(교안)"
-  }를 작성합니다.
+  // 훈련계획: 전북소방 표준 양식(training_plan.hwpx)에 맞춰 '고정 제목 5개 섹션'으로 생성.
+  if (req.type === "plan") {
+    const placeLine = req.place?.trim() ? `\n- 훈련 장소: ${req.place.trim()}` : "";
+    return `전북소방본부 ${req.category} 분야 구조 훈련 계획서의 '내용'을 작성합니다.
+
+- 대상: ${req.audience}
+- 교육 시간: ${req.duration}
+- ${topicLine}${dateLine}${placeLine}
+
+아래 5개 항목을 **정확히 이 제목으로, 이 순서대로** 각각 하나의 섹션(heading=제목, content=내용)으로만 작성하세요. 다른 섹션을 추가하지 마세요.
+1. 훈련목표 — 이 훈련으로 달성할 목표를 1~2문장으로.
+2. 훈련내용 — 이론교육·교관 시범·실습 등 단계별로. 소제목은 [이론교육]처럼 대괄호로, 각 세부 항목은 '- '로 시작해 줄바꿈(\\n)으로 구분.
+3. 필요장비 — 쉼표로 구분한 장비 목록 한 줄.
+4. 안전관리 — 훈련 중 위험요소와 안전조치.
+5. 훈련평가 — 숙달·성과 확인 항목.
+
+[작성 규칙]
+- 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치·장비명을 지어내지 마세요.
+- 대상 수준(${req.audience})에 맞는 난이도로, 현장에서 바로 쓸 수 있게 구체적으로 작성하세요.
+- 한국어로 작성하세요.`;
+  }
+
+  return `전북소방본부 ${req.category} 분야 교육자료(교안)를 작성합니다.
 
 - 대상: ${req.audience}
 - 교육 시간: ${req.duration}
 - ${topicLine}${dateLine}
 
-${TYPE_GUIDE[req.type]}
+${TYPE_GUIDE.lesson}
 
 [작성 규칙]
 - 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.

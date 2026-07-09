@@ -169,6 +169,10 @@ export function GenerateForm({
   const [duration, setDuration] = useState<Duration>(asDuration(initialMaterial?.duration));
   const [topic, setTopic] = useState(initialMaterial?.topic ?? "");
   const [date, setDate] = useState("");
+  // 훈련계획 양식(training_plan.hwpx) 전용 폼 입력
+  const [place, setPlace] = useState("");
+  const [trainingType, setTrainingType] = useState<string>("이론 + 현장실습");
+  const [method, setMethod] = useState<string>("자체훈련");
   const [model, setModel] = useState<string>(models[0]?.key ?? "");
   const [loading, setLoading] = useState(false);
   const [doc, setDoc] = useState<GeneratedDoc | null>(hydrated.doc);
@@ -187,7 +191,7 @@ export function GenerateForm({
   const [saved, setSaved] = useState(false);
   const [loadedId, setLoadedId] = useState<number | null>(initialMaterial?.id ?? null); // 재편집 대상 id
 
-  const genReq = { type, category, audience, duration, topic, date, model };
+  const genReq = { type, category, audience, duration, topic, date, place, model };
   const subtitle = `대상: ${audience} · 교육 시간: ${duration}${date ? ` · ${date}` : ""}`;
 
   // 결과 부분 편집 — 편집 내용은 그대로 다운로드/복사에 반영된다(빌더가 state를 받음).
@@ -493,9 +497,25 @@ export function GenerateForm({
   async function handleHwpx() {
     if (!doc) return;
     try {
-      // 미니서버(hwp-writer-api) 우선, 실패 시 로컬 생성 폴백
+      // 미니서버(hwp-writer-api) 우선, 실패 시 로컬 생성 폴백.
+      // 훈련계획(plan)은 전북소방 표준 양식(training_plan.hwpx)에 폼 입력 + AI 섹션을 채운다.
       const { downloadHwpx } = await import("@/lib/hwpx-download");
-      const via = await downloadHwpx(doc);
+      const opts =
+        resultKind === "plan"
+          ? {
+              template: "training_plan" as const,
+              plan: {
+                topic: topic || `${category} 훈련`,
+                datetime: date,
+                formType: trainingType,
+                method,
+                duration,
+                target: audience,
+                place,
+              },
+            }
+          : undefined;
+      const via = await downloadHwpx(doc, opts);
       if (via === "local") {
         toast.info("한글 작성 서버 미연결 — 기본 양식으로 생성했습니다");
       }
@@ -676,7 +696,41 @@ export function GenerateForm({
                   className="h-10 text-base"
                 />
               </div>
+              {/* 훈련계획 양식 전용 — 훈련 장소 */}
+              {type === "plan" && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="place" className="text-sm font-medium">
+                    훈련 장소
+                  </Label>
+                  <Input
+                    id="place"
+                    placeholder="예: 소방교육훈련센터 훈련탑"
+                    value={place}
+                    onChange={(e) => setPlace(e.target.value)}
+                    maxLength={100}
+                    className="h-10 text-base"
+                  />
+                </div>
+              )}
             </div>
+
+            {/* 훈련계획 양식 전용 — 훈련 형태·방법(한글 다운로드 시 양식에 반영) */}
+            {type === "plan" && (
+              <div className="space-y-3">
+                <OptionGroup
+                  label="훈련 형태"
+                  options={["현장실습 훈련", "이론 교육훈련", "이론 + 현장실습"]}
+                  value={trainingType}
+                  onChange={setTrainingType}
+                />
+                <OptionGroup
+                  label="훈련 방법"
+                  options={["합동훈련", "자체훈련", "구조대장 기술지원"]}
+                  value={method}
+                  onChange={setMethod}
+                />
+              </div>
+            )}
 
             {/* AI 모델 선택 — 2개 이상 사용 가능할 때만. NotebookLM은 AI를 안 쓰므로 숨김 */}
             {type !== "notebooklm" && models.length > 1 && (
