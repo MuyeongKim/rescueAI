@@ -1,5 +1,7 @@
 import { createClient } from "@/lib/supabase/server";
+import { BookOpenCheck } from "lucide-react";
 import { DocsBrowser } from "@/components/docs/DocsBrowser";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 import { DEMO, demoDocuments } from "@/lib/demo";
 
 export const dynamic = "force-dynamic";
@@ -32,14 +34,14 @@ export default async function DocsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-3 py-5 sm:px-4">
-      <div className="mb-4">
-        <h1 className="text-xl font-semibold">교육자료</h1>
-        <p className="text-sm text-muted-foreground">
-          원본 교육자료 참고 서가입니다. 분야·난이도로 거르거나 제목으로
-          검색하세요.
-        </p>
-      </div>
+    <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+      <OperationalHeader
+        eyebrow="구조 업무 03 · 근거 자료"
+        title="교육자료"
+        description="원본 교육자료를 분야·난이도로 분류하고 제목으로 검색할 수 있습니다."
+        icon={BookOpenCheck}
+        status={`${documents?.length ?? 0}건 등록`}
+      />
       <DocsBrowser documents={documents ?? []} />
     </div>
   );

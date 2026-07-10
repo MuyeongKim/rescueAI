@@ -1,4 +1,4 @@
-import { Siren, Trophy } from "lucide-react";
+import { Info, Siren, Trophy } from "lucide-react";
 
 import {
   Card,
@@ -16,6 +16,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -47,9 +48,9 @@ const LEADERBOARD = [
 
 function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
   return (
-    <Card>
+    <Card className="border-t-2 border-t-slate-800 dark:border-t-slate-200">
       <CardContent className="p-4 text-center">
-        <div className="text-2xl font-bold tabular-nums tracking-tight">{value}</div>
+        <div className="text-2xl font-black tabular-nums">{value}</div>
         <div className="text-xs text-muted-foreground">{label}</div>
         {sub && <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>}
       </CardContent>
@@ -59,20 +60,19 @@ function Stat({ label, value, sub }: { label: string; value: string; sub?: strin
 
 export default function DispatchPage() {
   return (
-    <div className="mx-auto max-w-3xl space-y-4 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <Siren className="h-5 w-5 text-primary" /> 출동 마일리지
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          구조활동일지 기반으로 출동 실적이 자동 집계됩니다. 별도 입력은
-          필요 없습니다.
-        </p>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
+      <OperationalHeader
+        eyebrow="운영 지표 · 출동"
+        title="출동 마일리지"
+        description="구조활동일지를 기준으로 출동 실적과 마일리지를 집계합니다."
+        icon={Siren}
+        status="PoC 예시 데이터"
+      />
 
-      <p className="rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        ⚠️ 예시 데이터입니다 — 구조활동일지(엑셀) 자동 추출·집계 연동 예정입니다.
-      </p>
+      <div className="flex items-start gap-3 border border-slate-300 border-l-4 border-l-amber-500 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950 dark:border-slate-700 dark:bg-amber-950/20 dark:text-amber-100">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <p>현재 예시 데이터이며 구조활동일지 엑셀 자동 추출·집계 연동을 준비하고 있습니다.</p>
+      </div>
 
       {/* 이번 달 요약 */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
@@ -132,7 +132,7 @@ export default function DispatchPage() {
             {LEADERBOARD.map((r) => (
               <li key={r.rank} className="flex items-center gap-3 py-2.5">
                 <span className="w-7 text-center text-base font-bold tabular-nums">
-                  {r.rank === 1 ? "🥇" : r.rank === 2 ? "🥈" : r.rank === 3 ? "🥉" : r.rank}
+                  {r.rank}
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="truncate text-sm font-medium">{r.name}</p>

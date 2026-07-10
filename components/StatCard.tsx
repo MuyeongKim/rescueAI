@@ -14,15 +14,17 @@ export function StatCard({
   sub?: string;
 }) {
   return (
-    <Card>
-      <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
-        <CardTitle className="text-sm font-medium text-muted-foreground">
+    <Card className="border-t-2 border-t-slate-800 dark:border-t-slate-200">
+      <CardHeader className="flex flex-row items-center justify-between space-y-0 p-4 pb-2">
+        <CardTitle className="text-xs font-semibold text-muted-foreground">
           {label}
         </CardTitle>
-        <Icon className="h-4 w-4 text-muted-foreground" />
+        <span className="flex h-8 w-8 items-center justify-center border border-slate-200 text-primary dark:border-slate-700">
+          <Icon className="h-4 w-4" />
+        </span>
       </CardHeader>
-      <CardContent>
-        <div className="text-2xl font-bold tabular-nums tracking-tight">{value}</div>
+      <CardContent className="px-4 pb-4">
+        <div className="text-2xl font-black tabular-nums">{value}</div>
         {sub && <p className="text-xs text-muted-foreground">{sub}</p>}
       </CardContent>
     </Card>

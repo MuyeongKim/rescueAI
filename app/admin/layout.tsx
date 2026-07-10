@@ -18,7 +18,7 @@ export default async function AdminLayout({
   return (
     <div className="flex h-screen">
       <AppSidebar email={user?.email} isAdmin active="admin" />
-      <main className="flex-1 overflow-auto pb-14 md:pb-0">
+      <main className="flex-1 overflow-auto pb-20 md:pb-0">
         <AdminNav />
         {children}
       </main>

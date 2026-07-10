@@ -1,4 +1,4 @@
-import { CalendarCheck, Flame, Medal, TrendingUp } from "lucide-react";
+import { CalendarCheck, Dumbbell, Flame, Medal, TrendingUp } from "lucide-react";
 
 import { getUserAndProfile } from "@/lib/auth";
 import { DAILY_POINT_CAP } from "@/lib/fitness";
@@ -22,6 +22,7 @@ import { Badge } from "@/components/ui/badge";
 import { WorkoutForm } from "@/components/fitness/WorkoutForm";
 import { WeeklyMileageChart } from "@/components/fitness/FitnessChart";
 import { StatCard } from "@/components/StatCard";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -30,13 +31,14 @@ export default async function FitnessPage() {
   const state = await getFitnessState(user?.id ?? "");
 
   return (
-    <div className="mx-auto max-w-5xl space-y-5 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="text-xl font-semibold">체력단련</h1>
-        <p className="text-sm text-muted-foreground">
-          운동을 기록하면 1분당 1마일리지가 적립됩니다. (일일 상한 {DAILY_POINT_CAP}점)
-        </p>
-      </div>
+    <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
+      <OperationalHeader
+        eyebrow="대원 준비도 · 체력"
+        title="체력단련"
+        description={`운동을 기록하면 1분당 1마일리지가 적립됩니다. 일일 상한은 ${DAILY_POINT_CAP}점입니다.`}
+        icon={Dumbbell}
+        status="개인 기록 연결"
+      />
 
       {/* 마일리지 현황 */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -60,7 +62,7 @@ export default async function FitnessPage() {
           icon={CalendarCheck}
           label="연속 운동"
           value={`${state.streakDays}일`}
-          sub={state.streakDays >= 3 ? "꾸준함이 무기입니다 🔥" : undefined}
+          sub={state.streakDays >= 3 ? "꾸준한 준비 상태를 유지하고 있습니다." : undefined}
         />
       </div>
 
@@ -161,7 +163,7 @@ export default async function FitnessPage() {
                     return (
                       <TableRow key={e.user_id} className={isMe ? "bg-primary/5" : undefined}>
                         <TableCell className="font-medium tabular-nums">
-                          {i < 3 ? ["🥇", "🥈", "🥉"][i] : i + 1}
+                          {i + 1}
                         </TableCell>
                         <TableCell>
                           <span className="font-medium">{e.full_name ?? "이름 미등록"}</span>

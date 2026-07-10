@@ -64,7 +64,7 @@ function OptionGroup<T extends string>({
 }) {
   return (
     <div className="space-y-2.5">
-      <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <Label className="text-xs font-semibold uppercase text-muted-foreground">
         {label}
       </Label>
       <div className="flex flex-wrap gap-2" role="radiogroup" aria-label={label}>
@@ -99,7 +99,7 @@ function StepHeader({ n, title, hint }: { n: string; title: string; hint?: strin
   return (
     <div className="flex items-baseline gap-2.5">
       <span className="font-mono text-xs font-semibold tabular-nums text-primary">{n}</span>
-      <h2 className="text-sm font-semibold tracking-tight">{title}</h2>
+      <h2 className="text-sm font-semibold">{title}</h2>
       {hint && <span className="text-xs font-normal text-muted-foreground">{hint}</span>}
     </div>
   );
@@ -564,7 +564,7 @@ export function GenerateForm({
                         : undefined
                     }
                     className={cn(
-                      "group flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-xl border p-2.5 text-center transition-all duration-200 motion-reduce:transition-none",
+                      "group flex min-h-[68px] flex-col items-center justify-center gap-1.5 rounded-md border p-2.5 text-center transition-all duration-200 motion-reduce:transition-none",
                       "hover:-translate-y-0.5 hover:shadow-sm motion-reduce:hover:translate-y-0",
                       active ? "shadow-sm" : "border-border hover:border-primary/40"
                     )}
@@ -626,7 +626,7 @@ export function GenerateForm({
             <StepHeader n="02" title="분야 · 대상 · 시간" />
             {/* 분야 — 선택 시 분야 색으로 강조 */}
             <div className="space-y-2.5">
-              <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Label className="text-xs font-semibold uppercase text-muted-foreground">
                 분야
               </Label>
               <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="분야">
@@ -735,7 +735,7 @@ export function GenerateForm({
             {/* AI 모델 선택 — 2개 이상 사용 가능할 때만. NotebookLM은 AI를 안 쓰므로 숨김 */}
             {type !== "notebooklm" && models.length > 1 && (
               <div className="space-y-2.5">
-                <Label className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Label className="text-xs font-semibold uppercase text-muted-foreground">
                   AI 모델
                 </Label>
                 <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="AI 모델">
@@ -749,7 +749,7 @@ export function GenerateForm({
                         aria-checked={active}
                         onClick={() => setModel(m.key)}
                         className={cn(
-                          "flex h-11 flex-col items-start justify-center rounded-xl border px-4 transition-all duration-200 motion-reduce:transition-none",
+                          "flex h-11 flex-col items-start justify-center rounded-md border px-4 transition-all duration-200 motion-reduce:transition-none",
                           "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
                           active
                             ? "border-primary bg-primary text-primary-foreground shadow-sm"

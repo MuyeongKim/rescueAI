@@ -107,7 +107,7 @@ export function MessageBubble({ message }: { message: Message }) {
   if (isUser) {
     return (
       <div className="flex justify-end">
-        <div className="max-w-[85%] rounded-2xl rounded-br-sm bg-primary px-4 py-2.5 text-base leading-relaxed text-primary-foreground whitespace-pre-wrap wrap-break-word">
+        <div className="max-w-[85%] rounded-md rounded-br-sm bg-primary px-4 py-2.5 text-base leading-relaxed text-primary-foreground whitespace-pre-wrap wrap-break-word">
           {message.content}
         </div>
       </div>
@@ -120,7 +120,7 @@ export function MessageBubble({ message }: { message: Message }) {
         <Flame className="h-4 w-4 text-primary" />
       </div>
       <div className="min-w-0 flex-1 space-y-2">
-        <div className="max-w-[92%] rounded-2xl rounded-tl-sm bg-muted px-4 py-2.5 text-base leading-relaxed whitespace-pre-wrap wrap-break-word">
+        <div className="max-w-[92%] rounded-md rounded-tl-sm bg-muted px-4 py-2.5 text-base leading-relaxed whitespace-pre-wrap wrap-break-word">
           {message.content ? (
             linkifyCitations(message.content, sources)
           ) : (

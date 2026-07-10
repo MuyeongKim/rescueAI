@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useChat } from "ai/react";
 import type { Message } from "ai";
-import { Send, Square, Loader2, Home } from "lucide-react";
+import { ArrowRight, Send, Square, Loader2, Home, ShieldCheck } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -114,7 +114,7 @@ export function ChatInterface({
   return (
     <div className="flex h-full flex-col">
       {/* 상단 바: 대화목록 + 카테고리 필터 */}
-      <div className="border-b bg-background/80 px-3 py-2 sm:px-4">
+      <div className="border-b-2 border-[#d63f18] bg-[#111d31] px-3 py-2 text-white sm:px-4">
         {/* 모바일에선 컨트롤이 많아 한 줄을 넘칠 수 있어 flex-wrap + 라벨 숨김으로 정리 */}
         <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
           <Link href="/home" className="md:hidden" aria-label="홈으로">
@@ -123,9 +123,12 @@ export function ChatInterface({
             </Button>
           </Link>
           <ConversationList activeId={conversationId} />
-          <span className="ml-1 hidden text-sm text-muted-foreground sm:inline">분야</span>
+          <span className="mr-auto hidden items-center gap-2 text-sm font-bold sm:flex">
+            <span className="h-4 w-0.5 bg-[#f0542d]" aria-hidden /> AI 튜터
+          </span>
+          <span className="ml-1 hidden text-xs text-slate-400 sm:inline">분야</span>
           <Select value={category} onValueChange={setCategory}>
-            <SelectTrigger className="h-10 w-24 sm:w-28">
+            <SelectTrigger className="h-10 w-24 border-slate-600 bg-[#0d192b] text-white sm:w-28">
               <SelectValue placeholder="전체" />
             </SelectTrigger>
             <SelectContent>
@@ -141,9 +144,9 @@ export function ChatInterface({
 
           {models.length > 1 && (
             <>
-              <span className="ml-1 hidden text-sm text-muted-foreground sm:inline">모델</span>
+              <span className="ml-1 hidden text-xs text-slate-400 sm:inline">모델</span>
               <Select value={model} onValueChange={setModel}>
-                <SelectTrigger className="h-10 w-32 sm:w-36">
+                <SelectTrigger className="h-10 w-32 border-slate-600 bg-[#0d192b] text-white sm:w-36">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -163,16 +166,24 @@ export function ChatInterface({
       <div ref={scrollRef} className="flex-1 overflow-y-auto">
         <div className="mx-auto max-w-3xl px-3 py-4 sm:px-4">
           {empty ? (
-            <div className="flex flex-col items-center gap-6 py-10 text-center">
-              <div>
-                <h1 className="text-xl font-semibold">무엇을 도와드릴까요?</h1>
-                <p className="mt-1 text-sm text-muted-foreground">
+            <div className="mx-auto max-w-2xl py-8 sm:py-12">
+              <div className="flex flex-col gap-4 border-b border-slate-300 pb-6 sm:flex-row sm:items-start sm:justify-between dark:border-slate-700">
+                <div>
+                  <p className="flex items-center gap-2 text-[11px] font-bold text-primary">
+                    <span className="h-0.5 w-7 bg-primary" aria-hidden /> 근거 검색 대기
+                  </p>
+                  <h1 className="mt-2 text-2xl font-extrabold">무엇을 도와드릴까요?</h1>
+                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
                   교육자료에 근거해 출처와 함께 답합니다. 근거가 없으면 추측하지
                   않습니다.
-                </p>
+                  </p>
+                </div>
+                <span className="flex min-h-10 shrink-0 items-center gap-2 self-start border border-slate-300 bg-white px-3 text-xs font-semibold text-emerald-700 dark:border-slate-700 dark:bg-slate-900 dark:text-emerald-400">
+                  <ShieldCheck className="h-4 w-4" /> 출처 확인 모드
+                </span>
               </div>
-              <div className="flex w-full flex-col gap-2">
-                <p className="text-left text-xs font-medium text-muted-foreground">
+              <div className="mt-6 flex w-full flex-col gap-2">
+                <p className="mb-1 text-left text-xs font-bold text-slate-700 dark:text-slate-200">
                   {examplesTitle}
                 </p>
                 {examples.map((q) => (
@@ -180,9 +191,10 @@ export function ChatInterface({
                     key={q}
                     type="button"
                     onClick={() => askExample(q)}
-                    className="rounded-lg border bg-card px-4 py-3 text-left text-base transition-colors hover:bg-accent"
+                    className="group flex min-h-[52px] items-center gap-3 border border-slate-300 bg-card px-4 text-left text-[15px] font-medium transition-colors hover:border-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-700"
                   >
-                    {q}
+                    <span className="min-w-0 flex-1">{q}</span>
+                    <ArrowRight className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
                   </button>
                 ))}
               </div>
@@ -206,7 +218,7 @@ export function ChatInterface({
       </div>
 
       {/* 입력창 (하단 고정) */}
-      <div className="border-t bg-background px-3 py-3 sm:px-4">
+      <div className="border-t-2 border-slate-300 bg-background px-3 py-3 sm:px-4 dark:border-slate-700">
         <form onSubmit={onSubmit} className="mx-auto flex max-w-3xl items-center gap-2">
           <Input
             value={input}

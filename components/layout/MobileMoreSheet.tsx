@@ -3,7 +3,7 @@
 import Link from "next/link";
 import {
   CircleUser,
-  FileText,
+  Dumbbell,
   Megaphone,
   Menu,
   Newspaper,
@@ -27,7 +27,7 @@ import {
 const MORE_ITEMS = [
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
   { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
-  { key: "docs", href: "/docs", label: "자료실", icon: FileText },
+  { key: "fitness", href: "/fitness", label: "체력단련", icon: Dumbbell },
   { key: "generate-shared", href: "/generate/shared", label: "공유 자료실", icon: Users },
   { key: "notices", href: "/notices", label: "공지사항", icon: Megaphone },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
@@ -52,19 +52,21 @@ export function MobileMoreSheet({
     <Sheet>
       <SheetTrigger
         className={cn(
-          "flex flex-col items-center gap-0.5 px-1.5 py-1.5 rounded-lg transition-colors min-w-[48px]",
-          moreActive ? "text-primary" : "text-muted-foreground"
+          "relative flex min-h-[56px] min-w-[56px] flex-1 flex-col items-center justify-center gap-1 px-1 text-slate-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#f0542d]",
+          moreActive && "bg-[#1a2a43] font-semibold text-white"
         )}
         aria-label="더보기 메뉴"
       >
+        {moreActive && <span className="absolute inset-x-3 top-0 h-0.5 bg-[#ff7752]" aria-hidden />}
         <Menu className="h-5 w-5" />
-        <span className={cn("text-[11px] whitespace-nowrap", moreActive && "font-medium")}>
+        <span className="whitespace-nowrap text-[11px]">
           더보기
         </span>
       </SheetTrigger>
-      <SheetContent side="bottom" className="max-h-[75dvh] overflow-y-auto rounded-t-xl">
+      <SheetContent side="bottom" className="max-h-[75dvh] overflow-y-auto rounded-none border-t-4 border-t-primary">
         <SheetHeader className="text-left">
-          <SheetTitle>전체 메뉴</SheetTitle>
+          <p className="text-[10px] font-bold text-primary">구조 업무 메뉴</p>
+          <SheetTitle className="text-xl font-extrabold">전체 메뉴</SheetTitle>
         </SheetHeader>
 
         <div className="mt-3 grid grid-cols-3 gap-2">
@@ -77,7 +79,7 @@ export function MobileMoreSheet({
                   href={item.href}
                   aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "flex min-h-[72px] flex-col items-center justify-center gap-1.5 rounded-lg border p-3 text-center transition-colors",
+                    "flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-sm border p-3 text-center transition-colors",
                     isActive
                       ? "border-primary bg-primary/5 text-primary"
                       : "text-foreground hover:bg-accent/40"
@@ -106,7 +108,7 @@ export function MobileMoreSheet({
                       href={item.href}
                       aria-current={isActive ? "page" : undefined}
                       className={cn(
-                        "flex min-h-[72px] flex-col items-center justify-center gap-1.5 rounded-lg border p-3 text-center transition-colors",
+                        "flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-sm border p-3 text-center transition-colors",
                         isActive
                           ? "border-primary bg-primary/5 text-primary"
                           : "text-foreground hover:bg-accent/40"

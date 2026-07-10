@@ -10,7 +10,7 @@ export default async function HomeLayout({
   return (
     <div className="flex h-screen">
       <AppSidebar email={user?.email} isAdmin={isAdmin(profile)} active="home" />
-      <main className="flex-1 overflow-auto pb-14 md:pb-0">{children}</main>
+      <main className="flex-1 overflow-auto pb-20 md:pb-0">{children}</main>
     </div>
   );
 }

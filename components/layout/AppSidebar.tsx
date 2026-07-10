@@ -1,17 +1,18 @@
+import Image from "next/image";
 import Link from "next/link";
+import type { LucideIcon } from "lucide-react";
 import {
-  Flame,
-  LogOut,
-  MessageSquare,
+  CircleUser,
+  Dumbbell,
   FileText,
   Home,
-  Dumbbell,
-  CircleUser,
-  Wand2,
+  LogOut,
+  MessageSquare,
   Newspaper,
   Siren,
+  Wand2,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
+
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { MobileMoreSheet } from "@/components/layout/MobileMoreSheet";
 import { ADMIN_NAV_ITEMS } from "@/components/layout/admin-nav-items";
@@ -39,26 +40,21 @@ type NavItem = {
   key: NavKey;
   href: string;
   label: string;
-  icon: typeof Flame;
-  /** 모바일 하단 탭바 노출 여부 (6개 제한) */
+  icon: LucideIcon;
   mobile?: boolean;
 };
 
-// 공지사항은 데스크톱 메뉴에서 제외 — 홈의 공지 섹션('전체 보기' → /notices)으로 진입.
-// 모바일: 주요 5개는 탭, 나머지 전부는 "더보기" 시트(MobileMoreSheet)로 — 새 페이지를
-// 만들면 탭 또는 MobileMoreSheet에 반드시 추가해 모바일 동선을 보장한다.
 const NAV_ITEMS: NavItem[] = [
   { key: "home", href: "/home", label: "홈", icon: Home, mobile: true },
   { key: "chat", href: "/chat", label: "AI 튜터", icon: MessageSquare, mobile: true },
   { key: "generate", href: "/generate", label: "AI 자료제작", icon: Wand2, mobile: true },
+  { key: "docs", href: "/docs", label: "자료실", icon: FileText, mobile: true },
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
   { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
-  { key: "docs", href: "/docs", label: "자료실", icon: FileText },
-  { key: "fitness", href: "/fitness", label: "체력단련", icon: Dumbbell, mobile: true },
+  { key: "fitness", href: "/fitness", label: "체력단련", icon: Dumbbell },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
 ];
 
-// 관리자 메뉴는 admin-nav-items 단일 출처에서 가져온다(사이드바·모바일·상단탭 공유).
 const ADMIN_ITEMS = ADMIN_NAV_ITEMS;
 
 export async function AppSidebar({
@@ -70,98 +66,103 @@ export async function AppSidebar({
   email?: string | null;
   isAdmin?: boolean;
   active?: NavKey;
-  /** 채팅 등 몰입형 화면에서 모바일 하단 탭바를 숨긴다(입력창 충돌 방지). */
   hideMobileNav?: boolean;
 }) {
-  const mobileItems = NAV_ITEMS.filter((i) => i.mobile);
+  const mobileItems = NAV_ITEMS.filter((item) => item.mobile);
   const newNotice = await hasRecentNotice();
 
-  // NAV_ITEMS(NavItem)·ADMIN_ITEMS(AdminNavItem) 공용 렌더 — key 는 string 으로 넓혀 둘 다 수용.
   const renderItem = (item: {
     key: string;
     href: string;
     label: string;
-    icon: NavItem["icon"];
+    icon: LucideIcon;
   }) => {
     const Icon = item.icon;
     const isActive = active === item.key;
+
     return (
-      <Link key={item.key} href={item.href} aria-current={isActive ? "page" : undefined}>
-        <Button
-          variant={isActive ? "secondary" : "ghost"}
-          className={cn(
-            "w-full justify-start gap-2 h-10 px-3 text-sm",
-            isActive && "font-medium"
-          )}
-        >
-          <Icon className="h-4 w-4 shrink-0" />
-          {item.label}
-          {item.key === "home" && newNotice && (
-            <span
-              className="ml-auto h-2 w-2 rounded-full bg-primary"
-              aria-label="새 공지 있음"
-            />
-          )}
-        </Button>
+      <Link
+        key={item.key}
+        href={item.href}
+        aria-current={isActive ? "page" : undefined}
+        className={cn(
+          "relative flex min-h-12 items-center gap-3 border-l-[3px] px-3 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#f0542d]",
+          isActive
+            ? "border-l-[#f0542d] bg-[#1a2a43] font-semibold text-white"
+            : "border-l-transparent text-slate-300 hover:bg-[#17253b] hover:text-white"
+        )}
+      >
+        <Icon className={cn("h-[18px] w-[18px] shrink-0", isActive ? "text-[#ff7752]" : "text-slate-400")} />
+        <span className="truncate">{item.label}</span>
+        {item.key === "home" && newNotice && (
+          <span
+            className="ml-auto h-2 w-2 rounded-full bg-[#ff7752] shadow-[0_0_0_3px_rgba(255,119,82,0.12)]"
+            aria-label="새 공지 있음"
+          />
+        )}
       </Link>
     );
   };
 
   return (
     <>
-      {/* 데스크톱 좌측 사이드바 (md 이상) */}
-      <aside className="hidden md:flex w-56 shrink-0 flex-col border-r bg-background sticky top-0 h-screen">
-        <div className="flex h-14 items-center gap-2 border-b px-4">
-          <Link href="/home" className="flex items-center gap-2 font-semibold">
-            <span className="flex h-8 w-8 items-center justify-center rounded-md bg-primary/10">
-              <Flame className="h-4 w-4 text-primary" />
-            </span>
-            <span className="text-sm">전북소방 구조 AI</span>
-          </Link>
-        </div>
+      <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col bg-[#111d31] text-slate-200 md:flex">
+        <div className="hazard-stripe h-1.5 shrink-0 text-[#d63f18]" aria-hidden />
 
-        <nav aria-label="주 메뉴" className="flex flex-col gap-0.5 p-2 flex-1 overflow-y-auto">
-          {NAV_ITEMS.map(renderItem)}
+        <header className="border-b border-slate-700/70 px-4 py-4">
+          <Link
+            href="/home"
+            className="flex min-h-11 items-center gap-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[#f0542d]"
+          >
+            <span className="flex h-10 w-[62px] shrink-0 items-center justify-center bg-white px-1.5">
+              <Image src="/logo-jbfire.png" alt="전북소방 엠블럼" width={52} height={26} priority />
+            </span>
+            <span className="min-w-0">
+              <span className="block truncate text-[10px] text-slate-400">전북특별자치도 소방본부</span>
+              <span className="mt-0.5 block truncate text-sm font-extrabold text-white">구조 AI</span>
+            </span>
+          </Link>
+        </header>
+
+        <nav aria-label="주 메뉴" className="flex flex-1 flex-col overflow-y-auto px-2 py-4">
+          <p className="px-3 pb-2 text-[10px] font-semibold text-slate-500">주요 업무</p>
+          <div className="space-y-0.5">{NAV_ITEMS.map(renderItem)}</div>
 
           {isAdmin && (
             <>
-              <p className="px-3 pt-4 pb-1 text-xs font-medium text-muted-foreground">
-                관리자
-              </p>
-              {ADMIN_ITEMS.map(renderItem)}
+              <p className="px-3 pb-2 pt-6 text-[10px] font-semibold text-slate-500">관리 업무</p>
+              <div className="space-y-0.5">{ADMIN_ITEMS.map(renderItem)}</div>
             </>
           )}
         </nav>
 
-        <div className="border-t p-2 space-y-1">
-          {email && (
-            <p className="truncate px-3 py-1.5 text-xs text-muted-foreground">
-              {email}
-            </p>
-          )}
-          <ThemeToggle />
+        <footer className="border-t border-slate-700/70 p-3">
+          <div className="mb-2 flex min-h-10 items-center gap-2 border border-slate-700 bg-[#0d192b] px-3 text-[11px] text-slate-300">
+            <span className="command-status-pulse h-2 w-2 rounded-full bg-emerald-400" aria-hidden />
+            교육자료 연결 정상
+          </div>
+          {email && <p className="truncate px-3 py-1 text-[11px] text-slate-500">{email}</p>}
+          <ThemeToggle className="h-11 w-full justify-start gap-3 px-3 text-sm text-slate-400 hover:bg-[#17253b] hover:text-white" />
           <form action="/auth/signout" method="post">
-            <Button
+            <button
               type="submit"
-              variant="ghost"
-              className="w-full justify-start gap-2 h-10 px-3 text-sm text-muted-foreground"
+              className="flex h-11 w-full items-center gap-3 px-3 text-sm text-slate-400 transition-colors hover:bg-[#17253b] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#f0542d]"
             >
-              <LogOut className="h-4 w-4 shrink-0" />
+              <LogOut className="h-[18px] w-[18px] shrink-0" />
               로그아웃
-            </Button>
+            </button>
           </form>
-        </div>
+        </footer>
       </aside>
 
-      {/* 모바일 하단 탭바 (md 미만, 6개) — 몰입형 화면에서는 숨김 */}
       <nav
         aria-label="주 메뉴"
         className={cn(
-          "md:hidden fixed bottom-0 left-0 right-0 z-30 border-t bg-background/95 backdrop-blur-sm supports-backdrop-filter:bg-background/60",
+          "fixed inset-x-0 bottom-0 z-30 border-t-2 border-[#d63f18] bg-[#111d31] shadow-[0_-4px_16px_rgba(11,20,38,0.16)] md:hidden",
           hideMobileNav && "hidden"
         )}
       >
-        <div className="flex items-center justify-around h-14 px-1">
+        <div className="flex min-h-16 items-stretch justify-around px-1 pb-[env(safe-area-inset-bottom)]">
           {mobileItems.map((item) => {
             const Icon = item.icon;
             const isActive = active === item.key;
@@ -171,19 +172,13 @@ export async function AppSidebar({
                 href={item.href}
                 aria-current={isActive ? "page" : undefined}
                 className={cn(
-                  "flex flex-col items-center gap-0.5 px-1.5 py-1.5 rounded-lg transition-colors min-w-[48px]",
-                  isActive ? "text-primary" : "text-muted-foreground"
+                  "relative flex min-h-[56px] min-w-[56px] flex-1 flex-col items-center justify-center gap-1 px-1 text-slate-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#f0542d]",
+                  isActive && "bg-[#1a2a43] font-semibold text-white"
                 )}
               >
-                <Icon className="h-5 w-5" />
-                <span
-                  className={cn(
-                    "text-[11px] whitespace-nowrap",
-                    isActive && "font-medium"
-                  )}
-                >
-                  {item.label}
-                </span>
+                {isActive && <span className="absolute inset-x-3 top-0 h-0.5 bg-[#ff7752]" aria-hidden />}
+                <Icon className={cn("h-5 w-5", isActive && "text-[#ff7752]")} />
+                <span className="whitespace-nowrap text-[11px]">{item.label}</span>
               </Link>
             );
           })}

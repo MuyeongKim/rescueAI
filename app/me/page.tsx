@@ -24,6 +24,7 @@ import {
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 import { ProgressBar } from "@/components/learning/ProgressBar";
 
 export const dynamic = "force-dynamic";
@@ -37,13 +38,14 @@ export default async function MePage() {
   const name = profile?.full_name || user?.email?.split("@")[0] || "구조대원";
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="text-xl font-semibold">마이페이지</h1>
-        <p className="text-sm text-muted-foreground">
-          내 정보·체력 마일리지·출동 기록을 확인합니다.
-        </p>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
+      <OperationalHeader
+        eyebrow="대원 정보 · 개인 현황"
+        title="마이페이지"
+        description="내 정보와 체력 마일리지, 출동 기록을 확인합니다."
+        icon={CircleUser}
+        status={profile?.role === "admin" ? "관리자 계정" : "대원 계정"}
+      />
 
       {/* 프로필 */}
       <Card>
@@ -112,14 +114,14 @@ export default async function MePage() {
             </div>
           </div>
           {/* 체력 목표 달성제 (TF 구성안: 자발적 자기계발 동기 부여) */}
-          <div className="mt-4 space-y-1.5 rounded-lg border p-3">
+          <div className="mt-4 space-y-1.5 border-t border-slate-200 pt-4 dark:border-slate-800">
             <div className="flex items-center justify-between text-sm">
               <span className="flex items-center gap-1.5 font-medium">
                 <Target className="h-4 w-4 text-primary" /> 이번 달 목표
               </span>
               <span className="text-muted-foreground">
                 {fitness.monthPoints}/{FITNESS_MONTH_GOAL}점
-                {fitness.monthPoints >= FITNESS_MONTH_GOAL && " · 달성 🎉"}
+                {fitness.monthPoints >= FITNESS_MONTH_GOAL && " · 달성"}
               </span>
             </div>
             <ProgressBar
@@ -202,7 +204,7 @@ export default async function MePage() {
               className="flex h-12 items-center gap-2 rounded-md px-3 text-sm font-medium transition-colors hover:bg-accent/60"
             >
               <BarChart3 className="h-4 w-4 text-primary" />
-              관리자 — 통계·자료·사용자·공지
+              관리자 · 통계·자료·사용자·공지
               <ChevronRight className="ml-auto h-4 w-4 text-muted-foreground" />
             </Link>
           </CardContent>

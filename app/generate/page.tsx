@@ -10,6 +10,7 @@ import type { SavedMaterial } from "@/lib/generate";
 import { listMyMaterials } from "@/lib/generated-materials";
 import { GenerateForm } from "@/components/generate/GenerateForm";
 import { SavedList } from "@/components/generate/SavedList";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -71,17 +72,18 @@ export default async function GeneratePage({
   const recentSaved = initialMaterial ? [] : await listMyMaterials(5);
 
   return (
-    <div className="mx-auto max-w-3xl space-y-3 px-3 py-4 sm:px-4">
+    <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
       <div>
-        <h1 className="flex items-center gap-2 text-2xl font-semibold tracking-tight">
-          <Wand2 className="h-6 w-6 text-primary" /> AI 자료제작
-        </h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          인덱싱된 교육자료를 근거로 훈련계획·교안·슬라이드를 만들어 드립니다.
-        </p>
+        <OperationalHeader
+          eyebrow="구조 업무 02 · 자료 제작"
+          title="AI 자료제작"
+          description="인덱싱된 교육자료를 근거로 훈련계획·교안·슬라이드를 만듭니다."
+          icon={Wand2}
+          status={categories.length > 0 ? `${categories.length}개 분야 연결` : "자료 연결 대기"}
+        />
         <Link
           href="/generate/shared"
-          className="mt-2 inline-flex items-center gap-1.5 text-sm font-medium text-primary hover:underline"
+          className="mt-3 inline-flex min-h-11 items-center gap-1.5 border border-slate-300 bg-white px-3 text-sm font-semibold text-primary transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800"
         >
           <Users className="h-4 w-4" /> 동료가 만든 자료 보기
           <ChevronRight className="h-4 w-4" />
@@ -89,7 +91,7 @@ export default async function GeneratePage({
       </div>
 
       {categories.length === 0 && !initialMaterial ? (
-        <p className="rounded-lg border py-12 text-center text-sm text-muted-foreground">
+        <p className="border border-l-4 border-l-primary bg-card py-12 text-center text-sm text-muted-foreground">
           아직 인덱싱된 자료가 없습니다. 자료를 올리면 분야가 자동으로 나타납니다.
         </p>
       ) : (
@@ -101,7 +103,7 @@ export default async function GeneratePage({
       )}
 
       {recentSaved.length > 0 && (
-        <section className="space-y-3 pt-2">
+        <section className="space-y-3 border-t-2 border-t-slate-900 pt-3 dark:border-t-slate-200">
           <div className="flex items-center justify-between">
             <h2 className="flex items-center gap-2 text-base font-semibold">
               <FolderOpen className="h-4 w-4 text-primary" /> 저장한 자료

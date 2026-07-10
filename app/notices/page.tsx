@@ -1,10 +1,11 @@
-import { Pin } from "lucide-react";
+import { Megaphone, Pin } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/server";
 import { isNewNotice } from "@/lib/notices";
 import { DEMO, demoNotices } from "@/lib/demo";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 import {
   Accordion,
   AccordionContent,
@@ -38,13 +39,14 @@ export default async function NoticesPage() {
   const notices = await loadNotices();
 
   return (
-    <div className="mx-auto max-w-3xl space-y-5 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="text-xl font-semibold">공지사항</h1>
-        <p className="text-sm text-muted-foreground">
-          교육·훈련 관련 공지를 확인하세요.
-        </p>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
+      <OperationalHeader
+        eyebrow="작전 브리핑 · 공지"
+        title="공지사항"
+        description="교육·훈련 일정과 운영 공지를 확인합니다."
+        icon={Megaphone}
+        status={`${notices.length}건 게시`}
+      />
 
       {notices.length === 0 ? (
         <Card>
@@ -53,7 +55,7 @@ export default async function NoticesPage() {
           </CardContent>
         </Card>
       ) : (
-        <Accordion type="single" collapsible className="rounded-xl border bg-card px-4">
+        <Accordion type="single" collapsible className="rounded-md border border-t-4 border-t-slate-800 bg-card px-4 dark:border-t-slate-200">
           {notices.map((n) => (
             <AccordionItem key={n.id} value={String(n.id)}>
               <AccordionTrigger className="gap-2 text-left">

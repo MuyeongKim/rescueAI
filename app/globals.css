@@ -116,7 +116,12 @@
     --chart-3: 35 90% 55%; /* amber */
     --chart-4: 168 38% 44%; /* teal */
     --chart-5: 221 12% 50%; /* muted */
-    --radius: 0.5rem;
+    --radius: 0.375rem;
+    --ops-navy: #0b1426;
+    --ops-sidebar: #111d31;
+    --ops-signal: #d63f18;
+    --ops-steel: #687487;
+    --ops-ready: #168c5b;
   }
 
   /* 다크 = 야간 대기 모드. 네이비 베이스, 오렌지는 한 단계 밝게. */
@@ -163,18 +168,22 @@
   }
   body {
     @apply bg-background text-foreground;
+    letter-spacing: 0;
   }
 }
 
-/* 로그인 히어로 모션 — 출동 신호(비컨) 확산 + 오로라 드리프트 + 진입 상승.
-   폐쇄망이라 전부 CSS. prefers-reduced-motion 존중. */
-@keyframes beacon-ring {
-  0% { transform: scale(0.4); opacity: 0.5; }
-  100% { transform: scale(2.6); opacity: 0; }
+/* 구조지휘 콘솔 모션. 장식은 transform/opacity만 움직여 레이아웃을 건드리지 않는다. */
+@keyframes command-scan {
+  0%, 100% { transform: translateY(-18vh); opacity: 0; }
+  14%, 86% { opacity: 0.75; }
+  50% { transform: translateY(68vh); opacity: 0.45; }
 }
-@keyframes hero-drift {
-  0%, 100% { background-position: 0% 50%; }
-  50% { background-position: 100% 50%; }
+@keyframes command-sweep {
+  to { transform: rotate(360deg); }
+}
+@keyframes command-pulse {
+  0%, 100% { opacity: 0.5; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1); }
 }
 @keyframes rise-in {
   from { opacity: 0; transform: translateY(14px); }
@@ -182,20 +191,29 @@
 }
 
 @layer utilities {
-  .hero-aurora {
-    background-size: 200% 200%;
-    animation: hero-drift 20s ease-in-out infinite;
+  .command-grid {
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.035) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.035) 1px, transparent 1px);
+    background-size: 44px 44px;
   }
-  .beacon-ring {
-    animation: beacon-ring 3.4s cubic-bezier(0.22, 1, 0.36, 1) infinite;
+  .command-scan-line {
+    animation: command-scan 6.5s ease-in-out infinite;
+  }
+  .command-radar-sweep {
+    animation: command-sweep 7s linear infinite;
+  }
+  .command-status-pulse {
+    animation: command-pulse 2.4s ease-in-out infinite;
   }
   .anim-rise {
     opacity: 0;
     animation: rise-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   }
   @media (prefers-reduced-motion: reduce) {
-    .hero-aurora,
-    .beacon-ring { animation: none; }
+    .command-scan-line,
+    .command-radar-sweep,
+    .command-status-pulse { animation: none; }
     .anim-rise { opacity: 1; animation: none; }
   }
 }

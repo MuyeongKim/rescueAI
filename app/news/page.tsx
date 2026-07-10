@@ -8,6 +8,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 import { listVisibleNews } from "@/lib/news";
 
 export const dynamic = "force-dynamic";
@@ -16,16 +17,14 @@ export default async function NewsPage() {
   const items = await listVisibleNews();
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <Newspaper className="h-5 w-5 text-primary" /> 구조 동향
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          전국·해외 구조 사례와 신기술 동향입니다. 관리자가 큐레이션하거나 매일
-          자동 수집·요약됩니다.
-        </p>
-      </div>
+    <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
+      <OperationalHeader
+        eyebrow="현장 정보 · 구조 동향"
+        title="구조 동향"
+        description="전국·해외 구조 사례와 신기술 동향을 확인합니다."
+        icon={Newspaper}
+        status={`${items.length}건 게시`}
+      />
 
       {items.length === 0 ? (
         <p className="rounded-lg border py-12 text-center text-sm text-muted-foreground">
@@ -36,7 +35,10 @@ export default async function NewsPage() {
         <div className="space-y-3">
           {items.map((n) => {
             const card = (
-              <Card key={n.id} className={n.url ? "transition-colors hover:border-primary/50" : ""}>
+              <Card
+                key={n.id}
+                className={n.url ? "border-l-4 border-l-slate-300 transition-colors hover:border-l-primary" : "border-l-4 border-l-slate-300"}
+              >
                 <CardHeader className="pb-2">
                   <div className="flex flex-wrap items-center gap-1.5">
                     {n.region && (
