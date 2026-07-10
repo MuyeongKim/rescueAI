@@ -979,6 +979,18 @@ export function GenerateForm({
                         <span className="text-xs text-muted-foreground">{i + 1}</span>
                         {s.title}
                       </p>
+                      {s.steps && s.steps.length >= 2 && (
+                        <div className="mb-2 flex flex-wrap items-center gap-1 pl-5 text-xs">
+                          {s.steps.map((st, k) => (
+                            <span key={k} className="flex items-center gap-1">
+                              <span className="rounded bg-muted px-1.5 py-0.5 font-medium">{st}</span>
+                              {k < s.steps!.length - 1 && (
+                                <span className="text-muted-foreground">▸</span>
+                              )}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                       <ul className="list-disc space-y-0.5 pl-5 text-sm text-muted-foreground">
                         {s.bullets.map((b, j) => (
                           <li key={j}>{b}</li>

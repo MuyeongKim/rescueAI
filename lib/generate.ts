@@ -94,6 +94,11 @@ export const generatedSlidesSchema = z.object({
           .array(z.string().describe("핵심 문장 (한 줄, 40자 이내)"))
           .min(1)
           .max(4),
+        steps: z
+          .array(z.string().describe("단계 핵심어 (짧게, 6자 내외)"))
+          .max(5)
+          .optional()
+          .describe("절차·흐름이 있는 슬라이드에만: 3~5개 단계어(예: 초동대응→진압·구조→사후처리). 없으면 생략"),
         notes: z.string().describe("발표자 노트 — 교관이 읽을 설명 대본 2~4문장"),
       })
     )
@@ -180,6 +185,8 @@ export function buildGeneratePrompt(req: GenerateRequest): string {
 [작성 규칙]
 - 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
 - 각 슬라이드: 간결한 제목 + 핵심 문장 최대 4개(한 줄씩) + 발표자 노트(교관용 설명 대본 2~4문장).
+- **절차·단계·흐름을 다루는 슬라이드**(예: 대응 절차, 착용 순서)에는 steps 에 3~5개 단계 핵심어를
+  순서대로 넣으세요(예: ["초동대응","진압·구조","사후처리"]). 흐름이 아닌 슬라이드는 steps 를 넣지 마세요.
 - 대상 수준(${req.audience})에 맞는 용어와 난이도로, 한국어로 작성하세요.`;
   }
 
@@ -245,6 +252,11 @@ export const regeneratedSectionSchema = z.object({
 export const regeneratedSlideSchema = z.object({
   title: z.string().describe("슬라이드 제목 (간결하게)"),
   bullets: z.array(z.string().describe("핵심 문장 (한 줄, 40자 이내)")).min(1).max(4),
+  steps: z
+    .array(z.string().describe("단계 핵심어 (짧게)"))
+    .max(5)
+    .optional()
+    .describe("절차·흐름 슬라이드에만 3~5개 단계어. 아니면 생략"),
   notes: z.string().describe("발표자 노트 — 교관이 읽을 설명 대본 2~4문장"),
 });
 
@@ -316,6 +328,7 @@ ${args.current.bullets.map((b) => `· ${b}`).join("\n")}
 - 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
 - 다른 슬라이드와 중복되지 않게 작성하세요.
 - 제목 + 핵심 문장 최대 4개(한 줄씩) + 발표자 노트(2~4문장).
+- 절차·흐름 슬라이드면 steps 에 3~5개 단계어를 넣고, 아니면 steps 를 생략하세요.
 - 대상 수준(${args.audience})에 맞는 용어로 한국어로, 이 슬라이드 하나만 JSON으로 반환하세요.`;
 }
 

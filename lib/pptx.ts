@@ -13,6 +13,7 @@ const BODY = "2B3648"; // 본문 텍스트
 const NAVY = "12233F"; // 표지 배경
 const GRAY = "6B7280"; // 보조
 const HAIR = "E5E7EB"; // 헤어라인
+const TINT = "F4F6F9"; // 단계 바 배경(연한 중립)
 const COVER_SUB = "C8D2E0"; // 표지 부제(네이비 위)
 const COVER_EYE = "9FB0CB"; // 표지 아이라벨
 const COVER_FADE = "7C8AA6"; // 표지 안내문
@@ -83,6 +84,22 @@ export async function downloadPptx(
     // 제목 아래 헤어라인
     slide.addShape("rect", { x: 0.62, y: 1.4, w: 12.1, h: 0.02, fill: { color: HAIR }, line: noLine });
 
+    // 단계(흐름) 다이어그램 — steps 가 있으면 제목 아래 화살표 바로 표시
+    const steps = (s.steps ?? []).filter((x) => x && x.trim()).slice(0, 5);
+    let bodyTop = 1.75;
+    if (steps.length >= 2) {
+      slide.addShape("roundRect", {
+        x: 0.9, y: 1.56, w: 11.53, h: 0.52, rectRadius: 0.06,
+        fill: { color: TINT }, line: noLine,
+      });
+      slide.addText(steps.join("      ▸      "), {
+        x: 1.0, y: 1.56, w: 11.33, h: 0.52,
+        fontFace: FONT, fontSize: 13, color: accent, bold: true,
+        align: "center", valign: "middle",
+      });
+      bodyTop = 2.35;
+    }
+
     // 핵심 문장(불릿)
     slide.addText(
       s.bullets.map((b) => ({
@@ -90,7 +107,7 @@ export async function downloadPptx(
         options: { bullet: { code: "25AA", indent: 22 }, breakLine: true, paraSpaceAfter: 10 },
       })),
       {
-        x: 0.9, y: 1.75, w: 11.6, h: 4.9,
+        x: 0.9, y: bodyTop, w: 11.6, h: 6.85 - bodyTop,
         fontFace: FONT, fontSize: 20, color: BODY,
         lineSpacingMultiple: 1.4, valign: "top",
       }
