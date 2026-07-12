@@ -67,7 +67,7 @@ export function ConversationList({ activeId }: { activeId?: string }) {
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetTrigger asChild>
-        <Button variant="ghost" size="icon" className="h-10 w-10" aria-label="대화 목록">
+        <Button variant="ghost" size="icon" className="h-12 w-12 sm:h-10 sm:w-10" aria-label="대화 목록">
           <Menu className="h-5 w-5" />
         </Button>
       </SheetTrigger>
@@ -78,7 +78,7 @@ export function ConversationList({ activeId }: { activeId?: string }) {
 
         <div className="space-y-2 p-3">
           <Link href="/chat" onClick={() => setOpen(false)}>
-            <Button className="h-11 w-full gap-2">
+            <Button className="h-12 w-full gap-2">
               <Plus className="h-4 w-4" /> 새 대화
             </Button>
           </Link>
@@ -88,7 +88,7 @@ export function ConversationList({ activeId }: { activeId?: string }) {
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="제목 검색"
-              className="h-11 pl-9"
+              className="h-12 pl-9"
             />
           </div>
         </div>

@@ -1,9 +1,11 @@
 import { redirect } from "next/navigation";
+import { Megaphone } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/server";
 import { getUserAndProfile, isAdmin } from "@/lib/auth";
 import { DEMO, demoNotices } from "@/lib/demo";
 import { NoticeManager } from "@/components/admin/NoticeManager";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -27,12 +29,13 @@ export default async function AdminNoticesPage() {
 
   return (
     <div className="mx-auto max-w-3xl space-y-5 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="text-xl font-semibold">공지 작성</h1>
-        <p className="text-sm text-muted-foreground">
-          전체 대원에게 표시되는 공지사항을 등록·관리합니다.
-        </p>
-      </div>
+      <OperationalHeader
+        eyebrow="관리 업무 · 공지"
+        title="공지 작성"
+        description="전체 대원에게 표시되는 공지사항을 등록하고 관리합니다."
+        icon={Megaphone}
+        status={`${notices.length}건 관리`}
+      />
       <NoticeManager notices={notices} />
     </div>
   );

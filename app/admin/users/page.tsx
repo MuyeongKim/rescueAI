@@ -20,6 +20,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { UserRoleSelect } from "@/components/admin/UserRoleSelect";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -50,14 +51,13 @@ export default async function AdminUsersPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="text-xl font-semibold">사용자 관리</h1>
-        <p className="text-sm text-muted-foreground">
-          계정 목록과 권한을 관리합니다. 계정 생성은 매직링크 로그인 시 자동 발급되며,
-          명단 일괄 등록은 <code className="rounded bg-muted px-1">scripts/import-users.mjs</code>를
-          사용하세요.
-        </p>
-      </div>
+      <OperationalHeader
+        eyebrow="관리 업무 · 사용자"
+        title="사용자 관리"
+        description="계정 목록과 권한을 관리합니다. 명단 일괄 등록은 관리자 스크립트로 처리합니다."
+        icon={Users}
+        status={`${users.length}명 등록`}
+      />
 
       <Card>
         <CardHeader className="pb-3">

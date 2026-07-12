@@ -80,6 +80,7 @@ export default async function GeneratePage({
           description="인덱싱된 교육자료를 근거로 훈련계획·교안·슬라이드를 만듭니다."
           icon={Wand2}
           status={categories.length > 0 ? `${categories.length}개 분야 연결` : "자료 연결 대기"}
+          statusTone={categories.length > 0 ? "success" : "warning"}
         />
         <Link
           href="/generate/shared"

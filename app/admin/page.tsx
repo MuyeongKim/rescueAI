@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 import {
   Users,
+  BarChart3,
   MessageSquare,
   Clock,
   ThumbsUp,
@@ -34,6 +35,7 @@ import {
   CategoryCitationsChart,
 } from "@/components/admin/StatsChart";
 import { StatCard } from "@/components/StatCard";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -177,12 +179,14 @@ export default async function AdminPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="text-xl font-semibold">관리자 대시보드</h1>
-        <p className="text-sm text-muted-foreground">
-          이용 현황과 답변 품질을 한눈에 봅니다.
-        </p>
-      </div>
+      <OperationalHeader
+        eyebrow="관리 업무 · 운영 통계"
+        title="관리자 대시보드"
+        description="이용 현황과 답변 품질을 한눈에 확인합니다."
+        icon={BarChart3}
+        status={DEMO ? "PoC 통계" : "실데이터 집계"}
+        statusTone={DEMO ? "warning" : "success"}
+      />
 
       {/* 통계 카드 */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -202,7 +206,7 @@ export default async function AdminPage() {
           icon={ThumbsUp}
           label="답변 만족도"
           value={satisfaction !== null ? `${satisfaction}%` : "-"}
-          sub={`👍 ${up} · 👎 ${down}`}
+          sub={`긍정 ${up} · 부정 ${down}`}
         />
       </div>
 

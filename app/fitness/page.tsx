@@ -38,6 +38,7 @@ export default async function FitnessPage() {
         description={`운동을 기록하면 1분당 1마일리지가 적립됩니다. 일일 상한은 ${DAILY_POINT_CAP}점입니다.`}
         icon={Dumbbell}
         status="개인 기록 연결"
+        statusTone="success"
       />
 
       {/* 마일리지 현황 */}

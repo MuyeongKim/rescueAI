@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { BarChart3, FileSpreadsheet, Lightbulb } from "lucide-react";
+import { BarChart3, FileSpreadsheet, Info, Lightbulb } from "lucide-react";
 
 import { getUserAndProfile, isAdmin } from "@/lib/auth";
 import {
@@ -10,6 +10,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -70,20 +71,22 @@ export default async function AdminDispatchPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="flex items-center gap-2 text-xl font-semibold">
-          <BarChart3 className="h-5 w-5 text-primary" /> 출동통계 분석
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          출동 로우데이터를 업로드하면 기간·유형별로 자동 분석해 권장 훈련의
-          과학적 근거를 제공합니다.
+      <OperationalHeader
+        eyebrow="관리 업무 · 출동 분석"
+        title="출동통계 분석"
+        description="출동 로우데이터를 기간·유형별로 분석해 권장 훈련의 근거를 제공합니다."
+        icon={BarChart3}
+        status="PoC 예시 데이터"
+        statusTone="warning"
+      />
+
+      <div className="flex items-start gap-3 border border-slate-300 border-l-4 border-l-amber-500 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950 dark:border-slate-700 dark:bg-amber-950/20 dark:text-amber-100">
+        <Info className="mt-0.5 h-4 w-4 shrink-0" />
+        <p>
+          현재 예시 데이터이며 엑셀 업로드·자동 분석 연동을 준비하고 있습니다. 민감정보가
+          포함된 원본은 내부망에서만 처리합니다.
         </p>
       </div>
-
-      <p className="rounded-lg border border-dashed bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-        ⚠️ 예시 데이터입니다 — 엑셀 업로드·자동 분석 연동 예정입니다. 민감정보가
-        포함된 원본은 내부망에서만 처리합니다.
-      </p>
 
       {/* 업로드 (연동 예정) */}
       <Card>
@@ -95,8 +98,8 @@ export default async function AdminDispatchPage() {
               분기별 엑셀 파일을 올리면 자동으로 분석·시각화됩니다.
             </p>
           </div>
-          <Button className="h-11" disabled>
-            엑셀 업로드 — 연동 예정
+          <Button className="h-12" disabled>
+            엑셀 업로드 · 연동 예정
           </Button>
         </CardContent>
       </Card>

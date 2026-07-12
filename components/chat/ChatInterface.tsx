@@ -4,7 +4,15 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useChat } from "ai/react";
 import type { Message } from "ai";
-import { ArrowRight, Send, Square, Loader2, Home, ShieldCheck } from "lucide-react";
+import {
+  ArrowRight,
+  Home,
+  Loader2,
+  Send,
+  ShieldCheck,
+  SlidersHorizontal,
+  Square,
+} from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
@@ -15,6 +23,13 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import {
+  Sheet,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationList } from "@/components/chat/ConversationList";
 
@@ -115,50 +130,114 @@ export function ChatInterface({
     <div className="flex h-full flex-col">
       {/* 상단 바: 대화목록 + 카테고리 필터 */}
       <div className="border-b-2 border-[#d63f18] bg-[#111d31] px-3 py-2 text-white sm:px-4">
-        {/* 모바일에선 컨트롤이 많아 한 줄을 넘칠 수 있어 flex-wrap + 라벨 숨김으로 정리 */}
-        <div className="mx-auto flex max-w-3xl flex-wrap items-center gap-2">
+        <div className="mx-auto flex max-w-3xl items-center gap-2">
           <Link href="/home" className="md:hidden" aria-label="홈으로">
-            <Button variant="ghost" size="icon" className="h-10 w-10">
+            <Button variant="ghost" size="icon" className="h-12 w-12 sm:h-10 sm:w-10">
               <Home className="h-5 w-5" />
             </Button>
           </Link>
           <ConversationList activeId={conversationId} />
-          <span className="mr-auto hidden items-center gap-2 text-sm font-bold sm:flex">
+          <span className="mr-auto flex items-center gap-2 text-sm font-bold">
             <span className="h-4 w-0.5 bg-[#f0542d]" aria-hidden /> AI 튜터
           </span>
-          <span className="ml-1 hidden text-xs text-slate-400 sm:inline">분야</span>
-          <Select value={category} onValueChange={setCategory}>
-            <SelectTrigger className="h-10 w-24 border-slate-600 bg-[#0d192b] text-white sm:w-28">
-              <SelectValue placeholder="전체" />
-            </SelectTrigger>
-            <SelectContent>
-              {["전체", ...(categories?.length ? categories : DEFAULT_CATEGORIES)].map(
-                (c) => (
-                  <SelectItem key={c} value={c}>
-                    {c}
-                  </SelectItem>
-                )
-              )}
-            </SelectContent>
-          </Select>
-
-          {models.length > 1 && (
-            <>
-              <span className="ml-1 hidden text-xs text-slate-400 sm:inline">모델</span>
-              <Select value={model} onValueChange={setModel}>
-                <SelectTrigger className="h-10 w-32 border-slate-600 bg-[#0d192b] text-white sm:w-36">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {models.map((m) => (
-                    <SelectItem key={m.key} value={m.key}>
-                      {m.label}
+          <div className="hidden items-center gap-2 sm:flex">
+            <span className="ml-1 text-xs text-slate-400">분야</span>
+            <Select value={category} onValueChange={setCategory}>
+              <SelectTrigger
+                className="h-10 w-28 border-slate-600 bg-[#0d192b] text-white"
+                aria-label="분야 선택"
+              >
+                <SelectValue placeholder="전체" />
+              </SelectTrigger>
+              <SelectContent>
+                {["전체", ...(categories?.length ? categories : DEFAULT_CATEGORIES)].map(
+                  (c) => (
+                    <SelectItem key={c} value={c}>
+                      {c}
                     </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </>
-          )}
+                  )
+                )}
+              </SelectContent>
+            </Select>
+
+            {models.length > 1 && (
+              <>
+                <span className="ml-1 text-xs text-slate-400">모델</span>
+                <Select value={model} onValueChange={setModel}>
+                  <SelectTrigger
+                    className="h-10 w-36 border-slate-600 bg-[#0d192b] text-white"
+                    aria-label="AI 모델 선택"
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {models.map((m) => (
+                      <SelectItem key={m.key} value={m.key}>
+                        {m.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </>
+            )}
+          </div>
+
+          <Sheet>
+            <SheetTrigger asChild>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="h-12 w-12 sm:hidden"
+                aria-label="AI 튜터 설정"
+              >
+                <SlidersHorizontal className="h-5 w-5" />
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="bottom" className="rounded-none border-t-4 border-t-primary">
+              <SheetHeader className="text-left">
+                <p className="text-[10px] font-bold text-primary">AI 튜터</p>
+                <SheetTitle className="text-xl font-extrabold">질문 설정</SheetTitle>
+              </SheetHeader>
+              <div className="mt-5 space-y-4">
+                <div className="space-y-2">
+                  <label className="text-sm font-semibold">분야</label>
+                  <Select value={category} onValueChange={setCategory}>
+                    <SelectTrigger className="h-12 w-full" aria-label="분야 선택">
+                      <SelectValue placeholder="전체" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {["전체", ...(categories?.length ? categories : DEFAULT_CATEGORIES)].map(
+                        (c) => (
+                          <SelectItem key={c} value={c}>
+                            {c}
+                          </SelectItem>
+                        )
+                      )}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                {models.length > 1 && (
+                  <div className="space-y-2">
+                    <label className="text-sm font-semibold">AI 모델</label>
+                    <Select value={model} onValueChange={setModel}>
+                      <SelectTrigger className="h-12 w-full" aria-label="AI 모델 선택">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {models.map((m) => (
+                          <SelectItem key={m.key} value={m.key}>
+                            {m.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+              </div>
+            </SheetContent>
+          </Sheet>
         </div>
       </div>
 

@@ -78,7 +78,7 @@ function OptionGroup<T extends string>({
               aria-checked={active}
               onClick={() => onChange(opt)}
               className={cn(
-                "inline-flex h-9 items-center rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none",
+                "inline-flex h-12 items-center rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none md:h-10",
                 "hover:-translate-y-0.5 active:translate-y-0 motion-reduce:hover:translate-y-0",
                 active
                   ? "border-primary bg-primary text-primary-foreground shadow-sm"
@@ -602,7 +602,7 @@ export function GenerateForm({
                   : undefined
               }
               className={cn(
-                "mt-1 flex w-full items-center gap-2.5 rounded-lg border border-dashed p-3 text-left text-sm transition-all duration-200 motion-reduce:transition-none",
+                "mt-1 flex min-h-12 w-full items-center gap-2.5 rounded-md border border-dashed p-3 text-left text-sm transition-all duration-200 motion-reduce:transition-none",
                 type === "notebooklm"
                   ? "shadow-sm"
                   : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
@@ -646,7 +646,7 @@ export function GenerateForm({
                           : undefined
                       }
                       className={cn(
-                        "inline-flex h-9 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none",
+                        "inline-flex h-12 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none md:h-10",
                         "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
                         active ? "shadow-sm" : "border-border hover:bg-accent/40"
                       )}
@@ -681,7 +681,7 @@ export function GenerateForm({
                   value={topic}
                   onChange={(e) => setTopic(e.target.value)}
                   maxLength={100}
-                  className="h-10 text-base"
+                  className="h-12 text-base md:h-10"
                 />
               </div>
               <div className="space-y-1.5">
@@ -693,7 +693,7 @@ export function GenerateForm({
                   type="date"
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
-                  className="h-10 text-base"
+                  className="h-12 text-base md:h-10"
                 />
               </div>
               {/* 훈련계획 양식 전용 — 훈련 장소 */}
@@ -708,7 +708,7 @@ export function GenerateForm({
                     value={place}
                     onChange={(e) => setPlace(e.target.value)}
                     maxLength={100}
-                    className="h-10 text-base"
+                    className="h-12 text-base md:h-10"
                   />
                 </div>
               )}
@@ -749,7 +749,7 @@ export function GenerateForm({
                         aria-checked={active}
                         onClick={() => setModel(m.key)}
                         className={cn(
-                          "flex h-11 flex-col items-start justify-center rounded-md border px-4 transition-all duration-200 motion-reduce:transition-none",
+                          "flex h-12 flex-col items-start justify-center rounded-md border px-4 transition-all duration-200 motion-reduce:transition-none md:h-11",
                           "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
                           active
                             ? "border-primary bg-primary text-primary-foreground shadow-sm"

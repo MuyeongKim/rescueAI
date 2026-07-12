@@ -66,7 +66,7 @@ const QUICK_ACTIONS = [
     code: "02 / 제작",
     href: "/generate",
     icon: Wand2,
-    title: "훈련자료 제작",
+    title: "AI 자료제작",
     desc: "훈련계획·교안·슬라이드를 표준 양식으로 만듭니다.",
     action: "자료 만들기",
     rail: "border-t-slate-800 dark:border-t-slate-200",
@@ -137,8 +137,8 @@ export default async function HomePage() {
             </p>
           </div>
           <div className="flex min-h-11 shrink-0 items-center gap-2 self-start border border-slate-300 bg-white px-3 text-xs font-semibold text-slate-700 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-            <span className="command-status-pulse h-2 w-2 rounded-full bg-emerald-600" aria-hidden />
-            교육자료 근거 연결
+            <ShieldCheck className="h-4 w-4 text-primary" aria-hidden />
+            교육자료 기반 응답
           </div>
         </div>
       </header>
@@ -183,15 +183,25 @@ export default async function HomePage() {
               <Link
                 key={item.href}
                 href={item.href}
-                className={`group relative min-h-[172px] border border-slate-300 border-t-4 bg-white p-5 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800 ${item.rail}`}
+                className={`group relative min-h-[88px] border border-slate-300 border-t-4 bg-white px-4 py-3 transition-colors hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:min-h-[172px] sm:p-5 dark:border-slate-700 dark:bg-slate-900 dark:hover:bg-slate-800 ${item.rail}`}
               >
-                <div className="flex items-start justify-between gap-3">
-                  <span className="text-[10px] font-bold text-primary">{item.code}</span>
-                  <Icon className="h-5 w-5 text-slate-400 transition-colors group-hover:text-primary" />
+                <div className="flex items-center gap-3 sm:block">
+                  <span className="flex h-10 w-10 shrink-0 items-center justify-center border border-slate-300 text-primary sm:hidden dark:border-slate-700">
+                    <Icon className="h-5 w-5" />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-start justify-between gap-3">
+                      <span className="text-[10px] font-bold text-primary">{item.code}</span>
+                      <Icon className="hidden h-5 w-5 text-slate-400 transition-colors group-hover:text-primary sm:block" />
+                    </div>
+                    <h3 className="mt-1 truncate text-base font-extrabold text-slate-950 sm:mt-5 sm:text-lg dark:text-slate-50">
+                      {item.title}
+                    </h3>
+                  </div>
+                  <ArrowRight className="h-5 w-5 shrink-0 text-slate-400 sm:hidden" />
                 </div>
-                <h3 className="mt-5 text-lg font-extrabold text-slate-950 dark:text-slate-50">{item.title}</h3>
-                <p className="mt-2 pr-6 text-sm leading-6 text-muted-foreground">{item.desc}</p>
-                <span className="mt-4 flex items-center gap-1 text-xs font-bold text-primary">
+                <p className="mt-2 hidden pr-6 text-sm leading-6 text-muted-foreground sm:block">{item.desc}</p>
+                <span className="mt-4 hidden items-center gap-1 text-xs font-bold text-primary sm:flex">
                   {item.action} <ArrowRight className="h-4 w-4 transition-transform group-hover:translate-x-1" />
                 </span>
               </Link>

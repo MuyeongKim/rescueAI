@@ -9,6 +9,7 @@ import {
   LogOut,
   MessageSquare,
   Newspaper,
+  ShieldCheck,
   Siren,
   Wand2,
 } from "lucide-react";
@@ -128,7 +129,7 @@ export async function AppSidebar({
           <p className="px-3 pb-2 text-[10px] font-semibold text-slate-500">주요 업무</p>
           <div className="space-y-0.5">{NAV_ITEMS.map(renderItem)}</div>
 
-          {isAdmin && (
+          {isAdmin && !active?.startsWith("admin") && (
             <>
               <p className="px-3 pb-2 pt-6 text-[10px] font-semibold text-slate-500">관리 업무</p>
               <div className="space-y-0.5">{ADMIN_ITEMS.map(renderItem)}</div>
@@ -138,8 +139,8 @@ export async function AppSidebar({
 
         <footer className="border-t border-slate-700/70 p-3">
           <div className="mb-2 flex min-h-10 items-center gap-2 border border-slate-700 bg-[#0d192b] px-3 text-[11px] text-slate-300">
-            <span className="command-status-pulse h-2 w-2 rounded-full bg-emerald-400" aria-hidden />
-            교육자료 연결 정상
+            <ShieldCheck className="h-4 w-4 text-[#ff7752]" aria-hidden />
+            교육자료 기반 모드
           </div>
           {email && <p className="truncate px-3 py-1 text-[11px] text-slate-500">{email}</p>}
           <ThemeToggle className="h-11 w-full justify-start gap-3 px-3 text-sm text-slate-400 hover:bg-[#17253b] hover:text-white" />

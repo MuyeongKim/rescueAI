@@ -22,6 +22,7 @@ import {
 import { CategoryBadge } from "@/components/learning/CategoryBadge";
 import { DocumentUpload } from "@/components/admin/DocumentUpload";
 import { DocumentDeleteButton } from "@/components/admin/DocumentDeleteButton";
+import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
@@ -63,12 +64,13 @@ export default async function AdminDocumentsPage() {
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 px-3 py-5 sm:px-4">
-      <div>
-        <h1 className="text-xl font-semibold">자료 관리</h1>
-        <p className="text-sm text-muted-foreground">
-          인덱싱된 교육자료와 처리 상태를 확인합니다.
-        </p>
-      </div>
+      <OperationalHeader
+        eyebrow="관리 업무 · 근거 자료"
+        title="자료 관리"
+        description="인덱싱된 교육자료와 처리 상태를 확인합니다."
+        icon={FileText}
+        status={`${docs.length}건 등록`}
+      />
 
       <Card>
         <CardHeader className="pb-3">

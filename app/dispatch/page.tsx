@@ -67,6 +67,7 @@ export default function DispatchPage() {
         description="구조활동일지를 기준으로 출동 실적과 마일리지를 집계합니다."
         icon={Siren}
         status="PoC 예시 데이터"
+        statusTone="warning"
       />
 
       <div className="flex items-start gap-3 border border-slate-300 border-l-4 border-l-amber-500 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950 dark:border-slate-700 dark:bg-amber-950/20 dark:text-amber-100">

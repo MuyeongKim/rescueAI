@@ -97,12 +97,12 @@ function LoginForm() {
 
   return (
     <div className="w-full max-w-md">
-      <div className="mb-7 border-b border-slate-300 pb-5 dark:border-slate-700">
+      <div className="mb-5 border-b border-slate-300 pb-4 sm:mb-7 sm:pb-5 dark:border-slate-700">
         <p className="flex items-center gap-2 text-[11px] font-bold text-primary">
           <span className="h-0.5 w-7 bg-primary" aria-hidden />
           내부 보안 접속
         </p>
-        <h2 className="mt-2 text-2xl font-extrabold text-slate-950 dark:text-slate-50">
+        <h2 className="mt-2 text-xl font-extrabold text-slate-950 sm:text-2xl dark:text-slate-50">
           대원 로그인
         </h2>
         <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
@@ -220,7 +220,7 @@ function LoginForm() {
 
 function LoginHero() {
   return (
-    <section className="command-grid relative flex min-h-[340px] flex-col overflow-hidden bg-[#0b1426] px-6 py-8 text-white sm:px-8 md:min-h-screen md:px-12 md:py-12 lg:px-16">
+    <section className="command-grid relative flex min-h-[260px] flex-col overflow-hidden bg-[#0b1426] px-5 py-6 text-white sm:px-8 md:min-h-screen md:px-12 md:py-12 lg:px-16">
       <div className="hazard-stripe absolute inset-x-0 top-0 h-1.5 text-[#d63f18]" aria-hidden />
       <div
         className="command-scan-line pointer-events-none absolute inset-x-0 top-0 z-0 h-px bg-[#f0542d] shadow-[0_0_18px_2px_rgba(240,84,45,0.45)]"
@@ -244,12 +244,12 @@ function LoginHero() {
         </div>
       </div>
 
-      <div className="relative z-10 my-auto max-w-xl py-10 md:py-14">
+      <div className="relative z-10 mt-auto max-w-xl pb-1 pt-6 md:my-auto md:py-14">
         <p className="anim-rise text-xs font-bold text-[#ff8a66]" style={{ animationDelay: "0.12s" }}>
           구조 대응 준비 시스템
         </p>
         <h1
-          className="anim-rise mt-4 text-3xl font-black leading-[1.22] text-white sm:text-4xl lg:text-[44px]"
+          className="anim-rise mt-3 text-[28px] font-black leading-[1.2] text-white sm:text-3xl md:mt-4 md:text-4xl lg:text-[44px]"
           style={{ animationDelay: "0.2s" }}
         >
           현장을 준비하는
@@ -257,19 +257,19 @@ function LoginHero() {
           구조대원의 훈련 플랫폼
         </h1>
         <p
-          className="anim-rise mt-5 max-w-md text-sm leading-7 text-slate-300 sm:text-base"
+          className="anim-rise mt-5 hidden max-w-md text-sm leading-7 text-slate-300 md:block md:text-base"
           style={{ animationDelay: "0.28s" }}
         >
           구조 매뉴얼의 근거를 확인하고 훈련에 필요한 자료를 신속하게 준비합니다.
         </p>
 
-        <div className="anim-rise mt-7 flex flex-wrap gap-2" style={{ animationDelay: "0.36s" }}>
+        <div className="anim-rise mt-7 hidden flex-wrap gap-2 md:flex" style={{ animationDelay: "0.36s" }}>
           <span className="flex min-h-10 items-center gap-2 border border-slate-600 bg-[#101e34] px-3 text-xs text-slate-200">
-            <Database className="h-4 w-4 text-emerald-400" />
+            <Database className="h-4 w-4 text-[#ff8a66]" />
             교육자료 연결
           </span>
           <span className="flex min-h-10 items-center gap-2 border border-slate-600 bg-[#101e34] px-3 text-xs text-slate-200">
-            <ShieldCheck className="h-4 w-4 text-emerald-400" />
+            <ShieldCheck className="h-4 w-4 text-[#ff8a66]" />
             내부 보안 접속
           </span>
         </div>
@@ -295,7 +295,7 @@ export default function LoginPage() {
   return (
     <main className="min-h-screen md:grid md:grid-cols-[minmax(0,1.2fr)_minmax(420px,0.8fr)]">
       <LoginHero />
-      <section className="relative flex min-h-[60vh] items-center justify-center bg-background px-5 py-10 sm:px-8 md:min-h-screen md:px-10">
+      <section className="relative flex min-h-[calc(100vh-260px)] items-center justify-center bg-background px-5 py-8 sm:px-8 md:min-h-screen md:px-10 md:py-10">
         <div className="absolute inset-y-0 left-0 hidden w-1 bg-primary md:block" aria-hidden />
         <Suspense
           fallback={
