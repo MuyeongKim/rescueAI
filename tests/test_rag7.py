@@ -433,11 +433,23 @@ def test_source_document_registration_and_rollback(monkeypatch, tmp_path):
     insert_payload = next(call[1] for call in calls if call[0] == "insert")
     assert insert_payload["original_filename"] == "구조매뉴얼.hwpx"
     assert insert_payload["source_type"] == "pdf"
+    upload_path = next(call[1] for call in calls if call[0] == "upload")
+    assert upload_path == f"rag/aa/{'a' * 64}.pdf"
+    assert upload_path.isascii()
     assert link.document_id == 42
     assert link.created_row is True
     assert any(call[0] == "upload" for call in calls)
     assert any(call[0] == "delete" for call in calls)
     assert any(call[0] == "remove" for call in calls)
+
+
+def test_chunk_quality_filter_removes_image_only_and_dot_leader_noise(monkeypatch):
+    rag7 = load_rag7(monkeypatch)
+
+    assert rag7.clean_chunk_content("<!-- image -->\n\n구조 안전수칙") == "구조 안전수칙"
+    assert rag7.is_useful_chunk("<!-- image -->\n\n<!-- image -->") is False
+    assert rag7.is_useful_chunk(("· " * 40) + "목차 12") is False
+    assert rag7.is_useful_chunk("급류구조 시 개인부력장비를 착용한다.") is True
 
 
 def test_activate_ingestion_uses_atomic_rpc(monkeypatch):

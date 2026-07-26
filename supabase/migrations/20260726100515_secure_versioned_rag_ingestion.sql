@@ -78,12 +78,12 @@ as $$
     r.id,
     r.content,
     r.metadata,
-    1 - (r.embedding <=> query_embedding) as similarity
+    1 - (r.embedding OPERATOR(public.<=>) query_embedding) as similarity
   from public.rag_rescue as r
   where r.is_active
     and r.metadata @> filter
-    and 1 - (r.embedding <=> query_embedding) >= match_threshold
-  order by r.embedding <=> query_embedding
+    and 1 - (r.embedding OPERATOR(public.<=>) query_embedding) >= match_threshold
+  order by r.embedding OPERATOR(public.<=>) query_embedding
   limit least(greatest(coalesce(match_count, 10), 0), 100);
 $$;
 

@@ -1174,10 +1174,11 @@ def find_linked_document_id(source_name, category_name):
         return None
 
 
-def _safe_storage_component(value, fallback):
-    cleaned = re.sub(r"[/\\\x00-\x1f\x7f]+", "_", str(value or fallback))
-    cleaned = re.sub(r"\s+", "_", cleaned).strip("._")
-    return (cleaned or fallback)[:120]
+def _storage_path_for_file(file_hash):
+    normalized_hash = str(file_hash or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", normalized_hash):
+        raise ValueError("Storage 경로 생성에는 64자리 SHA-256 해시가 필요합니다.")
+    return f"rag/{normalized_hash[:2]}/{normalized_hash}.pdf"
 
 
 def _remove_storage_path(storage_path):
@@ -1224,9 +1225,9 @@ def ensure_source_document(prepared, category_name, file_hash, log_cb=None):
     existing_rows = existing_result.data or []
     existing = existing_rows[0] if existing_rows else None
 
-    category_path = _safe_storage_component(category_name, "uncategorized")
-    source_stem = _safe_storage_component(prepared.original_path.stem, "document")
-    storage_path = f"rag/{category_path}/{file_hash[:16]}-{source_stem}.pdf"
+    # Supabase Storage 객체 키는 AWS 호환 ASCII 문자만 사용한다. 한글 원본명은
+    # documents.original_filename/title에 보존하고 객체는 내용 해시로 식별한다.
+    storage_path = _storage_path_for_file(file_hash)
 
     if existing and existing.get("file_url") == storage_path:
         log(f"ℹ️ 자료실 원본 연결 재사용: documents.id={existing['id']}")
@@ -1390,6 +1391,24 @@ def file_sha256(file_path):
         for block in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(block)
     return digest.hexdigest()
+
+
+def clean_chunk_content(content):
+    cleaned = re.sub(r"<!--\s*image\s*-->", "", str(content or ""), flags=re.IGNORECASE)
+    return re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+
+
+def is_useful_chunk(content):
+    cleaned = clean_chunk_content(content)
+    if not cleaned or not any(character.isalnum() for character in cleaned):
+        return False
+
+    visible_length = sum(not character.isspace() for character in cleaned)
+    dot_leader_count = cleaned.count("·")
+    return not (
+        dot_leader_count >= 20
+        and dot_leader_count / max(visible_length, 1) >= 0.2
+    )
 
 
 def to_pgvector(vector):
@@ -1643,6 +1662,9 @@ def run_ingestion_pipeline(
                 and content.count("..") <= 5
             ):
                 for chunk in text_splitter.split_text(content):
+                    cleaned_chunk = clean_chunk_content(chunk)
+                    if not is_useful_chunk(cleaned_chunk):
+                        continue
                     metadata = {
                         "source": source_name,
                         "category": category_name,
@@ -1662,7 +1684,7 @@ def run_ingestion_pipeline(
                     metadata.update(md_doc.metadata)
                     final_docs.append(
                         TextDocument(
-                            page_content=chunk,
+                            page_content=cleaned_chunk,
                             metadata=sanitize_for_json(metadata),
                         )
                     )
