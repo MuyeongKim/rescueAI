@@ -23,12 +23,12 @@ export type ModelOption = {
 // Gemini는 -latest 별칭 사용: 구글이 최신으로 갱신하면 코드 수정 없이 자동 추적
 // (현재 flash-latest→gemini-3.5-flash, pro-latest→gemini-3.1-pro-preview).
 export const MODEL_OPTIONS: ModelOption[] = [
-  { key: "gemini-flash", label: "Gemini Flash", provider: "gemini", model: "gemini-flash-latest", note: "빠름 · 기본" },
-  { key: "gemini-pro", label: "Gemini Pro", provider: "gemini", model: "gemini-pro-latest", note: "고품질 · 느림" },
+  { key: "gemini-flash", label: "빠른 처리", provider: "gemini", model: "gemini-flash-latest", note: "신속 · 기본" },
+  { key: "gemini-pro", label: "정밀 처리", provider: "gemini", model: "gemini-pro-latest", note: "품질 우선 · 다소 느림" },
   // GLM (z.ai) — openai-compat. LLM_API_URL=z.ai 엔드포인트 + LLM_API_KEY 설정 시 노출.
   // 모델명은 GLM_MODEL 로 바꿀 수 있다(z.ai 대시보드 기준, 예: glm-4.6/glm-4.7/glm-4.7-flash).
-  { key: "glm", label: "GLM (z.ai)", provider: "openai-compat", model: process.env.GLM_MODEL || "glm-4.6", note: "z.ai" },
-  { key: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", provider: "claude", model: "claude-sonnet-4-5", note: "고품질" },
+  { key: "glm", label: "대체 처리", provider: "openai-compat", model: process.env.GLM_MODEL || "glm-4.6", note: "관리자 연결 모델" },
+  { key: "claude-sonnet-4-5", label: "심층 처리", provider: "claude", model: "claude-sonnet-4-5", note: "복합 내용 우선" },
   // ※ 내부망 이전 시: openai-compat 슬롯(LLM_API_URL)을 내부 Qwen으로 가리키고 위 GLM 옵션을 Qwen으로 교체.
 ];
 

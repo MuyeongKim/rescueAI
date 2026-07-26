@@ -18,7 +18,7 @@ import {
 import { ACTIVITIES, MAX_DURATION_MIN } from "@/lib/fitness";
 
 // 운동 기록 입력 폼. 마일리지는 서버가 계산해 응답으로 알려준다.
-export function WorkoutForm() {
+export function WorkoutForm({ onSuccess }: { onSuccess?: () => void }) {
   const router = useRouter();
   const [activity, setActivity] = useState<string>(ACTIVITIES[0]);
   const [duration, setDuration] = useState("");
@@ -52,6 +52,7 @@ export function WorkoutForm() {
       setDuration("");
       setNote("");
       router.refresh();
+      onSuccess?.();
     } catch {
       toast.error("네트워크 오류로 기록하지 못했습니다. 다시 시도해 주세요.");
     } finally {
@@ -60,11 +61,14 @@ export function WorkoutForm() {
   }
 
   return (
-    <form onSubmit={submit} className="grid grid-cols-1 gap-3 sm:grid-cols-[10rem_8rem_1fr_auto] sm:items-end">
+    <form
+      onSubmit={submit}
+      className="grid grid-cols-1 gap-3 sm:grid-cols-[10rem_8rem_1fr_auto] sm:items-end"
+    >
       <div className="space-y-1.5">
         <Label htmlFor="activity">운동 종목</Label>
         <Select value={activity} onValueChange={setActivity}>
-          <SelectTrigger id="activity" className="h-11">
+          <SelectTrigger id="activity" className="h-12 md:h-11">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -88,7 +92,7 @@ export function WorkoutForm() {
           placeholder="예: 40"
           value={duration}
           onChange={(e) => setDuration(e.target.value)}
-          className="h-11"
+          className="h-12 md:h-11"
           required
         />
       </div>
@@ -101,11 +105,11 @@ export function WorkoutForm() {
           value={note}
           maxLength={100}
           onChange={(e) => setNote(e.target.value)}
-          className="h-11"
+          className="h-12 md:h-11"
         />
       </div>
 
-      <Button type="submit" disabled={pending} className="h-11 gap-1.5">
+      <Button type="submit" disabled={pending} className="h-12 gap-1.5 md:h-11">
         {pending ? <Loader2 className="h-4 w-4 animate-spin" /> : <Plus className="h-4 w-4" />}
         기록하기
       </Button>

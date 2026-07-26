@@ -19,7 +19,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { WorkoutForm } from "@/components/fitness/WorkoutForm";
+import { WorkoutEntrySheet } from "@/components/fitness/WorkoutEntrySheet";
 import { WeeklyMileageChart } from "@/components/fitness/FitnessChart";
 import { StatCard } from "@/components/StatCard";
 import { OperationalHeader } from "@/components/layout/OperationalHeader";
@@ -40,6 +40,8 @@ export default async function FitnessPage() {
         status="개인 기록 연결"
         statusTone="success"
       />
+
+      <WorkoutEntrySheet />
 
       {/* 마일리지 현황 */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -75,17 +77,6 @@ export default async function FitnessPage() {
         </CardHeader>
         <CardContent>
           <WeeklyMileageChart data={state.weekly} />
-        </CardContent>
-      </Card>
-
-      {/* 기록 입력 */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">운동 기록하기</CardTitle>
-          <CardDescription>오늘 수행한 체력단련을 기록하세요.</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <WorkoutForm />
         </CardContent>
       </Card>
 

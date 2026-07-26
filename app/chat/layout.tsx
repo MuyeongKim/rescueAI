@@ -16,7 +16,13 @@ export default async function ChatLayout({
         active="chat"
         hideMobileNav
       />
-      <main className="min-h-0 flex-1 overflow-hidden">{children}</main>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="min-h-0 flex-1 overflow-hidden focus:outline-none"
+      >
+        {children}
+      </main>
     </div>
   );
 }

@@ -107,6 +107,12 @@ export async function AppSidebar({
 
   return (
     <>
+      <a
+        href="#main-content"
+        className="fixed left-3 top-3 z-[100] -translate-y-24 bg-[#111d31] px-4 py-3 text-sm font-semibold text-white shadow-lg transition-transform focus:translate-y-0 focus:outline-none focus:ring-2 focus:ring-[#f0542d] motion-reduce:transition-none"
+      >
+        본문으로 건너뛰기
+      </a>
       <aside className="sticky top-0 hidden h-screen w-60 shrink-0 flex-col bg-[#111d31] text-slate-200 md:flex">
         <div className="hazard-stripe h-1.5 shrink-0 text-[#d63f18]" aria-hidden />
 
@@ -119,19 +125,19 @@ export async function AppSidebar({
               <Image src="/logo-jbfire.png" alt="전북소방 엠블럼" width={52} height={26} priority />
             </span>
             <span className="min-w-0">
-              <span className="block truncate text-[10px] text-slate-400">전북특별자치도 소방본부</span>
+              <span className="block truncate text-xs text-slate-300">전북특별자치도 소방본부</span>
               <span className="mt-0.5 block truncate text-sm font-extrabold text-white">구조 AI</span>
             </span>
           </Link>
         </header>
 
         <nav aria-label="주 메뉴" className="flex flex-1 flex-col overflow-y-auto px-2 py-4">
-          <p className="px-3 pb-2 text-[10px] font-semibold text-slate-500">주요 업무</p>
+          <p className="px-3 pb-2 text-xs font-semibold text-slate-400">주요 업무</p>
           <div className="space-y-0.5">{NAV_ITEMS.map(renderItem)}</div>
 
           {isAdmin && !active?.startsWith("admin") && (
             <>
-              <p className="px-3 pb-2 pt-6 text-[10px] font-semibold text-slate-500">관리 업무</p>
+              <p className="px-3 pb-2 pt-6 text-xs font-semibold text-slate-400">관리 업무</p>
               <div className="space-y-0.5">{ADMIN_ITEMS.map(renderItem)}</div>
             </>
           )}
@@ -142,7 +148,7 @@ export async function AppSidebar({
             <ShieldCheck className="h-4 w-4 text-[#ff7752]" aria-hidden />
             교육자료 기반 모드
           </div>
-          {email && <p className="truncate px-3 py-1 text-[11px] text-slate-500">{email}</p>}
+          {email && <p className="truncate px-3 py-1 text-xs text-slate-400">{email}</p>}
           <ThemeToggle className="h-11 w-full justify-start gap-3 px-3 text-sm text-slate-400 hover:bg-[#17253b] hover:text-white" />
           <form action="/auth/signout" method="post">
             <button

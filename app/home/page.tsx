@@ -54,16 +54,16 @@ async function loadRecentConversations(): Promise<ConvPreview[]> {
 
 const QUICK_ACTIONS = [
   {
-    code: "01 / 질문",
+    code: "근거 질의",
     href: "/chat",
     icon: MessageSquare,
     title: "AI 튜터",
     desc: "매뉴얼 근거와 페이지를 확인하며 질문합니다.",
     action: "질문 시작",
-    rail: "border-t-primary",
+    rail: "border-t-primary dark:border-t-primary",
   },
   {
-    code: "02 / 제작",
+    code: "자료 제작",
     href: "/generate",
     icon: Wand2,
     title: "AI 자료제작",
@@ -72,13 +72,13 @@ const QUICK_ACTIONS = [
     rail: "border-t-slate-800 dark:border-t-slate-200",
   },
   {
-    code: "03 / 근거",
+    code: "원본 열람",
     href: "/docs",
     icon: FileText,
     title: "자료실",
     desc: "현재 등록된 SOP와 원본 교육자료를 열람합니다.",
     action: "자료 열기",
-    rail: "border-t-emerald-700",
+    rail: "border-t-emerald-700 dark:border-t-emerald-500",
   },
 ];
 
@@ -191,7 +191,7 @@ export default async function HomePage() {
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-start justify-between gap-3">
-                      <span className="text-[10px] font-bold text-primary">{item.code}</span>
+                      <span className="text-xs font-bold text-primary">{item.code}</span>
                       <Icon className="hidden h-5 w-5 text-slate-400 transition-colors group-hover:text-primary sm:block" />
                     </div>
                     <h3 className="mt-1 truncate text-base font-extrabold text-slate-950 sm:mt-5 sm:text-lg dark:text-slate-50">

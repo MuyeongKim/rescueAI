@@ -32,11 +32,11 @@ export function DocViewerClient({
   return (
     <div className="mx-auto max-w-4xl px-3 py-4 sm:px-4">
       <div className="mb-3 flex items-center gap-2">
-        <Link href="/docs">
-          <Button variant="ghost" size="icon" className="h-10 w-10" aria-label="목록으로">
+        <Button asChild variant="ghost" size="icon" className="h-12 w-12 md:h-10 md:w-10">
+          <Link href="/docs" aria-label="자료실 목록으로">
             <ArrowLeft className="h-5 w-5" />
-          </Button>
-        </Link>
+          </Link>
+        </Button>
         <div className="min-w-0 flex-1">
           <h1 className="truncate text-lg font-semibold">{title}</h1>
           {category && (

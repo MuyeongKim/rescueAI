@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -74,20 +75,24 @@ export function ConversationList({ activeId }: { activeId?: string }) {
       <SheetContent side="left" className="flex w-[88vw] max-w-sm flex-col p-0">
         <SheetHeader className="border-b p-4 text-left">
           <SheetTitle>대화 목록</SheetTitle>
+          <SheetDescription>
+            저장된 대화를 열거나 새 대화를 시작합니다.
+          </SheetDescription>
         </SheetHeader>
 
         <div className="space-y-2 p-3">
-          <Link href="/chat" onClick={() => setOpen(false)}>
-            <Button className="h-12 w-full gap-2">
+          <Button asChild className="h-12 w-full gap-2">
+            <Link href="/chat" onClick={() => setOpen(false)}>
               <Plus className="h-4 w-4" /> 새 대화
-            </Button>
-          </Link>
+            </Link>
+          </Button>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
             <Input
               value={q}
               onChange={(e) => setQ(e.target.value)}
               placeholder="제목 검색"
+              aria-label="대화 제목 검색"
               className="h-12 pl-9"
             />
           </div>

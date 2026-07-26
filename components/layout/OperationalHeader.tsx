@@ -52,7 +52,7 @@ export function OperationalHeader({
     <header className={cn("border-b border-slate-300 pb-5 dark:border-slate-700", className)}>
       <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <p className="flex items-center gap-2 text-[11px] font-bold text-primary">
+          <p className="flex items-center gap-2 text-xs font-bold text-primary">
             <span className="h-0.5 w-7 bg-primary" aria-hidden />
             {eyebrow}
           </p>

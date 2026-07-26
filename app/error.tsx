@@ -32,11 +32,9 @@ export default function GlobalError({
         <Button onClick={reset} className="h-11 gap-1.5">
           <RotateCcw className="h-4 w-4" /> 다시 시도
         </Button>
-        <Link href="/home">
-          <Button variant="outline" className="h-11">
-            홈으로
-          </Button>
-        </Link>
+        <Button asChild variant="outline" className="h-11">
+          <Link href="/home">홈으로</Link>
+        </Button>
       </div>
     </div>
   );

@@ -14,9 +14,9 @@ export default function NotFound() {
           주소가 바뀌었거나 삭제된 페이지일 수 있습니다.
         </p>
       </div>
-      <Link href="/home">
-        <Button className="h-11">홈으로 돌아가기</Button>
-      </Link>
+      <Button asChild className="h-11">
+        <Link href="/home">홈으로 돌아가기</Link>
+      </Button>
     </div>
   );
 }

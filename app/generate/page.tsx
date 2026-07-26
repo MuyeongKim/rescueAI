@@ -75,7 +75,7 @@ export default async function GeneratePage({
     <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
       <div>
         <OperationalHeader
-          eyebrow="구조 업무 02 · 자료 제작"
+          eyebrow="교육훈련 · 자료 제작"
           title="AI 자료제작"
           description="인덱싱된 교육자료를 근거로 훈련계획·교안·슬라이드를 만듭니다."
           icon={Wand2}

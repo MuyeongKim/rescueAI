@@ -1,9 +1,9 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { format } from "date-fns";
-import { Search } from "lucide-react";
+import { ChevronRight, Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -49,7 +49,6 @@ function fmtDate(d: string | null): string {
 }
 
 export function DocsBrowser({ documents }: { documents: DocRow[] }) {
-  const router = useRouter();
   const [category, setCategory] = useState<string>("전체");
   const [difficulty, setDifficulty] = useState<string>("전체");
   const [query, setQuery] = useState("");
@@ -85,11 +84,12 @@ export function DocsBrowser({ documents }: { documents: DocRow[] }) {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="제목 검색"
+              aria-label="자료 제목 검색"
               className="h-11 pl-9 text-base"
             />
           </div>
           <Select value={difficulty} onValueChange={setDifficulty}>
-            <SelectTrigger className="h-11 w-28">
+            <SelectTrigger className="h-11 w-28" aria-label="난이도 선택">
               <SelectValue placeholder="난이도" />
             </SelectTrigger>
             <SelectContent>
@@ -126,21 +126,29 @@ export function DocsBrowser({ documents }: { documents: DocRow[] }) {
               </TableRow>
             ) : (
               filtered.map((d) => (
-                <TableRow
-                  key={d.id}
-                  className="cursor-pointer"
-                  onClick={() => router.push(`/docs/${d.id}`)}
-                >
-                  <TableCell className="font-medium">
-                    {d.title}
-                    <div className="mt-1 flex gap-1 sm:hidden">
-                      {d.category && <CategoryBadge category={d.category} />}
-                      {d.difficulty && (
-                        <Badge variant="outline" className="text-xs font-normal">
-                          {d.difficulty}
-                        </Badge>
-                      )}
-                    </div>
+                <TableRow key={d.id}>
+                  <TableCell className="p-0 font-medium">
+                    <Link
+                      href={`/docs/${d.id}`}
+                      className="flex min-h-14 items-center justify-between gap-3 px-4 py-2 transition-colors hover:bg-muted/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                      aria-label={`${d.title} 열기`}
+                    >
+                      <span className="min-w-0">
+                        <span className="block">{d.title}</span>
+                        <span className="mt-1 flex gap-1 sm:hidden">
+                          {d.category && <CategoryBadge category={d.category} />}
+                          {d.difficulty && (
+                            <Badge variant="outline" className="text-xs font-normal">
+                              {d.difficulty}
+                            </Badge>
+                          )}
+                        </span>
+                      </span>
+                      <ChevronRight
+                        className="h-5 w-5 shrink-0 text-muted-foreground sm:hidden"
+                        aria-hidden
+                      />
+                    </Link>
                   </TableCell>
                   <TableCell className="hidden sm:table-cell">
                     {d.category ? <CategoryBadge category={d.category} /> : "-"}

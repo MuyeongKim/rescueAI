@@ -109,11 +109,11 @@ export function PdfViewer({
       </div>
 
       <div className="flex justify-center">
-        <a href={fileUrl} target="_blank" rel="noopener noreferrer">
-          <Button variant="outline" size="sm" className="h-10 gap-2">
+        <Button asChild variant="outline" size="sm" className="h-12 gap-2 md:h-10">
+          <a href={fileUrl} target="_blank" rel="noopener noreferrer">
             <ExternalLink className="h-4 w-4" /> 새 탭에서 원본 열기
-          </Button>
-        </a>
+          </a>
+        </Button>
       </div>
     </div>
   );

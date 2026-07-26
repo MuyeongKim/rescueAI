@@ -732,13 +732,13 @@ export function GenerateForm({
               </div>
             )}
 
-            {/* AI 모델 선택 — 2개 이상 사용 가능할 때만. NotebookLM은 AI를 안 쓰므로 숨김 */}
+            {/* 응답 방식 선택 — 2개 이상 사용 가능할 때만. NotebookLM은 AI를 안 쓰므로 숨김 */}
             {type !== "notebooklm" && models.length > 1 && (
               <div className="space-y-2.5">
                 <Label className="text-xs font-semibold uppercase text-muted-foreground">
-                  AI 모델
+                  응답 방식
                 </Label>
-                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="AI 모델">
+                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="응답 방식">
                   {models.map((m) => {
                     const active = model === m.key;
                     return (

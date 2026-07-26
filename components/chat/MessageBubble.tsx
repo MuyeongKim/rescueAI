@@ -150,7 +150,7 @@ export function MessageBubble({ message }: { message: Message }) {
               variant="ghost"
               size="icon"
               className={cn(
-                "h-9 w-9 text-muted-foreground",
+                "h-12 w-12 text-muted-foreground md:h-9 md:w-9",
                 feedback === 1 && "text-primary"
               )}
               disabled={submitting}
@@ -163,7 +163,7 @@ export function MessageBubble({ message }: { message: Message }) {
               variant="ghost"
               size="icon"
               className={cn(
-                "h-9 w-9 text-muted-foreground",
+                "h-12 w-12 text-muted-foreground md:h-9 md:w-9",
                 feedback === -1 && "text-destructive"
               )}
               disabled={submitting}

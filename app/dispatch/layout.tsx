@@ -10,7 +10,13 @@ export default async function DispatchLayout({
   return (
     <div className="flex h-screen">
       <AppSidebar email={user?.email} isAdmin={isAdmin(profile)} active="dispatch" />
-      <main className="flex-1 overflow-auto pb-20 md:pb-0">{children}</main>
+      <main
+        id="main-content"
+        tabIndex={-1}
+        className="flex-1 overflow-auto pb-[calc(5rem+env(safe-area-inset-bottom))] focus:outline-none md:pb-0"
+      >
+        {children}
+      </main>
     </div>
   );
 }

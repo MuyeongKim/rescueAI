@@ -26,6 +26,7 @@ import {
 import {
   Sheet,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -131,11 +132,16 @@ export function ChatInterface({
       {/* 상단 바: 대화목록 + 카테고리 필터 */}
       <div className="border-b-2 border-[#d63f18] bg-[#111d31] px-3 py-2 text-white sm:px-4">
         <div className="mx-auto flex max-w-3xl items-center gap-2">
-          <Link href="/home" className="md:hidden" aria-label="홈으로">
-            <Button variant="ghost" size="icon" className="h-12 w-12 sm:h-10 sm:w-10">
+          <Button
+            asChild
+            variant="ghost"
+            size="icon"
+            className="h-12 w-12 sm:h-10 sm:w-10 md:hidden"
+          >
+            <Link href="/home" aria-label="홈으로">
               <Home className="h-5 w-5" />
-            </Button>
-          </Link>
+            </Link>
+          </Button>
           <ConversationList activeId={conversationId} />
           <span className="mr-auto flex items-center gap-2 text-sm font-bold">
             <span className="h-4 w-0.5 bg-[#f0542d]" aria-hidden /> AI 튜터
@@ -162,11 +168,11 @@ export function ChatInterface({
 
             {models.length > 1 && (
               <>
-                <span className="ml-1 text-xs text-slate-400">모델</span>
+                <span className="ml-1 text-xs text-slate-400">응답</span>
                 <Select value={model} onValueChange={setModel}>
                   <SelectTrigger
                     className="h-10 w-36 border-slate-600 bg-[#0d192b] text-white"
-                    aria-label="AI 모델 선택"
+                    aria-label="응답 방식 선택"
                   >
                     <SelectValue />
                   </SelectTrigger>
@@ -196,8 +202,11 @@ export function ChatInterface({
             </SheetTrigger>
             <SheetContent side="bottom" className="rounded-none border-t-4 border-t-primary">
               <SheetHeader className="text-left">
-                <p className="text-[10px] font-bold text-primary">AI 튜터</p>
+                <p className="text-xs font-bold text-primary">AI 튜터</p>
                 <SheetTitle className="text-xl font-extrabold">질문 설정</SheetTitle>
+                <SheetDescription>
+                  질문 분야와 응답 방식을 선택합니다.
+                </SheetDescription>
               </SheetHeader>
               <div className="mt-5 space-y-4">
                 <div className="space-y-2">
@@ -220,9 +229,9 @@ export function ChatInterface({
 
                 {models.length > 1 && (
                   <div className="space-y-2">
-                    <label className="text-sm font-semibold">AI 모델</label>
+                    <label className="text-sm font-semibold">응답 방식</label>
                     <Select value={model} onValueChange={setModel}>
-                      <SelectTrigger className="h-12 w-full" aria-label="AI 모델 선택">
+                      <SelectTrigger className="h-12 w-full" aria-label="응답 방식 선택">
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>

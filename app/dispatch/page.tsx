@@ -70,7 +70,7 @@ export default function DispatchPage() {
         statusTone="warning"
       />
 
-      <div className="flex items-start gap-3 border border-slate-300 border-l-4 border-l-amber-500 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950 dark:border-slate-700 dark:bg-amber-950/20 dark:text-amber-100">
+      <div className="flex items-start gap-3 border border-slate-300 border-l-4 border-l-amber-500 bg-amber-50 px-4 py-3 text-xs leading-5 text-amber-950 dark:border-slate-700 dark:border-l-amber-500 dark:bg-amber-950/20 dark:text-amber-100">
         <Info className="mt-0.5 h-4 w-4 shrink-0" />
         <p>현재 예시 데이터이며 구조활동일지 엑셀 자동 추출·집계 연동을 준비하고 있습니다.</p>
       </div>

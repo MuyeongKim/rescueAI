@@ -17,6 +17,7 @@ import {
   Sheet,
   SheetClose,
   SheetContent,
+  SheetDescription,
   SheetHeader,
   SheetTitle,
   SheetTrigger,
@@ -65,8 +66,11 @@ export function MobileMoreSheet({
       </SheetTrigger>
       <SheetContent side="bottom" className="max-h-[75dvh] overflow-y-auto rounded-none border-t-4 border-t-primary">
         <SheetHeader className="text-left">
-          <p className="text-[10px] font-bold text-primary">구조 업무 메뉴</p>
+          <p className="text-xs font-bold text-primary">구조 업무 메뉴</p>
           <SheetTitle className="text-xl font-extrabold">전체 메뉴</SheetTitle>
+          <SheetDescription>
+            구조 업무와 개인·관리자 메뉴로 이동합니다.
+          </SheetDescription>
         </SheetHeader>
 
         <div className="mt-3 grid grid-cols-3 gap-2">

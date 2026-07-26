@@ -5,15 +5,17 @@ import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
-  Database,
   Eye,
   EyeOff,
+  Flame,
+  HeartPulse,
   Loader2,
   LockKeyhole,
   LogIn,
   Mail,
   MailCheck,
-  ShieldCheck,
+  Mountain,
+  Waves,
 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/client";
@@ -98,9 +100,9 @@ function LoginForm() {
   return (
     <div className="w-full max-w-md">
       <div className="mb-5 border-b border-slate-300 pb-4 sm:mb-7 sm:pb-5 dark:border-slate-700">
-        <p className="flex items-center gap-2 text-[11px] font-bold text-primary">
+        <p className="flex items-center gap-2 text-xs font-bold text-primary">
           <span className="h-0.5 w-7 bg-primary" aria-hidden />
-          내부 보안 접속
+          승인 계정 접속
         </p>
         <h2 className="mt-2 text-xl font-extrabold text-slate-950 sm:text-2xl dark:text-slate-50">
           대원 로그인
@@ -263,15 +265,25 @@ function LoginHero() {
           구조 매뉴얼의 근거를 확인하고 훈련에 필요한 자료를 신속하게 준비합니다.
         </p>
 
-        <div className="anim-rise mt-7 hidden flex-wrap gap-2 md:flex" style={{ animationDelay: "0.36s" }}>
-          <span className="flex min-h-10 items-center gap-2 border border-slate-600 bg-[#101e34] px-3 text-xs text-slate-200">
-            <Database className="h-4 w-4 text-[#ff8a66]" />
-            교육자료 연결
-          </span>
-          <span className="flex min-h-10 items-center gap-2 border border-slate-600 bg-[#101e34] px-3 text-xs text-slate-200">
-            <ShieldCheck className="h-4 w-4 text-[#ff8a66]" />
-            내부 보안 접속
-          </span>
+        <div
+          className="anim-rise mt-7 hidden grid-cols-2 gap-2 sm:grid-cols-4 md:grid"
+          style={{ animationDelay: "0.36s" }}
+          aria-label="구조 교육 분야"
+        >
+          {[
+            { label: "산악 구조", icon: Mountain, color: "text-emerald-400" },
+            { label: "수난 구조", icon: Waves, color: "text-sky-400" },
+            { label: "화재 대응", icon: Flame, color: "text-orange-400" },
+            { label: "응급 구조", icon: HeartPulse, color: "text-rose-400" },
+          ].map(({ label, icon: Icon, color }) => (
+            <span
+              key={label}
+              className="flex min-h-11 items-center gap-2 border border-slate-600 bg-[#101e34] px-3 text-xs font-semibold text-slate-200"
+            >
+              <Icon className={`h-4 w-4 ${color}`} aria-hidden />
+              {label}
+            </span>
+          ))}
         </div>
       </div>
 
@@ -284,7 +296,7 @@ function LoginHero() {
         <p className="text-right">
           RESCUE AI / JB-119
           <br />
-          SECURE ACCESS
+          AUTHORIZED ACCESS
         </p>
       </div>
     </section>

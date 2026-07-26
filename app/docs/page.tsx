@@ -36,7 +36,7 @@ export default async function DocsPage() {
   return (
     <div className="mx-auto max-w-6xl space-y-5 px-4 py-6 sm:px-6 lg:px-8">
       <OperationalHeader
-        eyebrow="구조 업무 03 · 근거 자료"
+        eyebrow="교육자료 · 원본 근거"
         title="자료실"
         description="원본 교육자료를 분야·난이도로 분류하고 제목으로 검색할 수 있습니다."
         icon={BookOpenCheck}
