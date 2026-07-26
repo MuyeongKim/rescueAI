@@ -1,5 +1,6 @@
--- rag_rescue 벡터DB 스키마 — 새(빈) Supabase 프로젝트 초기화용.
--- 운영 프로젝트에는 supabase/migrations/20260726100515_secure_versioned_rag_ingestion.sql을 적용한다.
+-- 외부 RAG 테이블 보안 강화 및 무중단 버전 교체.
+-- rag7.py 는 신규 청크를 is_active=false 로 먼저 적재한 뒤
+-- activate_rag_rescue_ingestion()으로 검증/활성화/이전 버전 삭제를 한 트랜잭션에서 수행한다.
 
 create extension if not exists vector;
 
@@ -9,9 +10,21 @@ create table if not exists public.rag_rescue (
   metadata     jsonb default '{}'::jsonb,
   embedding    vector(1024),
   ingestion_id uuid,
-  is_active    boolean not null default false,
+  is_active    boolean not null default true,
   created_at   timestamptz not null default now()
 );
+
+alter table public.rag_rescue
+  add column if not exists ingestion_id uuid,
+  add column if not exists is_active boolean not null default true,
+  add column if not exists created_at timestamptz not null default now();
+
+update public.rag_rescue
+set is_active = true
+where is_active is null;
+
+alter table public.rag_rescue
+  alter column is_active set default false;
 
 create index if not exists rag_rescue_embedding_idx
   on public.rag_rescue using hnsw (embedding vector_cosine_ops);
@@ -35,6 +48,7 @@ create index if not exists rag_rescue_active_source_idx
 create index if not exists rag_rescue_ingestion_idx
   on public.rag_rescue (ingestion_id);
 
+-- 한 테이블 안에 서로 다른 임베딩 공간이 섞이지 않도록 계약을 명시한다.
 create table if not exists public.rag_embedding_config (
   table_name  text primary key,
   provider    text not null,
@@ -97,6 +111,7 @@ begin
     raise exception 'invalid ingestion activation arguments';
   end if;
 
+  -- 같은 문서의 동시 활성화를 직렬화한다.
   perform pg_catalog.pg_advisory_xact_lock(
     pg_catalog.hashtextextended(p_category || E'\n' || p_year || E'\n' || p_source, 0)
   );
@@ -122,7 +137,10 @@ begin
     and r.metadata ->> 'source' = p_source;
 
   if v_count <> p_expected_count then
-    raise exception 'staged row count mismatch: expected %, found %', p_expected_count, v_count;
+    raise exception
+      'staged row count mismatch: expected %, found %',
+      p_expected_count,
+      v_count;
   end if;
 
   if exists (
@@ -138,7 +156,9 @@ begin
   end if;
 
   if not exists (
-    select 1 from public.rag_embedding_config as c where c.table_name = 'rag_rescue'
+    select 1
+    from public.rag_embedding_config as c
+    where c.table_name = 'rag_rescue'
   ) then
     raise exception 'embedding contract for rag_rescue is not configured';
   end if;
@@ -146,7 +166,8 @@ begin
   if exists (
     select 1
     from public.rag_rescue as r
-    join public.rag_embedding_config as c on c.table_name = 'rag_rescue'
+    join public.rag_embedding_config as c
+      on c.table_name = 'rag_rescue'
     where r.ingestion_id = p_ingestion_id
       and (
         r.metadata ->> 'embedding_provider' is distinct from c.provider
@@ -168,12 +189,14 @@ begin
 
   update public.rag_rescue as r
   set is_active = true
-  where r.ingestion_id = p_ingestion_id and not r.is_active;
+  where r.ingestion_id = p_ingestion_id
+    and not r.is_active;
 
   return query select v_count;
 end;
 $$;
 
+-- 로그인 사용자는 활성 자료만 읽고, 인덱서의 쓰기/활성화만 service role로 제한한다.
 alter table public.rag_rescue enable row level security;
 alter table public.rag_embedding_config enable row level security;
 
@@ -203,6 +226,7 @@ revoke all on function public.match_rag_rescue(vector, integer, double precision
   from public, anon, authenticated;
 grant execute on function public.match_rag_rescue(vector, integer, double precision, jsonb)
   to authenticated, service_role;
+
 revoke all on function public.activate_rag_rescue_ingestion(
   uuid, text, text, text, integer, boolean
 ) from public, anon, authenticated;

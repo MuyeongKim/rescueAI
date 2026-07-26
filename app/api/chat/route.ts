@@ -78,6 +78,7 @@ export async function POST(req: Request) {
     const r = await searchContext(question, category);
     contextText = r.contextText;
     sources = r.sources;
+    ragFailed = r.degraded ?? false;
   } catch (e) {
     ragFailed = true;
     console.error("[chat] RAG 인프라 장애 — 컨텍스트 없이 진행:", e);

@@ -1,0 +1,6 @@
+# rag7.py GUI 인덱서 (Python 3.11 권장)
+supabase>=2.7,<3
+requests>=2.32,<3
+tqdm>=4.66,<5
+pypdf>=5,<7
+docling[easyocr]>=2.48,<3

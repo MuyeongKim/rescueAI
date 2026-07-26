@@ -28,7 +28,7 @@ function linkifyCitations(content: string, sources: DocSource[]): ReactNode {
         (s.page == null || s.page === page) &&
         (title.includes(s.doc) || s.doc.includes(title.trim()))
     );
-    // 원문 뷰어가 없는 외부 자료(document_id<=0)는 /docs/0 깨진 링크가 되므로 링크화하지 않고 원문 유지
+    // 자료실 원본과 연결되지 않은 외부 청크는 /docs/0 링크를 만들지 않는다.
     if (!src || src.document_id <= 0) continue;
 
     const idx = m.index ?? 0;

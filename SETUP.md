@@ -35,8 +35,8 @@ Supabase 대시보드 → **SQL Editor** 에서 아래 파일을 **순서대로*
 > Supabase CLI가 있으면 `supabase db push` 로도 적용 가능합니다.
 
 ## 4. Storage 버킷 생성 (원본 PDF 뷰어용)
-- Storage → New bucket → 이름 `documents`, **Public** 체크.
-- (비공개로 하려면 인덱서/뷰어를 서명 URL 방식으로 바꿔야 합니다. 1차는 Public 권장.)
+- Storage → New bucket → 이름 `documents`, **Public 체크 해제(비공개)**.
+- 웹앱은 로그인 확인 후 1시간 유효 서명 URL을 발급해 원본을 엽니다.
 
 ## 5. Auth 설정 (매직링크)
 - Authentication → Providers → **Email** 활성화 (Confirm email/매직링크).
@@ -71,6 +71,18 @@ pip install -r requirements.txt
 python embed_and_upload.py
 ```
 > 웹앱과 인덱서는 **같은 임베딩 설정(EMBEDDING_PROVIDER/모델/1024차원)** 을 써야 합니다.
+
+외부 `RAG_TABLE=rag_rescue`와 루트 `rag7.py`를 사용할 때는
+`20260726100515_secure_versioned_rag_ingestion.sql` 마이그레이션을 먼저 적용하고,
+`indexing/requirements-rag7.txt` 의존성을 설치하세요. 기존 계약 없는 `rag_rescue`
+데이터는 백업 후 비우고 같은 제공자/모델로 전체 재인덱싱해야 합니다.
+
+HWPX/HWP 자동 변환에는 LibreOffice가 필요합니다. 스캔 PDF의 한국어 OCR 모델은
+외부망에서 아래처럼 미리 받아 내부망으로 함께 반입하고, 내부망 환경변수에는
+`DOCLING_OCR_DOWNLOAD=0`을 지정하세요.
+```bash
+docling-tools models download easyocr --easyocr-lang ko --easyocr-lang en
+```
 
 ## 9. 개발 서버 / 빌드
 ```bash
@@ -159,5 +171,6 @@ npx tsc --noEmit   # 타입만 체크
 - **답변이 안 나옴**: `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` 확인. 콘솔 로그 `[chat]` 참고.
 - **출처가 비어 있음**: 자료 인덱싱이 안 됐거나 임베딩 설정 불일치. `chunks` 테이블 행 수 확인.
 - **로그인 링크 클릭 후 오류**: Supabase Redirect URLs 에 `/auth/callback` 등록 여부 확인.
-- **PDF가 안 열림**: `documents` 버킷 Public 여부, `documents.file_url` 값 확인.
+- **PDF가 안 열림**: 비공개 `documents` 버킷 존재 여부와 `documents.file_url` 경로,
+  `SUPABASE_SERVICE_ROLE_KEY` 설정을 확인.
 - **임베딩 차원 오류**: 스키마 `vector(1024)` 와 모델 차원(1024) 일치 여부 확인.

@@ -9,8 +9,12 @@
 const CATEGORY_FIELD = "edu_category";
 import { generateObject } from "ai";
 import { z } from "zod";
-import { createAdminClient } from "@/lib/supabase/admin";
-import { getQueryEmbedding, toPgVector } from "@/lib/embeddings";
+import { createClient } from "@/lib/supabase/server";
+import {
+  getConfiguredEmbeddingContract,
+  getQueryEmbedding,
+  toPgVector,
+} from "@/lib/embeddings";
 import { getChatModel } from "@/lib/llm";
 import type { DocSource } from "@/lib/database.types";
 import type { SearchResult } from "@/lib/rag";
@@ -25,6 +29,52 @@ export function ragTableEnabled(): boolean {
   return !!process.env.RAG_TABLE;
 }
 
+let contractCache: { key: string; validUntil: number } | null = null;
+
+export async function assertExternalEmbeddingContract(): Promise<void> {
+  const expected = getConfiguredEmbeddingContract();
+  const cacheKey = [
+    RAG_TABLE,
+    expected.provider,
+    expected.model,
+    expected.dimensions,
+    expected.version,
+  ].join(":");
+  if (contractCache?.key === cacheKey && contractCache.validUntil > Date.now()) return;
+
+  const supabase = await createClient();
+  const { data, error } = await (supabase.from as CallableFunction)("rag_embedding_config")
+    .select("provider, model, dimensions, version")
+    .eq("table_name", RAG_TABLE)
+    .limit(1);
+  if (error) {
+    throw new Error(`임베딩 계약 조회 실패: ${error.message}`);
+  }
+
+  const actual = (data ?? [])[0] as
+    | { provider: string; model: string; dimensions: number; version: string }
+    | undefined;
+  if (!actual) {
+    throw new Error(`${RAG_TABLE}의 임베딩 계약이 등록되지 않았습니다.`);
+  }
+  const mismatches = (
+    [
+      ["provider", expected.provider, actual.provider],
+      ["model", expected.model, actual.model],
+      ["dimensions", expected.dimensions, actual.dimensions],
+      ["version", expected.version, actual.version],
+    ] as const
+  ).filter(([, wanted, found]) => wanted !== found);
+  if (mismatches.length > 0) {
+    throw new Error(
+      `임베딩 계약 불일치: ${mismatches
+        .map(([field, wanted, found]) => `${field}=${String(wanted)}(앱)/${String(found)}(DB)`)
+        .join(", ")}`
+    );
+  }
+  contractCache = { key: cacheKey, validUntil: Date.now() + 60_000 };
+}
+
 type RagRow = {
   id: string;
   content: string;
@@ -33,15 +83,37 @@ type RagRow = {
     category?: string; // 원본 분류(보존)
     edu_category?: string; // 구조 교육 관점 재분류(이 앱의 분야)
     ["Header 2"]?: string;
+    document_id?: number | string;
+    page_num?: number | string;
     [k: string]: unknown;
   } | null;
   similarity?: number;
 };
 
-function labelOf(meta: RagRow["metadata"]): string {
+function numberMetadata(value: unknown): number | null {
+  if (typeof value === "number" && Number.isInteger(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  return null;
+}
+
+function documentIdOf(meta: RagRow["metadata"]): number {
+  return numberMetadata(meta?.document_id) ?? 0;
+}
+
+function pageOf(meta: RagRow["metadata"]): number | null {
+  return numberMetadata(meta?.page_num);
+}
+
+function documentLabelOf(meta: RagRow["metadata"]): string {
   const src = (meta?.source ?? "자료").replace(/\.(pdf|hwpx?|pptx?|docx?)$/i, "");
   const header = meta?.["Header 2"];
   return header && header !== src ? `${src} — ${header}` : src;
+}
+
+function labelOf(meta: RagRow["metadata"]): string {
+  const label = documentLabelOf(meta);
+  const page = pageOf(meta);
+  return page == null ? label : `${label} p.${page}`;
 }
 
 // 청크 본문 정제: docling 이미지 마커·목차 점선·과잉 공백 제거 (LLM 입력 노이즈 감소)
@@ -196,23 +268,26 @@ async function llmRerank(
 // 하이브리드 후보 검색: ① 벡터(RPC) + ② 키워드 full-text 병렬 → ③ RRF 융합.
 // 챗봇(searchExternalRag)과 자료제작(fetchExternalRagContext)이 동일 검색을 공유하는 단일 출처.
 async function hybridCandidates(
-  supabase: ReturnType<typeof createAdminClient>,
-  embedding: number[],
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  embedding: number[] | null,
   keywordQuery: string,
   category: string | null | undefined,
   candidateCount: number
-): Promise<RagRow[]> {
+): Promise<{ rows: RagRow[]; degraded: boolean }> {
   const [vecRes, kwRes] = await Promise.all([
-    (supabase.rpc as CallableFunction)(MATCH_FN, {
-      query_embedding: toPgVector(embedding),
-      match_count: candidateCount,
-      match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
-      filter: category ? { [CATEGORY_FIELD]: category } : {},
-    }),
+    embedding
+      ? (supabase.rpc as CallableFunction)(MATCH_FN, {
+          query_embedding: toPgVector(embedding),
+          match_count: candidateCount,
+          match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
+          filter: category ? { [CATEGORY_FIELD]: category } : {},
+        })
+      : Promise.resolve({ data: [], error: null }),
     (async () => {
       if (!keywordQuery) return { data: [], error: null };
       let q = (supabase.from as CallableFunction)(RAG_TABLE)
         .select("id, content, metadata")
+        .eq("is_active", true)
         .textSearch("content", keywordQuery, { type: "websearch", config: "simple" })
         .limit(candidateCount);
       if (category) q = q.eq(`metadata->>${CATEGORY_FIELD}`, category);
@@ -225,7 +300,10 @@ async function hybridCandidates(
 
   const vecRows = (vecRes.data ?? []) as RagRow[];
   const kwRows = (kwRes.data ?? []) as RagRow[];
-  return rrfFuse([vecRows, kwRows]);
+  return {
+    rows: rrfFuse([vecRows, kwRows]),
+    degraded: Boolean(vecRes.error || kwRes.error),
+  };
 }
 
 // 정제된 청크들을 생성용 컨텍스트 문자열 + 출처(파일 단위 중복 제거)로 조립한다.
@@ -240,10 +318,12 @@ function buildContextFromRefined(
   const seen = new Set<string>();
   const sources: GeneratedDocSource[] = [];
   for (const r of refined) {
-    const key = r.meta?.source ?? "자료";
+    const documentId = documentIdOf(r.meta);
+    const page = pageOf(r.meta);
+    const key = `${documentId || r.meta?.source || "자료"}::${page ?? "-"}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    sources.push({ document_id: 0, doc: labelOf(r.meta), page: null });
+    sources.push({ document_id: documentId, doc: documentLabelOf(r.meta), page });
     if (sources.length >= maxSources) break;
   }
   return { contextText, sources };
@@ -252,44 +332,57 @@ function buildContextFromRefined(
 // 하이브리드 검색(벡터+키워드 RRF) + LLM 재순위 → 컨텍스트 + 출처 (lib/rag.ts SearchResult)
 export async function searchExternalRag(
   query: string,
-  embedding: number[],
+  embedding: number[] | null,
   topK: number,
   category?: string | null,
   keywordTerms: string[] = []
 ): Promise<SearchResult> {
-  const supabase = createAdminClient();
+  const supabase = await createClient();
   // 노이즈(목차·총론)가 섞여도 본문 청크가 충분히 남도록 후보를 넉넉히 받는다.
   const candidateCount = Math.max(40, topK * 6);
   const kwQuery = buildKeywordQuery(query, keywordTerms);
 
   // ①② 하이브리드 후보 → ③ RRF 융합 → ④ 정제·노이즈 제외(후보 12) → ⑤ LLM 재순위(상위 8)
-  const fused = await hybridCandidates(supabase, embedding, kwQuery, category, candidateCount);
-  if (fused.length === 0) return { contextText: "", sources: [], matched: 0 };
+  const candidates = await hybridCandidates(
+    supabase,
+    embedding,
+    kwQuery,
+    category,
+    candidateCount
+  );
+  const fused = candidates.rows;
+  if (fused.length === 0) {
+    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded };
+  }
   const refined = refine(fused, 12);
-  if (refined.length === 0) return { contextText: "", sources: [], matched: 0 };
+  if (refined.length === 0) {
+    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded };
+  }
   const top = await llmRerank(query, refined, 8);
 
   const contextText = top
     .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
     .join("\n\n---\n\n");
 
-  // 출처는 파일(source) 단위 중복 제거, 최대 3개. 원문 뷰어 없어 document_id=0.
+  // 출처는 문서/페이지 단위 중복 제거, 최대 3개. 자료실 문서가 있으면 원문 링크를 연결한다.
   const seen = new Set<string>();
   const sources: DocSource[] = [];
   for (const r of top) {
-    const key = r.meta?.source ?? "자료";
+    const documentId = documentIdOf(r.meta);
+    const page = pageOf(r.meta);
+    const key = `${documentId || r.meta?.source || "자료"}::${page ?? "-"}`;
     if (seen.has(key)) continue;
     seen.add(key);
     sources.push({
-      document_id: 0,
-      doc: labelOf(r.meta),
-      page: null,
+      document_id: documentId,
+      doc: documentLabelOf(r.meta),
+      page,
       content: r.text.slice(0, 400),
     });
     if (sources.length >= 3) break;
   }
 
-  return { contextText, sources, matched: top.length };
+  return { contextText, sources, matched: top.length, degraded: candidates.degraded };
 }
 
 // 자료제작용 청크 수 — 문서/슬라이드는 챗봇 답변보다 넓은 커버리지가 필요(챗봇 8 vs 생성 24).
@@ -303,22 +396,23 @@ export async function fetchExternalRagContext(
   limit = 40,
   topic?: string
 ): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
-  const supabase = createAdminClient();
+  const supabase = await createClient();
   const topicTrimmed = topic?.trim();
 
   // ① 주제 기반: "분야 + 주제"를 임베딩해 하이브리드 검색 → 정제 → 컨텍스트 조립
   if (topicTrimmed) {
     try {
+      await assertExternalEmbeddingContract();
       const embedding = await getQueryEmbedding(`${category} ${topicTrimmed}`);
       const kwQuery = buildKeywordQuery(topicTrimmed);
-      const fused = await hybridCandidates(
+      const candidates = await hybridCandidates(
         supabase,
         embedding,
         kwQuery,
         category,
         Math.max(60, GEN_KEEP * 2)
       );
-      const refined = refine(fused, GEN_KEEP);
+      const refined = refine(candidates.rows, GEN_KEEP);
       if (refined.length > 0) return buildContextFromRefined(refined, 5);
       // 주제 검색 결과가 없으면 분야 전체로 폴백
     } catch (e) {
@@ -329,6 +423,7 @@ export async function fetchExternalRagContext(
   // ② 분야 전체(폴백/주제 미지정): 노이즈 제외 후에도 limit 만큼 남도록 후보를 2배로 받는다.
   const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
     .select("content, metadata")
+    .eq("is_active", true)
     .eq(`metadata->>${CATEGORY_FIELD}`, category)
     .limit(limit * 2);
 
@@ -346,13 +441,14 @@ export async function fetchExternalRagContext(
 // 분야 → 원본 파일명 목록 (AI 자료제작 선택지·NotebookLM 자료 목록용)
 // Supabase REST는 요청당 최대 1000행이라, 전체 분야를 빠짐없이 모으려면 페이지네이션 필요.
 export async function listExternalRagCategories(): Promise<Record<string, string[]>> {
-  const supabase = createAdminClient();
+  const supabase = await createClient();
   const PAGE = 1000;
   const byCat = new Map<string, Set<string>>();
 
   for (let from = 0; ; from += PAGE) {
     const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
       .select(`category:metadata->>${CATEGORY_FIELD}, source:metadata->>source`)
+      .eq("is_active", true)
       .range(from, from + PAGE - 1);
     if (error) {
       console.error("[rag-external] list categories error:", error.message);

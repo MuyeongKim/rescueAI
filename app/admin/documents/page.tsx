@@ -78,7 +78,9 @@ export default async function AdminDocumentsPage() {
           <CardDescription>
             대원이 자료실(<code className="rounded bg-muted px-1">/docs</code>)에서 열람할 원본
             PDF를 올립니다. 비공개로 저장되며 로그인한 대원만 열람할 수 있습니다.
-            <br />※ AI 튜터의 검색 근거(벡터)는 별도 인덱싱(rag7.py)으로 적재됩니다 — 이 업로드와 무관.
+            <br />※ <code className="rounded bg-muted px-1">rag7.py</code>에서 원본 자동
+            등록을 켜면 PDF와 HWPX/HWP 변환본이 이 목록에 함께 연결됩니다. 이 폼은 원본만
+            별도로 등록할 때 사용합니다.
           </CardDescription>
         </CardHeader>
         <CardContent>

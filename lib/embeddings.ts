@@ -8,32 +8,65 @@ export const EMBEDDING_DIM = 1024;
 type Provider = "auto" | "google" | "openai" | "bge" | "ollama";
 
 function getProvider(): Provider {
-  return (process.env.EMBEDDING_PROVIDER as Provider) || "google";
+  const provider = process.env.EMBEDDING_PROVIDER || "google";
+  if (!["auto", "google", "openai", "bge", "ollama"].includes(provider)) {
+    throw new Error(`지원하지 않는 EMBEDDING_PROVIDER입니다: ${provider}`);
+  }
+  return provider as Provider;
 }
 
-// auto 모드: Ollama 실패 시 이 시각까지는 재시도 없이 바로 Google 폴백(요청마다 타임아웃 대기 방지)
-let ollamaDownUntil = 0;
-const OLLAMA_RETRY_MS = 60_000;
+export type EmbeddingContract = {
+  provider: Exclude<Provider, "auto">;
+  model: string;
+  dimensions: number;
+  version: string;
+};
 
-// auto — Ollama(홈서버) 우선, 실패하면 Google 폴백.
-// 주의: DB 벡터가 bge-m3(Ollama)로 적재돼 있으면 Google 쿼리와는 호환되지 않아
-// 폴백 중에는 검색 품질이 무의미해진다. 폴백은 "앱이 죽지 않게 하는" 용도이며 경고를 남긴다.
-async function embedAuto(text: string): Promise<number[]> {
-  if (Date.now() >= ollamaDownUntil) {
-    try {
-      return await embedOllama(text);
-    } catch (e) {
-      ollamaDownUntil = Date.now() + OLLAMA_RETRY_MS;
-      console.warn(
-        `[embeddings] Ollama 실패 — ${OLLAMA_RETRY_MS / 1000}초간 Google 폴백:`,
-        e instanceof Error ? e.message : e
-      );
-      console.warn(
-        "[embeddings] 주의: DB가 bge-m3 벡터라면 Google 쿼리로는 검색이 맞지 않습니다."
-      );
-    }
+export function getConfiguredEmbeddingContract(): EmbeddingContract {
+  const requested = getProvider();
+  const provider = requested === "auto" ? "ollama" : requested;
+  const defaults: Record<EmbeddingContract["provider"], { model: string; version: string }> = {
+    google: {
+      model: process.env.GOOGLE_EMBEDDING_MODEL || "gemini-embedding-001",
+      version: "google-retrieval-v1",
+    },
+    openai: {
+      model: process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small",
+      version: "openai-raw-v1",
+    },
+    bge: {
+      model: process.env.BGE_EMBEDDING_MODEL || "BAAI/bge-m3",
+      version: "bge-m3-raw-v1",
+    },
+    ollama: {
+      model: process.env.EMBEDDING_MODEL || "bge-m3:latest",
+      version: (process.env.EMBEDDING_MODEL || "bge-m3:latest")
+        .toLowerCase()
+        .includes("bge-m3")
+        ? "bge-m3-raw-v1"
+        : "ollama-raw-v1",
+    },
+  };
+  return {
+    provider,
+    model: defaults[provider].model,
+    dimensions: EMBEDDING_DIM,
+    version: process.env.EMBEDDING_VERSION || defaults[provider].version,
+  };
+}
+
+function validateEmbeddingVector(vector: number[]): number[] {
+  if (vector.length !== EMBEDDING_DIM) {
+    throw new Error(
+      `임베딩 차원 불일치: ${vector.length} (기대값 ${EMBEDDING_DIM}). EMBEDDING_PROVIDER/모델 설정을 확인하세요.`
+    );
   }
-  return embedGoogle(text);
+  if (vector.some((value) => !Number.isFinite(value))) {
+    throw new Error("임베딩에 유한수가 아닌 값이 포함되어 있습니다.");
+  }
+  const squaredNorm = vector.reduce((sum, value) => sum + value * value, 0);
+  if (squaredNorm <= 1e-24) throw new Error("임베딩 벡터의 노름이 0입니다.");
+  return vector;
 }
 
 // 쿼리 한 건을 1024차원 벡터로 임베딩한다. 인덱서와 동일한 제공자/모델을 사용해야 한다.
@@ -41,7 +74,7 @@ export async function getQueryEmbedding(text: string): Promise<number[]> {
   const provider = getProvider();
   const vec =
     provider === "auto"
-      ? await embedAuto(text)
+      ? await embedOllama(text)
       : provider === "google"
         ? await embedGoogle(text)
         : provider === "bge"
@@ -49,13 +82,7 @@ export async function getQueryEmbedding(text: string): Promise<number[]> {
           : provider === "ollama"
             ? await embedOllama(text)
             : await embedOpenAI(text);
-
-  if (vec.length !== EMBEDDING_DIM) {
-    throw new Error(
-      `임베딩 차원 불일치: ${vec.length} (기대값 ${EMBEDDING_DIM}). EMBEDDING_PROVIDER/모델 설정을 확인하세요.`
-    );
-  }
-  return vec;
+  return validateEmbeddingVector(vec);
 }
 
 // Google Generative AI 임베딩 (기본, gemini-embedding-001).
@@ -128,7 +155,7 @@ async function embedOllama(text: string): Promise<number[]> {
   const base = process.env.EMBEDDING_API_URL;
   if (!base)
     throw new Error("EMBEDDING_API_URL 가 설정되지 않았습니다 (EMBEDDING_PROVIDER=ollama).");
-  const model = process.env.EMBEDDING_MODEL || "bge-m3";
+  const model = process.env.EMBEDDING_MODEL || "bge-m3:latest";
 
   const res = await fetch(`${base.replace(/\/$/, "")}/api/embed`, {
     method: "POST",
