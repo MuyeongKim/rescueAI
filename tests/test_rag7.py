@@ -184,6 +184,47 @@ def test_mixed_pdf_pages_enable_ocr(monkeypatch):
     assert rag7._resolve_do_ocr("mixed.pdf", lambda _message: None) is True
 
 
+def test_low_text_pdf_enables_full_page_ocr(monkeypatch):
+    rag7 = load_rag7(monkeypatch)
+    analysis = rag7.PdfTextLayerAnalysis(
+        total_pages=10,
+        text_pages=1,
+        low_text_pages=tuple(range(2, 11)),
+    )
+
+    assert rag7._resolve_force_full_page_ocr("vector-text.pdf", analysis) is True
+
+    monkeypatch.setenv("DOCLING_FORCE_FULL_PAGE_OCR", "0")
+    assert rag7._resolve_force_full_page_ocr("vector-text.pdf", analysis) is False
+
+
+def test_recovers_only_missing_pdf_pages_with_useful_text(monkeypatch):
+    rag7 = load_rag7(monkeypatch)
+
+    class Page:
+        def __init__(self, text):
+            self.text = text
+
+        def extract_text(self):
+            return self.text
+
+    pypdf = types.ModuleType("pypdf")
+    pypdf.PdfReader = lambda _path: types.SimpleNamespace(
+        pages=[
+            Page("기존 페이지 본문" * 10),
+            Page("복구할 페이지 본문" * 10),
+            Page("짧음"),
+        ]
+    )
+    monkeypatch.setitem(sys.modules, "pypdf", pypdf)
+
+    pages = rag7.recover_missing_pdf_text_pages("manual.pdf", {1})
+
+    assert [(page.page_num, page.text) for page in pages] == [
+        (2, "복구할 페이지 본문" * 10)
+    ]
+
+
 def test_docling_conversion_preserves_page_numbers(monkeypatch):
     rag7 = load_rag7(monkeypatch)
     monkeypatch.setenv("DOCLING_OCR", "0")
@@ -276,6 +317,7 @@ def test_docling_uses_korean_easyocr_options(monkeypatch):
     assert captured["ocr_kwargs"] == {
         "lang": ["ko", "en"],
         "download_enabled": False,
+        "force_full_page_ocr": False,
     }
 
 

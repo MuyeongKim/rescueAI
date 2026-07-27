@@ -36,8 +36,8 @@ function charPr(id: number, height: number, opts?: { bold?: boolean; color?: str
   );
 }
 
-// ── paraPr 2종: 0 양쪽정렬 · 1 가운데정렬 ──
-function paraPr(id: number, align: "JUSTIFY" | "CENTER") {
+// ── paraPr 2종: 0 왼쪽정렬 · 1 가운데정렬 ──
+function paraPr(id: number, align: "LEFT" | "CENTER") {
   const margin =
     "<hh:margin>" +
     '<hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="0" unit="HWPUNIT"/><hc:next value="0" unit="HWPUNIT"/>' +
@@ -90,7 +90,7 @@ function buildHeaderXml(): string {
     `<hh:borderFills itemCnt="2">${borderFill(1)}${borderFill(2)}</hh:borderFills>` +
     `<hh:charProperties itemCnt="4">${charPr(0, 1000)}${charPr(1, 1600, { bold: true })}${charPr(2, 1200, { bold: true })}${charPr(3, 900, { color: "#555555" })}</hh:charProperties>` +
     '<hh:tabProperties itemCnt="1"><hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/></hh:tabProperties>' +
-    `<hh:paraProperties itemCnt="2">${paraPr(0, "JUSTIFY")}${paraPr(1, "CENTER")}</hh:paraProperties>` +
+    `<hh:paraProperties itemCnt="2">${paraPr(0, "LEFT")}${paraPr(1, "CENTER")}</hh:paraProperties>` +
     '<hh:styles itemCnt="1"><hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langID="1042" lockForm="0"/></hh:styles>' +
     "</hh:refList>" +
     "</hh:head>"

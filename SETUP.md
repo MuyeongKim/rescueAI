@@ -80,6 +80,9 @@ python embed_and_upload.py
 HWPX/HWP 자동 변환에는 LibreOffice가 필요합니다. 스캔 PDF의 한국어 OCR 모델은
 외부망에서 아래처럼 미리 받아 내부망으로 함께 반입하고, 내부망 환경변수에는
 `DOCLING_OCR_DOWNLOAD=0`을 지정하세요.
+텍스트가 벡터 윤곽선으로 저장된 PDF는 텍스트층 비율이 10% 이하일 때 전체 페이지
+OCR을 자동 적용합니다. 필요하면 `DOCLING_FORCE_FULL_PAGE_OCR=1|0`으로 재정의할 수 있습니다.
+Docling이 일부 페이지를 건너뛰더라도 유효한 PDF 텍스트층이 있으면 해당 페이지만 자동 병합합니다.
 ```bash
 docling-tools models download easyocr --easyocr-lang ko --easyocr-lang en
 ```

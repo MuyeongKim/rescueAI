@@ -1,5 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
 import { DEMO } from "@/lib/demo";
+import { normalizeTrainingPlanHwpx } from "@/lib/hwpx-template";
 
 // 한글(hwpx) 파일 생성 — 미니서버(hwp-writer-api)에 서버 대 서버로 중계한다.
 // API 키는 서버 env 에만 두고, 생성→다운로드 2단계를 여기서 처리해 파일을 그대로 스트리밍.
@@ -114,9 +115,17 @@ export async function POST(req: Request) {
       headers: auth,
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
-    if (!file.ok || !file.body) throw new Error(`download 응답 ${file.status}`);
+    if (!file.ok) throw new Error(`download 응답 ${file.status}`);
 
-    return new Response(file.body, {
+    const original = new Uint8Array(await file.arrayBuffer());
+    const output =
+      body.template === "training_plan"
+        ? await normalizeTrainingPlanHwpx(original)
+        : original;
+    const responseBody = new ArrayBuffer(output.byteLength);
+    new Uint8Array(responseBody).set(output);
+
+    return new Response(responseBody, {
       headers: { "Content-Type": "application/vnd.hancom.hwpx" },
     });
   } catch (e) {

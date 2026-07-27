@@ -50,6 +50,9 @@ docling-tools models download easyocr --easyocr-lang ko --easyocr-lang en
 내부망에서는 사전 다운로드한 모델 디렉터리를 함께 반입하고
 `DOCLING_OCR_DOWNLOAD=0`으로 설정합니다. LibreOffice 경로를 자동 탐지하지 못하면
 `LIBREOFFICE_BIN`에 `soffice` 실행 파일 경로를 지정하세요.
+텍스트층 비율이 10% 이하인 벡터형 PDF는 전체 페이지 OCR을 자동 적용하며,
+`DOCLING_FORCE_FULL_PAGE_OCR=1|0`으로 강제하거나 해제할 수 있습니다.
+Docling 변환에서 누락된 페이지는 유효한 PDF 텍스트층이 있을 때 자동 보완됩니다.
 
 ## 자료 메타데이터 부여
 - **폴더 분류**: `docs/산악/장비.pdf` 처럼 카테고리 폴더에 넣으면 `category` 자동 인식

@@ -429,6 +429,46 @@ def _resolve_do_ocr(file_path, log, pdf_analysis=None):
     return True
 
 
+def _resolve_force_full_page_ocr(file_path, pdf_analysis=None):
+    """텍스트층이 거의 없는 벡터형 PDF는 페이지 전체를 렌더링해 OCR한다."""
+    mode = os.getenv("DOCLING_FORCE_FULL_PAGE_OCR", "auto").strip().lower()
+    if mode in {"1", "true", "yes", "on"}:
+        return True
+    if mode in {"0", "false", "no", "off"}:
+        return False
+    if Path(file_path).suffix.lower() != ".pdf":
+        return False
+
+    analysis = pdf_analysis or analyze_pdf_text_layer(file_path)
+    if analysis is None:
+        return False
+    threshold = _env_float(
+        "DOCLING_FULL_PAGE_OCR_TEXT_RATIO", 0.1, minimum=0.0, maximum=1.0
+    )
+    return analysis.coverage <= threshold
+
+
+def recover_missing_pdf_text_pages(file_path, existing_page_numbers, min_chars=None):
+    """Docling이 건너뛴 페이지 중 유효한 PDF 텍스트층이 있는 페이지만 복구한다."""
+    from pypdf import PdfReader
+
+    if min_chars is None:
+        min_chars = _env_int(
+            "DOCLING_MIN_TEXT_CHARS_PER_PAGE", 40, minimum=1, maximum=1000
+        )
+
+    reader = PdfReader(file_path)
+    recovered = []
+    for page_idx, page in enumerate(reader.pages, start=1):
+        if page_idx in existing_page_numbers:
+            continue
+        text = (page.extract_text() or "").replace("\x00", " ").strip()
+        if len(text) < min_chars:
+            continue
+        recovered.append(ConvertedPage(text=text, page_num=page_idx))
+    return recovered
+
+
 def convert_file_to_pages(file_path, log_cb=None, pdf_analysis=None):
     """Docling 결과를 페이지 단위로 반환하고, PDF 변환 실패 시 pypdf로 폴백한다."""
 
@@ -451,6 +491,7 @@ def convert_file_to_pages(file_path, log_cb=None, pdf_analysis=None):
         if do_ocr:
             from docling.datamodel.pipeline_options import EasyOcrOptions
 
+            force_full_page_ocr = _resolve_force_full_page_ocr(file_path, pdf_analysis)
             ocr_languages = [
                 language.strip()
                 for language in os.getenv("DOCLING_OCR_LANGS", "ko,en").split(",")
@@ -465,8 +506,11 @@ def convert_file_to_pages(file_path, log_cb=None, pdf_analysis=None):
             pdf_options.ocr_options = EasyOcrOptions(
                 lang=ocr_languages,
                 download_enabled=download_enabled,
+                force_full_page_ocr=force_full_page_ocr,
             )
             log(f"ℹ️ EasyOCR 언어: {', '.join(ocr_languages)}")
+            if force_full_page_ocr:
+                log("ℹ️ 텍스트층이 거의 없어 전체 페이지 렌더링 OCR을 적용합니다.")
 
         converter = DocumentConverter(
             format_options={InputFormat.PDF: PdfFormatOption(pipeline_options=pdf_options)}
@@ -485,6 +529,26 @@ def convert_file_to_pages(file_path, log_cb=None, pdf_analysis=None):
                 pages.append(ConvertedPage(text=text, page_num=None))
         if not pages:
             raise RuntimeError("Docling 변환 결과가 비어 있습니다.")
+
+        if Path(file_path).suffix.lower() == ".pdf" and pdf_analysis is not None:
+            existing_page_numbers = {
+                page.page_num for page in pages if page.page_num is not None
+            }
+            recovered_pages = recover_missing_pdf_text_pages(
+                file_path, existing_page_numbers
+            )
+            if recovered_pages:
+                pages.extend(recovered_pages)
+                pages.sort(
+                    key=lambda page: (
+                        page.page_num is None,
+                        page.page_num if page.page_num is not None else 0,
+                    )
+                )
+                log(
+                    f"ℹ️ Docling 누락 페이지 {len(recovered_pages)}쪽을 "
+                    "PDF 텍스트층으로 보완했습니다."
+                )
         return pages, "docling-easyocr" if do_ocr else "docling"
     except Exception as docling_error:
         suffix = Path(file_path).suffix.lower()
