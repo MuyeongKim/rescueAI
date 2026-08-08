@@ -33,8 +33,7 @@ LLM 및 임베딩 서비스를 내부망 서버로 이전하는 것을 목표로
 분류 체계를 사용합니다.
 
 > 기존 과정·레슨·진도·이수 기능은 단순 읽음 표시의 실효성이 낮아 2026년 6월 제거했습니다.
-> `lesson_progress` 테이블은 이전 마이그레이션 호환을 위해 남아 있지만 현재 애플리케이션에서는
-> 사용하지 않습니다.
+> 잔존하던 `lesson_progress` 테이블도 2026년 8월 마이그레이션에서 삭제했습니다.
 
 ## 주요 화면
 
@@ -121,17 +120,28 @@ npm run dev
 실제 API와 Supabase 없이 UI 흐름만 시연할 때는 데모 모드를 사용할 수 있습니다.
 
 ```bash
-NEXT_PUBLIC_DEMO_MODE=1 npm run dev
+NEXT_PUBLIC_DEMO_MODE=1 NEXT_PUBLIC_SUPABASE_URL=https://demo.supabase.co npm run dev
 ```
+
+데모 모드는 미들웨어의 인증 검사를 통째로 통과시키므로, **실제 Supabase 백엔드가 연결된
+환경에서는 플래그가 켜져 있어도 자동으로 무시**합니다(`lib/demo-flag.ts`). 그래서 위 명령처럼
+Supabase 주소를 자리표시자로 덮어써야 데모가 켜집니다. 이 가드는 운영 배포에 데모 플래그가
+실수로 들어가 인증이 열리는 사고를 막기 위한 것이므로 제거하지 마세요.
 
 ### 데이터베이스 준비
 
 1. Supabase에서 `vector`, `pg_trgm` 확장을 사용할 수 있는 프로젝트를 준비합니다.
-2. `supabase/migrations/`의 `0001`부터 `0012`까지 파일명 순서로 적용합니다.
-3. `rag7.py`의 버전형 적재를 사용하면
-   `20260726100515_secure_versioned_rag_ingestion.sql`도 적용합니다.
+2. **새 프로젝트**라면 [`supabase/setup_new_project.sql`](supabase/setup_new_project.sql)
+   전체를 SQL Editor에서 한 번에 실행합니다. 이 파일은 모든 마이그레이션에서 자동 생성되며
+   (`npm run sql:setup`), 직접 수정하지 않습니다.
+3. **기존 프로젝트**라면 `supabase/migrations/`에서 아직 적용하지 않은 파일만 파일명 순서로
+   실행합니다. 규칙과 파일별 설명은
+   [`supabase/migrations/README.md`](supabase/migrations/README.md)에 있습니다.
 4. 원본 자료용 비공개 Storage 버킷 `documents`를 생성합니다.
 5. 관리자 계정과 일반 사용자 계정을 등록합니다.
+   일괄 등록은 `node scripts/import-users.mjs <명단.csv>`를 사용하며,
+   `--random-password`를 붙이면 무작위 초기 비밀번호를 발급해 별도 CSV로 떨어뜨립니다
+   (명단 유출만으로 로그인되지 않게 하려면 이쪽을 권장합니다).
 
 세부 설치와 인증 설정은 [`SETUP.md`](SETUP.md), 실제 운영 전환 순서는
 [`DEPLOYMENT.md`](DEPLOYMENT.md)를 참고합니다.
@@ -190,8 +200,9 @@ python embed_and_upload.py
 ```bash
 npm test           # Vitest 단위·통합 테스트
 npm run build      # 프로덕션 빌드, 타입 및 Next.js 검사 포함
-npx tsc --noEmit   # TypeScript 타입 검사
+npm run typecheck  # TypeScript 타입 검사
 npm run lint       # ESLint
+npm run sql:setup  # 마이그레이션에서 setup_new_project.sql 재생성
 ```
 
 RAG 평가셋과 실행 방법은 [`eval/README.md`](eval/README.md)를 참고합니다.
@@ -201,9 +212,24 @@ RAG 평가셋과 실행 방법은 [`eval/README.md`](eval/README.md)를 참고�
 - `SUPABASE_SERVICE_ROLE_KEY`, LLM API 키, 임베딩 API 키는 서버 전용입니다.
 - 서버 전용 키에 `NEXT_PUBLIC_` 접두사를 붙이거나 클라이언트 코드에서 참조하지 않습니다.
 - `documents` Storage 버킷은 비공개로 유지하고 인증된 사용자에게만 서명 URL을 발급합니다.
-- 관리자 API는 로그인 여부뿐 아니라 `admin` 역할을 서버에서 다시 확인합니다.
 - 토큰과 비밀번호를 Git 저장소, 로그, 문서 또는 채팅에 남기지 않습니다.
 - 사용자 데이터 테이블에는 RLS를 적용하고 본인 데이터만 접근하도록 유지합니다.
+
+인증·요청 처리는 `lib/auth.ts`를 단일 출처로 사용합니다.
+
+| 위치 | 사용할 가드 | 하는 일 |
+| --- | --- | --- |
+| 페이지·레이아웃 | `requireUserAndProfile()` | 세션 확인 + 최초 로그인 비밀번호 변경 강제 |
+| 일반 route handler | `requireApiUser()` | 세션 확인 + 비밀번호 미변경 계정 차단 |
+| 관리자 route handler | `requireApiAdmin()` | 위 항목 + `admin` 역할 재확인 |
+
+- route handler에서 `supabase.auth.getUser()`를 직접 호출하지 않습니다. 비밀번호를 바꾸지 않은
+  계정이 API로 새어 들어옵니다(초기 비밀번호는 디지털식별번호라 명단을 아는 사람이 알 수 있습니다).
+- 로그인 후 이동 경로 등 리다이렉트 파라미터는 반드시 `safeRedirectPath()`를 통과시킵니다.
+  외부 URL과 `javascript:` 스킴을 차단합니다.
+- LLM을 호출하는 엔드포인트에는 `rateLimit()`을 적용하고, 클라이언트가 보낸 대화 이력은
+  `trimChatHistory()`로 개수와 길이를 제한합니다.
+- 응답 보안 헤더(CSP, `X-Frame-Options`, HSTS 등)는 `next.config.mjs`에서 관리합니다.
 
 ## PoC 범위와 내부망 이전
 
