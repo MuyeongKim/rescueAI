@@ -1,5 +1,6 @@
+import { timingSafeEqual } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireApiAdmin } from "@/lib/auth";
 import { summarizeHeadlines } from "@/lib/news-ai";
 
 // 구조 동향 자동 수집(B): Google News RSS(무료, 키 없음) → AI 요약/분류 → news 테이블 upsert.
@@ -63,11 +64,21 @@ function parseRss(xml: string): Raw[] {
   return out;
 }
 
+// 길이 노출까지 막을 필요는 없지만, 바이트 단위 조기 종료로 비밀값을 유추당하지 않도록
+// 상수 시간 비교를 쓴다. 길이가 다르면 비교 없이 false.
+function secretMatches(header: string | null, secret: string): boolean {
+  if (!header) return false;
+  const expected = Buffer.from(`Bearer ${secret}`);
+  const actual = Buffer.from(header);
+  if (expected.length !== actual.length) return false;
+  return timingSafeEqual(expected, actual);
+}
+
 async function authorize(req: Request): Promise<boolean> {
   const secret = process.env.CRON_SECRET;
-  if (secret && req.headers.get("authorization") === `Bearer ${secret}`) return true;
-  const { profile } = await getUserAndProfile();
-  return isAdmin(profile);
+  if (secret && secretMatches(req.headers.get("authorization"), secret)) return true;
+  const auth = await requireApiAdmin();
+  return auth.ok;
 }
 
 async function refresh(): Promise<{ added: number; scanned: number }> {
@@ -114,14 +125,17 @@ async function refresh(): Promise<{ added: number; scanned: number }> {
   }));
   // upsert(onConflict url, 중복 무시) — cron 과 관리자 수동 버튼이 겹쳐 url 유니크 충돌이 나도
   // 배치 전체가 500 으로 실패하지 않게 한다(신규 행은 저장, 중복은 조용히 건너뜀).
-  const { error } = await admin
+  // select() 로 실제 삽입된 행만 돌려받는다 — rows.length 를 그대로 쓰면 중복을 건너뛴 만큼
+  // "N건 추가"가 거짓말이 된다(관리자 수동 버튼 결과가 실제와 어긋남).
+  const { data: inserted, error } = await admin
     .from("news")
-    .upsert(rows, { onConflict: "url", ignoreDuplicates: true });
+    .upsert(rows, { onConflict: "url", ignoreDuplicates: true })
+    .select("id");
   if (error) {
     console.error("[news/refresh] upsert 실패:", error.message);
     throw new Error(error.message);
   }
-  return { added: rows.length, scanned: candidates.length };
+  return { added: inserted?.length ?? 0, scanned: candidates.length };
 }
 
 export async function GET(req: Request) {

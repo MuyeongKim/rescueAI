@@ -1,4 +1,5 @@
-import { createClient } from "@/lib/supabase/server";
+import { requireApiUser } from "@/lib/auth";
+import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { DEMO } from "@/lib/demo";
 import { normalizeTrainingPlanHwpx } from "@/lib/hwpx-template";
 
@@ -37,11 +38,13 @@ export async function POST(req: Request) {
     return Response.json({ error: "한글 작성 서버가 설정되지 않았습니다." }, { status: 501 });
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return new Response("Unauthorized", { status: 401 });
+  // 아래 미니서버 인증 헤더(auth)와 이름이 겹치지 않게 session 으로 받는다.
+  const session = await requireApiUser();
+  if (!session.ok) return session.response;
+
+  // 외부 미니서버에 최대 20초씩 2회 붙는 경로라 동시 남용을 막는다 (분당 15회/사용자).
+  const rl = rateLimit(`hwp:${session.user.id}`, 15, 60_000);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   let body: {
     title?: string;

@@ -1,6 +1,6 @@
 import { CalendarCheck, Dumbbell, Flame, Medal, TrendingUp } from "lucide-react";
 
-import { getUserAndProfile } from "@/lib/auth";
+import { requireUserAndProfile } from "@/lib/auth";
 import { DAILY_POINT_CAP } from "@/lib/fitness";
 import { getFitnessState } from "@/lib/fitness-server";
 import {
@@ -27,7 +27,7 @@ import { OperationalHeader } from "@/components/layout/OperationalHeader";
 export const dynamic = "force-dynamic";
 
 export default async function FitnessPage() {
-  const { user } = await getUserAndProfile();
+  const { user } = await requireUserAndProfile();
   const state = await getFitnessState(user?.id ?? "");
 
   return (

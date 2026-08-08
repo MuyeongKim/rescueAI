@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireApiAdmin } from "@/lib/auth";
 import { DEMO } from "@/lib/demo";
 
 // 자료실 원본 PDF 업로드/삭제 (관리자 전용). 비공개 'documents' 버킷에 서명 URL로 직접 업로드.
@@ -10,12 +10,6 @@ import { DEMO } from "@/lib/demo";
 //  DELETE {id}                                  → documents 행 + 스토리지 파일 삭제
 const BUCKET = "documents";
 
-async function requireAdmin() {
-  const { user, profile } = await getUserAndProfile();
-  if (!user || !isAdmin(profile)) return null;
-  return user;
-}
-
 function safeName(name: string): string {
   // 경로 안전 문자만, 한글 등은 유지하되 슬래시·공백 정리
   return (name || "file.pdf").replace(/[/\\]/g, "_").replace(/\s+/g, "_").slice(0, 120);
@@ -23,7 +17,8 @@ function safeName(name: string): string {
 
 export async function POST(req: Request) {
   if (DEMO) return new Response("데모 모드에서는 사용할 수 없습니다.", { status: 400 });
-  if (!(await requireAdmin())) return new Response("Forbidden", { status: 403 });
+  const auth = await requireApiAdmin();
+  if (!auth.ok) return auth.response;
 
   let body: Record<string, unknown>;
   try {
@@ -92,7 +87,8 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   if (DEMO) return new Response("데모 모드에서는 사용할 수 없습니다.", { status: 400 });
-  if (!(await requireAdmin())) return new Response("Forbidden", { status: 403 });
+  const auth = await requireApiAdmin();
+  if (!auth.ok) return auth.response;
 
   let body: { id?: number };
   try {

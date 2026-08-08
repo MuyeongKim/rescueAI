@@ -1,5 +1,6 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
+import { DEMO } from "@/lib/demo-flag";
 
 const PROTECTED_PREFIXES = [
   "/home",
@@ -16,8 +17,10 @@ const PROTECTED_PREFIXES = [
 ];
 
 export async function middleware(request: NextRequest) {
-  // 데모 모드: 인증/Supabase 없이 전체 경로 통과
-  if (process.env.NEXT_PUBLIC_DEMO_MODE === "1") {
+  // 데모 모드: 인증/Supabase 없이 전체 경로 통과.
+  // DEMO 는 실제 Supabase 백엔드가 연결된 배포에서는 강제로 꺼진다(lib/demo-flag.ts) —
+  // 플래그 하나로 실데이터 환경의 인증이 통째로 열리는 사고를 막기 위함.
+  if (DEMO) {
     return NextResponse.next({ request });
   }
 

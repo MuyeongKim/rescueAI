@@ -28,18 +28,27 @@ components/ui/  shadcn 컴포넌트
 components/chat /admin  도메인 컴포넌트
 lib/supabase/   client(브라우저) · server(SSR) · admin(service role, 서버 전용)
 lib/rag.ts      검색 + 컨텍스트 조립        lib/embeddings.ts  쿼리 임베딩
-lib/courses.ts  과정 자동 편성·진도(순수)   lib/learning.ts    학습상태 조립(서버)
-lib/generate.ts AI 자료제작 스키마·프롬프트   lib/docx.ts /pptx.ts  docx·pptx 변환(클라이언트 동적 import)
-lib/fitness.ts  체력 마일리지 규칙(순수)    lib/fitness-server.ts  마일리지 현황 조립(서버)
+lib/auth.ts     세션·프로필 조회 + API/페이지 가드   lib/safe-redirect.ts  redirect 파라미터 검증(순수)
+lib/chat-history.ts  대화 히스토리 상한(순수)   lib/rate-limit.ts  인메모리 레이트리밋
+lib/generate.ts AI 자료제작 스키마·프롬프트   lib/generate-material.ts  저장본↔폼 변환(순수)
+lib/docx.ts /pptx.ts /hwpx*.ts  문서 변환(클라이언트 동적 import)
+lib/fitness.ts  체력 마일리지 규칙·날짜 검증(순수)  lib/fitness-server.ts  마일리지 현황 조립(서버)
 lib/courses.ts  분야(카테고리) 상수만        lib/database.types.ts  수작성 DB 타입
+lib/demo-flag.ts  DEMO 플래그(미들웨어 공용)  lib/demo.ts  목 데이터
 app/home /generate  홈 · AI 자료제작 (+/api/generate)
 app/fitness /notices /me /docs  체력단련 · 공지 · 마이페이지 · 자료실
 app/admin/  통계 + documents(자료) · users(사용자) · notices(공지 작성)
 components/learning/      CategoryBadge(분야색)·ProgressBar 재사용 컴포넌트 (학습 로직은 제거됨)
-components/generate/      AI 자료제작 폼        components/fitness/  운동 기록 폼
-scripts/import-users.mjs  명단(CSV) 일괄 계정 등록
-supabase/migrations/    0001 테이블 · 0002 RPC · 0003 트리거+RLS · 0004 학습(진도, 현재 미사용)
-                        · 0005 플랫폼(공지·체력 마일리지) · 0006 퀴즈 제거 · 0007 직원필드+비번변경
+components/generate/      GenerateForm(입력) · DocResult/SlideDeckResult/NotebookLmResult(결과)
+                          · parts.tsx(공용 조각)   components/fitness/  운동 기록 폼
+scripts/import-users.mjs  명단(CSV) 일괄 계정 등록 (--random-password 옵션)
+scripts/build-setup-sql.mjs  마이그레이션 → setup_new_project.sql 생성 (npm run sql:setup)
+supabase/migrations/    0001 테이블 · 0002 RPC · 0003 트리거+RLS · 0004 학습(제거됨)
+                        · 0005 플랫폼(공지·체력) · 0006 퀴즈 제거 · 0007 직원필드+비번변경
+                        · 0008 뉴스 · 0009 생성물 저장 · 0010 role 자가승격 차단
+                        · 0011 인기질문 RPC · 0012 생성물 공유
+                        · 20260726… 외부 RAG(rag_rescue) 보안·버전 적재
+                        · 20260808… hybrid_search 코사인 수정+정리 · 관리자 통계 RPC
 indexing/       Python 파이프라인          docs/  원본 자료 투입 위치
 eval/           평가셋 러너(vitest 통합)
 ```
@@ -47,7 +56,7 @@ eval/           평가셋 러너(vitest 통합)
 ## 플랫폼 도메인 규칙
 - **분야(카테고리) = 산악·수난·화재·구급**(`lib/courses.ts`의 COURSE_CATEGORIES). 챗봇 필터·자료제작 분야에 사용.
 - 학습/진도/이수(레슨) 기능은 **제거됨**(2026-06-18). `documents`는 자료실(`/docs`) 원본 열람용으로만.
-  `lesson_progress` 테이블(0004)은 미사용 잔존.
+  `lesson_progress` 테이블도 2026-08-08 마이그레이션에서 삭제됨.
 - AI 자료제작: `/generate` 클릭·선택형 UI → `/api/generate`(분야 자료 컨텍스트+generateObject).
   훈련계획/교안은 docx, 슬라이드는 분야 색 표준 양식 PPTX(발표자 노트 포함) 다운로드,
   NotebookLM 프롬프트는 클라이언트 조립(AI 미호출).
@@ -58,6 +67,15 @@ eval/           평가셋 러너(vitest 통합)
 - service role 클라이언트(`lib/supabase/admin.ts`)는 **role='admin' 검증 후** 또는 인덱서에서만.
 - 모든 사용자 데이터 테이블은 **RLS** 적용. 본인 데이터만 접근.
 - **브라우저 스토리지(localStorage/sessionStorage) 의존 금지** — 상태는 서버/DB에.
+- 인증 가드는 `lib/auth.ts` 단일 출처:
+  페이지/레이아웃=`requireUserAndProfile()`(첫 로그인 비번변경 강제),
+  route handler=`requireApiUser()` / 관리자 API=`requireApiAdmin()`.
+  API 에서 `supabase.auth.getUser()` 를 직접 쓰지 말 것 — 비번 미변경 계정이 API 로 새어 들어온다.
+- **리다이렉트 파라미터는 반드시 `safeRedirectPath()` 통과** — 외부 URL·`javascript:` 차단.
+- LLM 을 태우는 엔드포인트에는 `rateLimit()` 필수(비용 방어). 클라이언트가 보낸 대화 히스토리는
+  `trimChatHistory()` 로 개수·길이를 자른다.
+- 데모 모드(`NEXT_PUBLIC_DEMO_MODE`)는 실제 Supabase 백엔드가 붙으면 자동으로 꺼진다(`lib/demo-flag.ts`).
+  플래그 하나로 미들웨어 인증이 통째로 열리므로 이 가드를 제거하지 말 것.
 
 ## 코딩 컨벤션
 - 서버 컴포넌트 기본, 상호작용 필요한 곳만 `"use client"`.
@@ -73,8 +91,9 @@ eval/           평가셋 러너(vitest 통합)
 npm run dev        # 개발 서버
 npm run build      # 프로덕션 빌드(타입 체크 포함)
 npm run lint       # ESLint
-npx tsc --noEmit   # 타입만 체크
+npm run typecheck  # 타입만 체크(tsc --noEmit)
 npm test           # 단위 테스트(vitest)
+npm run sql:setup  # 마이그레이션 → supabase/setup_new_project.sql 재생성
 
 # 인덱싱(자료 추가 시): SETUP.md 참고
 cd indexing && pip install -r requirements.txt && python embed_and_upload.py

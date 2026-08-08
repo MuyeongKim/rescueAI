@@ -1,12 +1,12 @@
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireUserAndProfile, isAdmin } from "@/lib/auth";
 
 export default async function NoticesLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { user, profile } = await getUserAndProfile();
+  const { user, profile } = await requireUserAndProfile();
   return (
     <div className="flex h-screen">
       {/* 공지는 데스크톱 사이드바엔 없지만, 모바일 더보기 시트·탭에선 활성 표시되게 active 전달 */}

@@ -1,8 +1,11 @@
 import { describe, it, expect } from "vitest";
 import {
+  BACKDATE_MAX_DAYS,
   calcPoints,
   calcStreak,
   calcWeekly,
+  checkPerformedOn,
+  isCalendarDate,
   DAILY_POINT_CAP,
 } from "@/lib/fitness";
 
@@ -67,5 +70,55 @@ describe("calcWeekly", () => {
   it("기록이 없으면 전부 0이다", () => {
     const weekly = calcWeekly([]);
     expect(weekly.every((w) => w.points === 0)).toBe(true);
+  });
+});
+
+describe("checkPerformedOn (소급 입력 제한)", () => {
+  const today = "2026-08-08";
+
+  it("오늘과 최근 14일 이내는 허용한다", () => {
+    expect(checkPerformedOn(today, today)).toEqual({ ok: true });
+    expect(checkPerformedOn("2026-08-01", today)).toEqual({ ok: true });
+    expect(checkPerformedOn("2026-07-25", today)).toEqual({ ok: true }); // 정확히 14일 전
+  });
+
+  it("허용 경계가 BACKDATE_MAX_DAYS 상수를 따른다", () => {
+    const boundary = new Date(`${today}T00:00:00Z`);
+    boundary.setUTCDate(boundary.getUTCDate() - BACKDATE_MAX_DAYS);
+    const justOutside = new Date(boundary);
+    justOutside.setUTCDate(justOutside.getUTCDate() - 1);
+
+    expect(checkPerformedOn(boundary.toISOString().slice(0, 10), today).ok).toBe(true);
+    expect(checkPerformedOn(justOutside.toISOString().slice(0, 10), today).ok).toBe(false);
+  });
+
+  it("14일보다 오래된 날짜를 막는다", () => {
+    // 하한이 없으면 과거 날짜를 흩뿌려 일일 상한(120점)을 무한히 우회할 수 있다.
+    expect(checkPerformedOn("2026-07-24", today)).toEqual({ ok: false, reason: "too-old" });
+    expect(checkPerformedOn("2020-01-01", today)).toEqual({ ok: false, reason: "too-old" });
+  });
+
+  it("미래 날짜를 막는다", () => {
+    expect(checkPerformedOn("2026-08-09", today)).toEqual({ ok: false, reason: "future" });
+  });
+
+  it("달력에 없는 날짜·형식 오류를 막는다 (DB 까지 내려가 500 나던 값들)", () => {
+    for (const bad of ["2026-13-45", "2026-02-30", "20260808", "2026-8-8", "abc", ""]) {
+      expect(checkPerformedOn(bad, today)).toEqual({ ok: false, reason: "format" });
+    }
+  });
+
+  it("월·연 경계를 넘어도 일수로 판정한다", () => {
+    expect(checkPerformedOn("2025-12-28", "2026-01-05")).toEqual({ ok: true });
+    expect(checkPerformedOn("2025-12-21", "2026-01-05")).toEqual({ ok: false, reason: "too-old" });
+  });
+});
+
+describe("isCalendarDate", () => {
+  it("실제 존재하는 날짜만 통과시킨다", () => {
+    expect(isCalendarDate("2026-02-28")).toBe(true);
+    expect(isCalendarDate("2024-02-29")).toBe(true); // 윤년
+    expect(isCalendarDate("2026-02-29")).toBe(false); // 평년
+    expect(isCalendarDate("2026-00-10")).toBe(false);
   });
 });

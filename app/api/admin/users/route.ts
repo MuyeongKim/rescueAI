@@ -1,15 +1,13 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireApiAdmin } from "@/lib/auth";
 import { DEMO } from "@/lib/demo";
 
 // 사용자 권한(role) 변경. 관리자 검증 후 service role로 수행.
 export async function POST(req: Request) {
   if (DEMO) return Response.json({ ok: true });
 
-  const { user, profile } = await getUserAndProfile();
-  if (!user || !isAdmin(profile)) {
-    return new Response("Forbidden", { status: 403 });
-  }
+  const auth = await requireApiAdmin();
+  if (!auth.ok) return auth.response;
 
   let body: { userId?: string; role?: string };
   try {
@@ -23,7 +21,7 @@ export async function POST(req: Request) {
     return new Response("userId와 role(admin|user)이 필요합니다.", { status: 400 });
   }
   // 자기 자신의 권한 강등 방지(관리자 0명 사고 차단)
-  if (userId === user.id) {
+  if (userId === auth.user.id) {
     return new Response("본인 권한은 변경할 수 없습니다.", { status: 400 });
   }
 

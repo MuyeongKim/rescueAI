@@ -19,13 +19,15 @@ import {
 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/client";
+import { safeRedirectPath } from "@/lib/safe-redirect";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 function LoginForm() {
   const searchParams = useSearchParams();
-  const redirect = searchParams.get("redirect") || "/home";
+  // 외부 URL·javascript: 스킴을 걸러 앱 내부 경로만 남긴다(오픈 리다이렉트 차단).
+  const redirect = safeRedirectPath(searchParams.get("redirect"));
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");

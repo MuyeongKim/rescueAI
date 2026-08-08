@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { getChatModel } from "@/lib/llm";
-import { createClient } from "@/lib/supabase/server";
+import { requireApiUser } from "@/lib/auth";
 import {
   AUDIENCES,
   DURATIONS,
@@ -45,14 +45,11 @@ export async function POST(req: Request) {
     } satisfies GeneratedDoc);
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return new Response("Unauthorized", { status: 401 });
+  const auth = await requireApiUser();
+  if (!auth.ok) return auth.response;
 
   // 문서 생성은 비용이 크므로 더 타이트하게 (분당 10회/사용자)
-  const rl = rateLimit(`generate:${user.id}`, 10, 60_000);
+  const rl = rateLimit(`generate:${auth.user.id}`, 10, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   const type = body.type;

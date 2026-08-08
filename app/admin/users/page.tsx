@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { Users } from "lucide-react";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireUserAndProfile, isAdmin } from "@/lib/auth";
 import { DEMO, demoUsers } from "@/lib/demo";
 import {
   Card,
@@ -44,7 +44,7 @@ async function loadUsers(): Promise<UserRow[]> {
 }
 
 export default async function AdminUsersPage() {
-  const { user, profile } = await getUserAndProfile();
+  const { user, profile } = await requireUserAndProfile();
   if (!isAdmin(profile)) redirect("/chat");
 
   const users = await loadUsers();

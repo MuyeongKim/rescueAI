@@ -1,4 +1,6 @@
 import { createClient } from "@/lib/supabase/server";
+import { requireApiUser } from "@/lib/auth";
+import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { DEMO } from "@/lib/demo";
 import type { GenType } from "@/lib/generate";
 
@@ -39,10 +41,11 @@ export async function POST(req: Request) {
   if (DEMO) return Response.json({ id: 0, demo: true });
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return new Response("Unauthorized", { status: 401 });
+  const auth = await requireApiUser(supabase);
+  if (!auth.ok) return auth.response;
+
+  const rl = rateLimit(`generate-save:${auth.user.id}`, 30, 60_000);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   const fields = {
     kind,
@@ -74,7 +77,7 @@ export async function POST(req: Request) {
 
   const { data, error } = await supabase
     .from("generated_materials")
-    .insert({ user_id: user.id, ...fields })
+    .insert({ user_id: auth.user.id, ...fields })
     .select("id")
     .single();
 
@@ -94,10 +97,11 @@ export async function DELETE(req: Request) {
   if (DEMO) return Response.json({ ok: true, demo: true });
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return new Response("Unauthorized", { status: 401 });
+  const auth = await requireApiUser(supabase);
+  if (!auth.ok) return auth.response;
+
+  const rl = rateLimit(`generate-del:${auth.user.id}`, 30, 60_000);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   const { error } = await supabase.from("generated_materials").delete().eq("id", id);
   if (error) {
@@ -122,19 +126,20 @@ export async function PATCH(req: Request) {
   if (DEMO) return Response.json({ ok: true, demo: true });
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return new Response("Unauthorized", { status: 401 });
+  const auth = await requireApiUser(supabase);
+  if (!auth.ok) return auth.response;
+
+  const rl = rateLimit(`generate-share:${auth.user.id}`, 30, 60_000);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   const patch: { shared: boolean; author_name?: string } = { shared: body.shared };
   if (body.shared) {
     const { data: prof } = await supabase
       .from("profiles")
       .select("full_name")
-      .eq("id", user.id)
+      .eq("id", auth.user.id)
       .maybeSingle();
-    patch.author_name = prof?.full_name ?? user.email?.split("@")[0] ?? "구조대원";
+    patch.author_name = prof?.full_name ?? auth.user.email?.split("@")[0] ?? "구조대원";
   }
 
   const { data, error } = await supabase

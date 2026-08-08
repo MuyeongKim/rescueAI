@@ -1,0 +1,45 @@
+import { describe, it, expect } from "vitest";
+import { buildSystemPrompt, NOT_FOUND_MESSAGE, MAX_SOURCES, DEFAULT_TOP_K } from "@/lib/rag";
+
+// 이 앱의 존재 이유에 가장 가까운 규칙 — "근거 없으면 지어내지 않는다".
+// 시스템 프롬프트는 lib/rag.ts 단일 출처이므로, 문구가 조용히 사라지면 여기서 잡힌다.
+describe("buildSystemPrompt (환각 가드레일)", () => {
+  it("검색된 참고 자료를 프롬프트에 그대로 싣는다", () => {
+    const context = "[공기호흡기 착용 절차 p.3]\n면체 밀착 확인 후 양압을 개방한다.";
+    const prompt = buildSystemPrompt(context);
+    expect(prompt).toContain(context);
+    expect(prompt).toContain("[참고 자료]");
+  });
+
+  it("근거 없음 표준 문구를 규칙에 명시한다", () => {
+    const prompt = buildSystemPrompt("자료 본문");
+    expect(prompt).toContain(NOT_FOUND_MESSAGE);
+  });
+
+  it("자료가 비면 '검색되지 않았음'을 알리고 빈 근거로 두지 않는다", () => {
+    for (const empty of ["", "   ", "\n\t "]) {
+      const prompt = buildSystemPrompt(empty);
+      expect(prompt).toContain("(관련 자료가 검색되지 않았습니다.)");
+      expect(prompt).toContain(NOT_FOUND_MESSAGE);
+    }
+  });
+
+  it("지어내기 금지·부분 답변·의학 판단 회피 규칙이 모두 살아 있다", () => {
+    const prompt = buildSystemPrompt("자료");
+    expect(prompt).toContain("지어내지 마세요");
+    expect(prompt).toContain("자료에서 확인되지 않음");
+    expect(prompt).toContain("119 의료지도");
+  });
+
+  it("표준 문구가 실수로 비워지지 않았다", () => {
+    expect(NOT_FOUND_MESSAGE.trim().length).toBeGreaterThan(10);
+    expect(NOT_FOUND_MESSAGE).toContain("확인되지 않습니다");
+  });
+});
+
+describe("검색 상수", () => {
+  it("출처 노출 개수는 검색 결과 수를 넘지 않는다", () => {
+    expect(MAX_SOURCES).toBeGreaterThan(0);
+    expect(MAX_SOURCES).toBeLessThanOrEqual(DEFAULT_TOP_K);
+  });
+});

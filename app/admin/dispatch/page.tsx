@@ -1,7 +1,7 @@
 import { redirect } from "next/navigation";
 import { BarChart3, FileSpreadsheet, Info, Lightbulb } from "lucide-react";
 
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireUserAndProfile, isAdmin } from "@/lib/auth";
 import {
   Card,
   CardContent,
@@ -63,7 +63,7 @@ function BarRow({ label, value, max }: { label: string; value: number; max: numb
 }
 
 export default async function AdminDispatchPage() {
-  const { profile } = await getUserAndProfile();
+  const { profile } = await requireUserAndProfile();
   if (!isAdmin(profile)) redirect("/chat");
 
   const maxType = Math.max(...BY_TYPE.map((d) => d.count));

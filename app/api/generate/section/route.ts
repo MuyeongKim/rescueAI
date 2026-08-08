@@ -1,6 +1,6 @@
 import { generateObject } from "ai";
 import { getChatModel } from "@/lib/llm";
-import { createClient } from "@/lib/supabase/server";
+import { requireApiUser } from "@/lib/auth";
 import {
   AUDIENCES,
   DURATIONS,
@@ -82,14 +82,11 @@ export async function POST(req: Request) {
     } satisfies GeneratedSection);
   }
 
-  const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return new Response("Unauthorized", { status: 401 });
+  const auth = await requireApiUser();
+  if (!auth.ok) return auth.response;
 
   // 부분 재생성 남용 방지 (분당 20회/사용자)
-  const rl = rateLimit(`generate-section:${user.id}`, 20, 60_000);
+  const rl = rateLimit(`generate-section:${auth.user.id}`, 20, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   const { contextText } = await fetchCategoryContext(category, 40, body.topic);

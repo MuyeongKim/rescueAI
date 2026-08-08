@@ -11,7 +11,7 @@ import {
   Target,
 } from "lucide-react";
 
-import { getUserAndProfile } from "@/lib/auth";
+import { requireUserAndProfile } from "@/lib/auth";
 import { FITNESS_MONTH_GOAL } from "@/lib/fitness";
 import { getFitnessState } from "@/lib/fitness-server";
 import { countMyMaterials } from "@/lib/generated-materials";
@@ -30,7 +30,7 @@ import { ProgressBar } from "@/components/learning/ProgressBar";
 export const dynamic = "force-dynamic";
 
 export default async function MePage() {
-  const { user, profile } = await getUserAndProfile();
+  const { user, profile } = await requireUserAndProfile();
   const userId = user?.id ?? "";
   const fitness = await getFitnessState(userId);
   const savedCount = await countMyMaterials();

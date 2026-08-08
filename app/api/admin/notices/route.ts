@@ -1,15 +1,13 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireApiAdmin } from "@/lib/auth";
 import { DEMO } from "@/lib/demo";
 
 // 공지 작성/삭제. 관리자 검증 후 service role로 수행(notices RLS는 읽기 전용).
 export async function POST(req: Request) {
   if (DEMO) return Response.json({ ok: true });
 
-  const { user, profile } = await getUserAndProfile();
-  if (!user || !isAdmin(profile)) {
-    return new Response("Forbidden", { status: 403 });
-  }
+  const auth = await requireApiAdmin();
+  if (!auth.ok) return auth.response;
 
   let body: { title?: string; content?: string; pinned?: boolean };
   try {
@@ -29,7 +27,7 @@ export async function POST(req: Request) {
     title,
     content,
     pinned: !!body.pinned,
-    created_by: user.id,
+    created_by: auth.user.id,
   });
   if (error) {
     console.error("[admin/notices] insert 실패:", error.message);
@@ -41,10 +39,8 @@ export async function POST(req: Request) {
 export async function DELETE(req: Request) {
   if (DEMO) return Response.json({ ok: true });
 
-  const { user, profile } = await getUserAndProfile();
-  if (!user || !isAdmin(profile)) {
-    return new Response("Forbidden", { status: 403 });
-  }
+  const auth = await requireApiAdmin();
+  if (!auth.ok) return auth.response;
 
   let body: { id?: number };
   try {

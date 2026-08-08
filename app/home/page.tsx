@@ -14,7 +14,7 @@ import {
   Wand2,
 } from "lucide-react";
 
-import { getUserAndProfile } from "@/lib/auth";
+import { requireUserAndProfile } from "@/lib/auth";
 import { FITNESS_MONTH_GOAL } from "@/lib/fitness";
 import { getFitnessState } from "@/lib/fitness-server";
 import { createClient } from "@/lib/supabase/server";
@@ -99,7 +99,7 @@ function SectionHeading({ title, href, action }: { title: string; href?: string;
 }
 
 export default async function HomePage() {
-  const { user, profile } = await getUserAndProfile();
+  const { user, profile } = await requireUserAndProfile();
   const userId = user?.id ?? "";
   const name = profile?.full_name || user?.email?.split("@")[0] || "구조대원";
   const greeting = name.endsWith("대원") ? `${name}님` : `${name} 대원님`;

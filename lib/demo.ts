@@ -5,7 +5,8 @@ import { kstDateStr } from "@/lib/kst";
 import type { DocSource } from "@/lib/database.types";
 import type { GeneratedDoc, GeneratedSlideDeck } from "@/lib/generate";
 
-export const DEMO = process.env.NEXT_PUBLIC_DEMO_MODE === "1";
+// 플래그는 lib/demo-flag.ts 단일 출처 — 미들웨어(edge)가 목 데이터까지 끌고 가지 않도록 분리.
+export { DEMO, DEMO_IGNORED } from "@/lib/demo-flag";
 
 export const demoUser = { id: "demo-user", email: "demo@jbfire.go.kr" };
 export const demoProfile = {

@@ -19,12 +19,50 @@ export const DAILY_POINT_CAP = 120;
 export const MAX_DURATION_MIN = 360;
 /** 월간 체력 목표(마일리지) — 홈·마이페이지 목표 게이지 공용 */
 export const FITNESS_MONTH_GOAL = 300;
+/**
+ * 소급 입력 허용 일수. 일일 상한(DAILY_POINT_CAP)은 "날짜별"로 계산되므로 하한이 없으면
+ * 과거 날짜를 흩뿌려 사실상 무제한 적립이 된다 → 리더보드·월간 집계가 무너진다.
+ */
+export const BACKDATE_MAX_DAYS = 14;
 
 /** 오늘 이미 적립한 점수를 반영해 이번 기록의 적립 마일리지를 계산한다. */
 export function calcPoints(durationMin: number, todayAwarded: number): number {
   if (!Number.isFinite(durationMin) || durationMin < 1) return 0;
   const remaining = Math.max(0, DAILY_POINT_CAP - todayAwarded);
   return Math.min(Math.floor(durationMin), remaining);
+}
+
+const DAY_MS = 86_400_000;
+
+/**
+ * "YYYY-MM-DD" 가 실제 달력 날짜인지 확인한다.
+ * 정규식만 쓰면 "2026-13-45" 가 통과해 DB 까지 내려가 500 이 난다.
+ */
+export function isCalendarDate(value: string): boolean {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+  const d = new Date(`${value}T00:00:00Z`);
+  return !Number.isNaN(d.getTime()) && d.toISOString().slice(0, 10) === value;
+}
+
+export type PerformedOnCheck =
+  | { ok: true }
+  | { ok: false; reason: "format" | "future" | "too-old" };
+
+/**
+ * 기록 날짜 검증 — 실제 날짜 + 미래 불가 + 과거 BACKDATE_MAX_DAYS 이내.
+ * today 는 KST 기준 "YYYY-MM-DD"(lib/kst.kstDateStr) 를 넘긴다.
+ */
+export function checkPerformedOn(value: string, today: string): PerformedOnCheck {
+  if (!isCalendarDate(value) || !isCalendarDate(today)) {
+    return { ok: false, reason: "format" };
+  }
+  if (value > today) return { ok: false, reason: "future" };
+
+  const diffDays = Math.round(
+    (Date.parse(`${today}T00:00:00Z`) - Date.parse(`${value}T00:00:00Z`)) / DAY_MS
+  );
+  if (diffDays > BACKDATE_MAX_DAYS) return { ok: false, reason: "too-old" };
+  return { ok: true };
 }
 
 export type WorkoutLog = {

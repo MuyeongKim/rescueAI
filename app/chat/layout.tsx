@@ -1,12 +1,12 @@
 import { AppSidebar } from "@/components/layout/AppSidebar";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireUserAndProfile, isAdmin } from "@/lib/auth";
 
 export default async function ChatLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { user, profile } = await getUserAndProfile();
+  const { user, profile } = await requireUserAndProfile();
 
   return (
     <div className="flex h-screen">

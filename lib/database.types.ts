@@ -341,6 +341,24 @@ export interface Database {
         Args: { days?: number; min_count?: number; max_rows?: number };
         Returns: { question: string; cnt: number }[];
       };
+      // 관리자 대시보드 집계(service role 전용) — jsonb 한 덩어리로 반환.
+      // 필드 구성은 app/admin/page.tsx 의 AdminStats 와 1:1.
+      admin_dashboard_stats: {
+        Args: { p_days?: number; p_faq_limit?: number };
+        Returns: {
+          totalUsers: number;
+          totalQuestions: number;
+          avgLatencyMs: number;
+          up: number;
+          down: number;
+          categories: { category: string; count: number }[];
+          daily: { date: string; count: number }[];
+          faq: { q: string; count: number }[];
+          fitnessActiveUsers: number;
+          fitnessMonthPoints: number;
+          fitnessTotalLogs: number;
+        };
+      };
     };
     Enums: Record<string, never>;
     CompositeTypes: Record<string, never>;

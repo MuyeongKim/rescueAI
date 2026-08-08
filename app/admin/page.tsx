@@ -11,10 +11,8 @@ import {
 } from "lucide-react";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
-import { kstDateStr, kstMonthStartStr } from "@/lib/kst";
+import { requireUserAndProfile, isAdmin } from "@/lib/auth";
 import { DEMO, getDemoAdminStats } from "@/lib/demo";
-import type { DocSource } from "@/lib/database.types";
 import {
   Card,
   CardContent,
@@ -39,134 +37,61 @@ import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
-const DAY_MS = 86_400_000;
+// 관리자 대시보드 통계 타입 — admin_dashboard_stats RPC 반환 jsonb 와 1:1.
+type AdminStats = {
+  totalUsers: number;
+  totalQuestions: number;
+  avgLatencyMs: number;
+  up: number;
+  down: number;
+  categories: { category: string; count: number }[];
+  daily: { date: string; count: number }[];
+  faq: { q: string; count: number }[];
+  fitnessActiveUsers: number;
+  fitnessMonthPoints: number;
+  fitnessTotalLogs: number;
+};
+
+const EMPTY_STATS: AdminStats = {
+  totalUsers: 0,
+  totalQuestions: 0,
+  avgLatencyMs: 0,
+  up: 0,
+  down: 0,
+  categories: [],
+  daily: [],
+  faq: [],
+  fitnessActiveUsers: 0,
+  fitnessMonthPoints: 0,
+  fitnessTotalLogs: 0,
+};
 
 // 실데이터 집계 (service-role). DEMO 모드에서는 호출되지 않는다.
-async function loadAdminStats() {
+// 집계는 admin_dashboard_stats RPC 가 Postgres 안에서 수행한다 — 예전처럼 messages 수천 행을
+// 앱으로 끌어와 접지 않는다(행 상한 때문에 수치가 부정확해지는 문제도 함께 해결).
+async function loadAdminStats(): Promise<AdminStats> {
   const admin = createAdminClient();
-  const since30 = new Date(Date.now() - 30 * DAY_MS).toISOString();
+  const { data, error } = await admin.rpc("admin_dashboard_stats", {
+    p_days: 30,
+    p_faq_limit: 20,
+  });
 
-  const [usersRes, questionsRes, assistantRes, userMsgsRes, dailyRes, docsRes] =
-    await Promise.all([
-      admin.from("profiles").select("id", { count: "exact", head: true }),
-      admin
-        .from("messages")
-        .select("id", { count: "exact", head: true })
-        .eq("role", "user"),
-      admin
-        .from("messages")
-        .select("latency_ms, feedback, sources")
-        .eq("role", "assistant")
-        .order("created_at", { ascending: false })
-        .limit(5000),
-      admin
-        .from("messages")
-        .select("content")
-        .eq("role", "user")
-        .order("created_at", { ascending: false })
-        .limit(2000),
-      admin
-        .from("messages")
-        .select("created_at")
-        .eq("role", "user")
-        .gte("created_at", since30)
-        .limit(20000),
-      admin.from("documents").select("id, category"),
-    ]);
-
-  const monthStartStr = kstMonthStartStr();
-  const [fitnessMonthRes, fitnessCountRes] = await Promise.all([
-    admin
-      .from("workout_logs")
-      .select("user_id, points")
-      .gte("performed_on", monthStartStr)
-      .limit(20000),
-    admin.from("workout_logs").select("id", { count: "exact", head: true }),
-  ]);
-  const fitnessMonth = fitnessMonthRes.data ?? [];
-  const fitnessActiveUsers = new Set(
-    fitnessMonth.map((w) => w.user_id).filter(Boolean)
-  ).size;
-  const fitnessMonthPoints = fitnessMonth.reduce((s, w) => s + (w.points ?? 0), 0);
-  const fitnessTotalLogs = fitnessCountRes.count ?? 0;
-
-  const totalUsers = usersRes.count ?? 0;
-  const totalQuestions = questionsRes.count ?? 0;
-
-  const assistant = assistantRes.data ?? [];
-  const latencies = assistant
-    .map((a) => a.latency_ms)
-    .filter((x): x is number => typeof x === "number");
-  const avgLatencyMs = latencies.length
-    ? Math.round(latencies.reduce((s, x) => s + x, 0) / latencies.length)
-    : 0;
-  const up = assistant.filter((a) => a.feedback === 1).length;
-  const down = assistant.filter((a) => a.feedback === -1).length;
-  const satisfaction = up + down > 0 ? Math.round((up / (up + down)) * 100) : null;
-
-  const catOf = new Map<number, string>();
-  for (const d of docsRes.data ?? []) if (d.category) catOf.set(d.id, d.category);
-  const catCount = new Map<string, number>();
-  for (const a of assistant) {
-    const sources = (a.sources ?? []) as DocSource[];
-    for (const s of sources) {
-      const cat = catOf.get(s.document_id);
-      if (cat) catCount.set(cat, (catCount.get(cat) ?? 0) + 1);
-    }
+  if (error || !data) {
+    console.error("[admin] 통계 집계 실패:", error?.message);
+    return EMPTY_STATS;
   }
-  const categories = Array.from(catCount.entries())
-    .map(([category, count]) => ({ category, count }))
-    .sort((a, b) => b.count - a.count);
-
-  const dayCount = new Map<string, number>();
-  // 일별 집계는 KST 날짜로 버킷팅(버킷 키·라벨 모두 KST 로 일치시킴)
-  for (const r of dailyRes.data ?? []) {
-    if (!r.created_at) continue;
-    const day = kstDateStr(new Date(r.created_at));
-    dayCount.set(day, (dayCount.get(day) ?? 0) + 1);
-  }
-  const daily: { date: string; count: number }[] = [];
-  for (let i = 29; i >= 0; i--) {
-    const d = kstDateStr(new Date(Date.now() - i * DAY_MS));
-    daily.push({ date: d, count: dayCount.get(d) ?? 0 });
-  }
-
-  const faqMap = new Map<string, number>();
-  for (const r of userMsgsRes.data ?? []) {
-    const q = (r.content ?? "").trim();
-    if (q) faqMap.set(q, (faqMap.get(q) ?? 0) + 1);
-  }
-  const faq = Array.from(faqMap.entries())
-    .map(([q, count]) => ({ q, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 20);
-
-  return {
-    totalUsers,
-    totalQuestions,
-    avgLatencyMs,
-    satisfaction,
-    up,
-    down,
-    categories,
-    daily,
-    faq,
-    fitnessActiveUsers,
-    fitnessMonthPoints,
-    fitnessTotalLogs,
-  };
+  return { ...EMPTY_STATS, ...(data as unknown as AdminStats) };
 }
 
 export default async function AdminPage() {
   // 레이아웃에서 이미 막지만 한 번 더 검증
-  const { profile } = await getUserAndProfile();
+  const { profile } = await requireUserAndProfile();
   if (!isAdmin(profile)) redirect("/chat");
 
   const {
     totalUsers,
     totalQuestions,
     avgLatencyMs,
-    satisfaction,
     up,
     down,
     categories,
@@ -176,6 +101,7 @@ export default async function AdminPage() {
     fitnessMonthPoints,
     fitnessTotalLogs,
   } = DEMO ? getDemoAdminStats() : await loadAdminStats();
+  const satisfaction = up + down > 0 ? Math.round((up / (up + down)) * 100) : null;
 
   return (
     <div className="mx-auto max-w-5xl space-y-5 px-3 py-5 sm:px-4">

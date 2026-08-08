@@ -7,6 +7,8 @@ import {
   type Message,
 } from "ai";
 import { createClient } from "@/lib/supabase/server";
+import { requireApiUser } from "@/lib/auth";
+import { trimChatHistory } from "@/lib/chat-history";
 import { searchContext, buildSystemPrompt, NOT_FOUND_MESSAGE } from "@/lib/rag";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { DEMO, demoChatAnswer, demoChatSources } from "@/lib/demo";
@@ -35,10 +37,9 @@ export async function POST(req: Request) {
   }
 
   const supabase = await createClient();
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return new Response("Unauthorized", { status: 401 });
+  const auth = await requireApiUser(supabase);
+  if (!auth.ok) return auth.response;
+  const user = auth.user;
 
   // LLM 호출 남용 방지 (분당 30회/사용자)
   const rl = rateLimit(`chat:${user.id}`, 30, 60_000);
@@ -56,11 +57,9 @@ export async function POST(req: Request) {
     return new Response("Bad Request", { status: 400 });
   }
 
-  // 클라이언트가 주입한 system/tool 메시지 제거 — 환각 가드레일(§9.2)은 서버(buildSystemPrompt)가
-  // 단독으로 넣는다. user/assistant 만 남겨 클라이언트가 시스템 지시를 덮어쓰지 못하게 한다.
-  const messages: Message[] = (body.messages ?? []).filter(
-    (m) => m.role === "user" || m.role === "assistant"
-  );
+  // 클라이언트가 주입한 system/tool 메시지 제거 + 개수·길이 상한 (lib/chat-history.ts).
+  // 환각 가드레일(§9.2)은 서버(buildSystemPrompt)가 단독으로 넣는다.
+  const messages: Message[] = trimChatHistory<Message>(body.messages);
   const category: string | null = body.category ?? null;
   const modelKey: string | undefined = body.model || undefined;
 

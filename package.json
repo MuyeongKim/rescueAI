@@ -7,6 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "next lint",
+    "typecheck": "tsc --noEmit",
+    "sql:setup": "node scripts/build-setup-sql.mjs",
     "copy:pdf-worker": "node scripts/copy-pdf-worker.mjs",
     "postinstall": "node scripts/copy-pdf-worker.mjs",
     "test": "vitest run"

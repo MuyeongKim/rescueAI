@@ -1,5 +1,5 @@
 import { createAdminClient } from "@/lib/supabase/admin";
-import { getUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireApiAdmin } from "@/lib/auth";
 import { summarizeArticle } from "@/lib/news-ai";
 import { DEMO } from "@/lib/demo";
 
@@ -9,16 +9,11 @@ import { DEMO } from "@/lib/demo";
 //  POST {action:"update", id, ...필드}       → 수정
 //  POST {action:"toggle", id, field, value} → pinned/hidden 토글
 //  DELETE {id}                              → 삭제
-async function guard() {
-  const { user, profile } = await getUserAndProfile();
-  if (!user || !isAdmin(profile)) return null;
-  return user;
-}
-
 export async function POST(req: Request) {
   if (DEMO) return Response.json({ ok: true });
-  const user = await guard();
-  if (!user) return new Response("Forbidden", { status: 403 });
+  const auth = await requireApiAdmin();
+  if (!auth.ok) return auth.response;
+  const user = auth.user;
 
   let body: Record<string, unknown>;
   try {
@@ -95,8 +90,8 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   if (DEMO) return Response.json({ ok: true });
-  const user = await guard();
-  if (!user) return new Response("Forbidden", { status: 403 });
+  const auth = await requireApiAdmin();
+  if (!auth.ok) return auth.response;
 
   let body: { id?: number };
   try {

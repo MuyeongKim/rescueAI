@@ -2,15 +2,20 @@ import { createClient } from "@/lib/supabase/server";
 import { DEMO } from "@/lib/demo";
 import {
   ACTIVITIES,
+  BACKDATE_MAX_DAYS,
   MAX_DURATION_MIN,
   calcPoints,
+  checkPerformedOn,
 } from "@/lib/fitness";
 import { kstDateStr } from "@/lib/kst";
+import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
 // 오늘(KST) — 서버 TZ(UTC)와 무관하게 한국 날짜 기준으로 소급/상한을 판정한다.
 function today(): string {
   return kstDateStr();
 }
+
+const NOTE_MAX = 100;
 
 // 운동 기록 등록. 마일리지는 서버에서 계산(일일 상한 반영). RLS로 본인 기록만.
 export async function POST(req: Request) {
@@ -29,10 +34,19 @@ export async function POST(req: Request) {
   if (!Number.isInteger(durationMin) || durationMin < 1 || durationMin > MAX_DURATION_MIN) {
     return new Response(`운동 시간은 1~${MAX_DURATION_MIN}분이어야 합니다.`, { status: 400 });
   }
-  // 기록 날짜: 오늘 또는 과거 14일 이내만 허용(소급 입력 제한)
+
+  // 기록 날짜: 실제 달력 날짜 + 미래 불가 + 과거 BACKDATE_MAX_DAYS 이내(소급 입력 제한).
+  // 일일 상한은 날짜별로 계산되므로 하한이 없으면 과거 날짜를 흩뿌려 무제한 적립이 가능하다.
   const performedOn = body.performedOn || today();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(performedOn) || performedOn > today()) {
-    return new Response("기록 날짜가 올바르지 않습니다.", { status: 400 });
+  const dateCheck = checkPerformedOn(performedOn, today());
+  if (!dateCheck.ok) {
+    const message =
+      dateCheck.reason === "future"
+        ? "미래 날짜로는 기록할 수 없습니다."
+        : dateCheck.reason === "too-old"
+          ? `최근 ${BACKDATE_MAX_DAYS}일 이내 날짜만 기록할 수 있습니다.`
+          : "기록 날짜가 올바르지 않습니다.";
+    return new Response(message, { status: 400 });
   }
 
   if (DEMO) {
@@ -44,6 +58,10 @@ export async function POST(req: Request) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
+
+  // 기록 폭주 방지 (분당 20회/사용자)
+  const rl = rateLimit(`fitness:${user.id}`, 20, 60_000);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   // 해당 날짜에 이미 적립한 마일리지 합계 → 상한 반영
   const { data: dayLogs, error: dayErr } = await supabase
@@ -62,7 +80,7 @@ export async function POST(req: Request) {
     user_id: user.id,
     activity,
     duration_min: durationMin,
-    note: body.note?.trim() || null,
+    note: body.note?.trim().slice(0, NOTE_MAX) || null,
     points,
     performed_on: performedOn,
   });
@@ -93,6 +111,9 @@ export async function DELETE(req: Request) {
     data: { user },
   } = await supabase.auth.getUser();
   if (!user) return new Response("Unauthorized", { status: 401 });
+
+  const rl = rateLimit(`fitness-del:${user.id}`, 30, 60_000);
+  if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
   const { error } = await supabase
     .from("workout_logs")
