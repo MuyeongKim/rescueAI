@@ -181,9 +181,14 @@ export function GenerateForm({
         return;
       }
       const json = await res.json();
+      const retrievalDegraded = res.headers.get("X-RAG-Degraded") === "1";
       if (kind === "section") patchSection(index, json as GeneratedSection);
       else patchSlide(index, json as GeneratedSlide);
-      toast.success("다시 생성했습니다");
+      toast.success("다시 생성했습니다", {
+        description: retrievalDegraded
+          ? "자료 검색 일부 기능이 제한되어 회수 근거를 한 번 더 확인해 주세요."
+          : undefined,
+      });
       setRegenIdx(null);
       setRegenText("");
     } catch {

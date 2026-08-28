@@ -49,6 +49,8 @@ indexing/.venv/
 .venv/
 __pycache__/
 .pytest_cache/
+.rag-migration/
+supabase/.temp/
 
 # pdf.js 워커 (postinstall 로 재생성)
 public/pdf.worker.min.mjs

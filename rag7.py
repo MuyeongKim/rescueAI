@@ -1073,6 +1073,10 @@ if EMBEDDING_PROVIDER == "google":
         model=EMBEDDING_MODEL_NAME,
         api_key=os.getenv("GOOGLE_GENERATIVE_AI_API_KEY", ""),
         output_dim=EMBEDDING_DIMENSIONS,
+        batch_size=_env_int("GOOGLE_EMBED_BATCH_SIZE", 32, minimum=1, maximum=100),
+        timeout=_env_int(
+            "GOOGLE_EMBED_TIMEOUT_SECONDS", 60, minimum=10, maximum=300
+        ),
     )
 elif EMBEDDING_PROVIDER == "ollama":
     EMBEDDING_MODEL_NAME = OLLAMA_MODEL
@@ -1491,6 +1495,49 @@ def cleanup_staged_ingestion(ingestion_id):
     )
 
 
+def validate_staged_ingestion(
+    ingestion_id,
+    category_name,
+    year_name,
+    source_name,
+    expected_count,
+):
+    """릴리스 전환 전 비활성 스테이징 행의 개수와 계약 메타데이터를 확인한다."""
+    contract_metadata = {
+        "embedding_provider": EMBEDDING_PROVIDER,
+        "embedding_model": EMBEDDING_MODEL_NAME,
+        "embedding_dimensions": EMBEDDING_DIMENSIONS,
+        "embedding_version": EMBEDDING_VERSION,
+        "edu_category": category_name,
+        "year": year_name,
+        "source": source_name,
+    }
+
+    total_result = (
+        supabase.table(TABLE_NAME)
+        .select("id", count="exact", head=True)
+        .eq("ingestion_id", str(ingestion_id))
+        .execute()
+    )
+    inactive_result = (
+        supabase.table(TABLE_NAME)
+        .select("id", count="exact", head=True)
+        .eq("ingestion_id", str(ingestion_id))
+        .eq("is_active", False)
+        .contains("metadata", contract_metadata)
+        .execute()
+    )
+    total_count = int(getattr(total_result, "count", 0) or 0)
+    inactive_count = int(getattr(inactive_result, "count", 0) or 0)
+    if total_count != expected_count or inactive_count != expected_count:
+        raise RuntimeError(
+            "스테이징 검증 불일치: "
+            f"기대 {expected_count}개 / 전체 {total_count}개 / "
+            f"비활성·계약일치 {inactive_count}개"
+        )
+    return inactive_count
+
+
 def activate_ingestion(
     ingestion_id,
     category_name,
@@ -1627,8 +1674,19 @@ def run_ingestion_pipeline(
     status_cb=None,
     log_cb=None,
     preview_cb=None,
+    *,
+    stage_only=False,
+    source_name_override=None,
+    document_id_override=None,
+    file_hash_expected=None,
+    ingestion_id_override=None,
 ):
-    """품질 확인 후 자료실 연결, 스테이징 적재와 원자적 활성화를 수행한다."""
+    """품질 확인 후 자료실 연결, 스테이징 적재와 원자적 활성화를 수행한다.
+
+    ``stage_only``는 임베딩 제공자 전체 전환용이다. 기존 활성 코퍼스와 DB 계약은
+    건드리지 않고 신규 행만 ``is_active=false``로 저장하며, 별도의 코퍼스 릴리스
+    RPC가 모든 문서를 검증한 뒤 한 트랜잭션에서 전환한다.
+    """
 
     def set_progress(value):
         value = max(0.0, min(100.0, float(value)))
@@ -1647,8 +1705,18 @@ def run_ingestion_pipeline(
 
     pipeline_start = time.perf_counter()
     set_progress(0)
-    source_name = Path(pdf_file).name
-    ingestion_id = uuid.uuid4()
+    source_name = str(source_name_override or Path(pdf_file).name).strip()
+    if not source_name:
+        raise ValueError("원본 파일명(source_name)이 필요합니다.")
+    ingestion_id = (
+        uuid.UUID(str(ingestion_id_override))
+        if ingestion_id_override is not None
+        else uuid.uuid4()
+    )
+    if stage_only and register_source:
+        raise ValueError("stage_only에서는 기존 자료실 연결을 보존하도록 register_source=False가 필요합니다.")
+    if stage_only and should_delete:
+        raise ValueError("stage_only에서는 기존 코퍼스를 삭제하지 않도록 should_delete=False가 필요합니다.")
     staged_count = 0
     source_link = None
 
@@ -1711,6 +1779,11 @@ def run_ingestion_pipeline(
         final_docs = []
         upload_date = datetime.now().strftime("%Y-%m-%d")
         file_hash = file_sha256(prepared.original_path)
+        if file_hash_expected is not None and file_hash != str(file_hash_expected).strip().lower():
+            raise RuntimeError(
+                "원본 SHA-256이 백업 manifest와 다릅니다: "
+                f"기대 {file_hash_expected}, 실제 {file_hash}"
+            )
         total_md = len(md_docs)
         progress_interval = max(1, total_md // 40) if total_md else 1
         chunk_index = 0
@@ -1801,13 +1874,20 @@ def run_ingestion_pipeline(
             }
 
         try:
-            set_status("임베딩 계약 확인 중...")
-            ensure_embedding_contract()
-            log(
-                "✅ DB 임베딩 계약 확인: "
-                f"{EMBEDDING_PROVIDER}/{EMBEDDING_MODEL_NAME}/"
-                f"{EMBEDDING_DIMENSIONS}d/{EMBEDDING_VERSION}"
-            )
+            if stage_only:
+                set_status("전체 전환용 비활성 스테이징 준비 중...")
+                log(
+                    "ℹ️ 전체 코퍼스 전환 모드: 기존 DB 계약과 활성 행은 유지하고 "
+                    "Gemini 행을 비활성 상태로만 적재합니다."
+                )
+            else:
+                set_status("임베딩 계약 확인 중...")
+                ensure_embedding_contract()
+                log(
+                    "✅ DB 임베딩 계약 확인: "
+                    f"{EMBEDDING_PROVIDER}/{EMBEDDING_MODEL_NAME}/"
+                    f"{EMBEDDING_DIMENSIONS}d/{EMBEDDING_VERSION}"
+                )
             set_progress(52)
 
             set_status("자료실 원본 연결 중...")
@@ -1822,7 +1902,11 @@ def run_ingestion_pipeline(
             else:
                 if register_source:
                     log("ℹ️ 이 파일 형식은 열람용 PDF가 없어 기존 자료실 연결만 확인합니다.")
-                document_id = find_linked_document_id(source_name, category_name)
+                document_id = (
+                    int(document_id_override)
+                    if document_id_override is not None
+                    else find_linked_document_id(source_name, category_name)
+                )
 
             if document_id is not None:
                 for doc in final_docs:
@@ -1871,17 +1955,27 @@ def run_ingestion_pipeline(
                     f"{staged_count}/{len(final_docs)} 청크)"
                 )
 
-            set_status("스테이징 검증 및 활성화 중...")
-            activated_count = activate_ingestion(
-                ingestion_id=ingestion_id,
-                category_name=category_name,
-                year_name=year_name,
-                source_name=source_name,
-                expected_count=len(final_docs),
-                replace_existing=should_delete,
-            )
-            if activated_count != len(final_docs):
-                raise RuntimeError("활성화 청크 수가 생성 청크 수와 다릅니다.")
+            if stage_only:
+                set_status("비활성 스테이징 검증 중...")
+                validate_staged_ingestion(
+                    ingestion_id=ingestion_id,
+                    category_name=category_name,
+                    year_name=year_name,
+                    source_name=source_name,
+                    expected_count=len(final_docs),
+                )
+            else:
+                set_status("스테이징 검증 및 활성화 중...")
+                activated_count = activate_ingestion(
+                    ingestion_id=ingestion_id,
+                    category_name=category_name,
+                    year_name=year_name,
+                    source_name=source_name,
+                    expected_count=len(final_docs),
+                    replace_existing=should_delete,
+                )
+                if activated_count != len(final_docs):
+                    raise RuntimeError("활성화 청크 수가 생성 청크 수와 다릅니다.")
         except Exception:
             if staged_count > 0:
                 try:
@@ -1904,8 +1998,12 @@ def run_ingestion_pipeline(
         upload_elapsed = time.perf_counter() - upload_start
 
     total_elapsed = time.perf_counter() - pipeline_start
-    log(f"✅ 검증/활성화 완료: ingestion_id={ingestion_id}")
-    log(f"⏱️ 임베딩·업로드·활성화 소요: {upload_elapsed:.2f}초")
+    if stage_only:
+        log(f"✅ 비활성 스테이징 완료: ingestion_id={ingestion_id}")
+        log(f"⏱️ 임베딩·업로드·검증 소요: {upload_elapsed:.2f}초")
+    else:
+        log(f"✅ 검증/활성화 완료: ingestion_id={ingestion_id}")
+        log(f"⏱️ 임베딩·업로드·활성화 소요: {upload_elapsed:.2f}초")
     log(f"⏱️ 전체 파이프라인 소요: {total_elapsed:.2f}초")
     set_progress(100)
     set_status("완료")
@@ -1917,6 +2015,7 @@ def run_ingestion_pipeline(
         "total_seconds": total_elapsed,
         "ingestion_id": str(ingestion_id),
         "document_id": source_link.document_id if source_link else document_id,
+        "stage_only": bool(stage_only),
         "preview": preview,
     }
 

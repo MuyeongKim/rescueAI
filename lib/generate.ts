@@ -487,11 +487,21 @@ function inspectSectionContract(
 
 function bracketedMinutes(text: string): number[] {
   const values: number[] = [];
-  const pattern = /\[[^\]\n]*?(\d+)\s*(분|시간)[^\]\n]*?\]/g;
+  // 출처 라벨의 수치가 아니라 [시간: 10분], [실습 · 15분 / 반복]처럼
+  // 명시적인 단계 시간 표지만 합산한다.
+  const pattern = /\[([^\]\n]+)\]/g;
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(text)) !== null) {
-    const value = Number(match[1]);
-    if (Number.isFinite(value) && value > 0) values.push(match[2] === "시간" ? value * 60 : value);
+    const body = match[1].trim();
+    if (/(?:p\.\s*\d+|출처|제한\s*시간)/i.test(body)) continue;
+    const time = body.match(
+      /(?:^시간\s*[:：]\s*|^[^\[\]\n]{1,50}?\s*[·•∙]\s*)(\d+)\s*(분|시간)(?=\s*(?:$|[\/|,;·•∙-]))/
+    );
+    if (!time) continue;
+    const value = Number(time[1]);
+    if (Number.isFinite(value) && value > 0) {
+      values.push(time[2] === "시간" ? value * 60 : value);
+    }
   }
   return values;
 }

@@ -265,6 +265,24 @@ describe("결정론적 생성 품질 검사", () => {
     expect(inspectGeneratedPlan(validPlan(), "1시간")).toEqual({ ok: true, issues: [] });
   });
 
+  it("출처 제목의 제한시간은 훈련 단계 시간 합계에 포함하지 않는다", () => {
+    const plan = validPlan();
+    plan.sections[1].content +=
+      " [화학사고 대응능력 교재 — A급 착용 (제한시간 5분) p.260] [교재 — 제한시간 5분] [교재: 5분] [출처 · 5분]";
+
+    expect(inspectGeneratedPlan(plan, "1시간")).toEqual({ ok: true, issues: [] });
+  });
+
+  it("단계 시간 뒤 반복 안내가 있어도 유효한 시간 표지로 계산한다", () => {
+    const plan = validPlan();
+    plan.sections[1].content = plan.sections[1].content.replace(
+      "[종합수행 · 15분]",
+      "[교재 활용 · 15분 / 반복]"
+    );
+
+    expect(inspectGeneratedPlan(plan, "1시간")).toEqual({ ok: true, issues: [] });
+  });
+
   it("계획서의 누락·얇은 내용·시간·안전·평가 문제를 모두 보고한다", () => {
     const plan = validPlan();
     plan.sections = [

@@ -51,8 +51,9 @@ cp .env.local.example .env.local
 # .env.local 을 열어 값 채우기 (주석 참고)
 ```
 필수: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`,
-`SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`,
-`EMBEDDING_PROVIDER=openai`, `NEXT_PUBLIC_SITE_URL`.
+`SUPABASE_SERVICE_ROLE_KEY`, 선택한 LLM API 키, `EMBEDDING_PROVIDER`, 선택한 임베딩 API 키,
+`NEXT_PUBLIC_SITE_URL`. 기본 Gemini 구성은 `EMBEDDING_PROVIDER=google`과
+`GOOGLE_GENERATIVE_AI_API_KEY`를 사용합니다.
 
 ## 7. 사용자 / 관리자 계정 만들기
 1. Authentication → Users → **Add user** (이메일로 초대) 또는 본인 이메일로 로그인 1회
@@ -63,19 +64,26 @@ cp .env.local.example .env.local
    ```
 
 ## 8. 자료 인덱싱 (RAG 두뇌 채우기)
-실제 PDF를 `docs/` 에 넣고 인덱서를 돌립니다. (자세한 내용 `indexing/README.md`)
+운영 `RAG_TABLE=rag_rescue` 코퍼스에는 Gemini 임베딩 계약을 기록·검증하는 루트
+`rag7.py` GUI 인덱서를 사용합니다. (자세한 내용 `indexing/README.md`)
 ```bash
-# 예: docs/산악/로프구조.pdf 처럼 카테고리 폴더에 배치
 cd indexing
-pip install -r requirements.txt
-python embed_and_upload.py
+python -m venv .venv && source .venv/bin/activate   # 선택
+pip install -r requirements-rag7.txt
+cd ..
+python rag7.py
 ```
-> 웹앱과 인덱서는 **같은 임베딩 설정(EMBEDDING_PROVIDER/모델/1024차원)** 을 써야 합니다.
+> 웹앱과 인덱서는 **같은 임베딩 계약(제공자/모델/1024차원/버전)** 을 써야 합니다.
+> 기본 계약은 `google / gemini-embedding-001 / 1024 / google-retrieval-v1`입니다.
 
-외부 `RAG_TABLE=rag_rescue`와 루트 `rag7.py`를 사용할 때는
 `20260726100515_secure_versioned_rag_ingestion.sql` 마이그레이션을 먼저 적용하고,
-`indexing/requirements-rag7.txt` 의존성을 설치하세요. 기존 계약 없는 `rag_rescue`
-데이터는 백업 후 비우고 같은 제공자/모델로 전체 재인덱싱해야 합니다.
+기존 계약 없는 `rag_rescue` 데이터는 백업 후 비우고 같은 계약으로 전체 재인덱싱해야 합니다.
+`indexing/embed_and_upload.py`는 별도 `documents`/`chunks` 스키마를 위한 레거시
+OpenAI/BGE 배치 경로이며 Google/Gemini 임베딩을 지원하지 않습니다. `rag_rescue` 또는
+Gemini 코퍼스 인덱싱에 사용하지 마세요.
+이미 운영 중인 코퍼스의 임베딩 제공자를 바꿀 때는
+`20260828032304_add_rag_corpus_release_switch.sql`을 적용하고
+`indexing/migrate_rag_to_gemini.py`로 백업 → 비활성 스테이징 → 전체 원자 전환을 수행합니다.
 
 HWPX/HWP 자동 변환에는 LibreOffice가 필요합니다. 스캔 PDF의 한국어 OCR 모델은
 외부망에서 아래처럼 미리 받아 내부망으로 함께 반입하고, 내부망 환경변수에는
@@ -172,7 +180,9 @@ npx tsc --noEmit   # 타입만 체크
 
 ## 트러블슈팅
 - **답변이 안 나옴**: `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` 확인. 콘솔 로그 `[chat]` 참고.
-- **출처가 비어 있음**: 자료 인덱싱이 안 됐거나 임베딩 설정 불일치. `chunks` 테이블 행 수 확인.
+- **출처가 비어 있음**: 자료 인덱싱이 안 됐거나 임베딩 계약 불일치. 운영 경로는
+  `rag_rescue`의 활성 행과 `rag_embedding_config` 계약을 확인하세요. 레거시 경로만
+  `chunks` 테이블 행 수를 확인합니다.
 - **로그인 링크 클릭 후 오류**: Supabase Redirect URLs 에 `/auth/callback` 등록 여부 확인.
 - **PDF가 안 열림**: 비공개 `documents` 버킷 존재 여부와 `documents.file_url` 경로,
   `SUPABASE_SERVICE_ROLE_KEY` 설정을 확인.

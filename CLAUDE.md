@@ -16,8 +16,9 @@
 - **Anthropic Claude** (`ANTHROPIC_MODEL`, 기본 `claude-sonnet-4-5`)
 - **Supabase** (PostgreSQL + pgvector + Auth + Storage), `@supabase/supabase-js` + `@supabase/ssr`
 - **임베딩**: 기본 Google `gemini-embedding-001` @ **1024차원**(MRL 절단) / 옵션 OpenAI `text-embedding-3-small`·BGE-M3·Ollama(자체 호스팅).
-  `EMBEDDING_PROVIDER`(auto|google|openai|bge|ollama) 로 전환 — auto 는 Ollama 우선·불가 시 Google 폴백.
-  **인덱서(rag7.py)와 웹앱은 같은 제공자/모델/차원을 써야 함**(폴백 중 검색 품질 무의미 — 앱 생존용).
+  `EMBEDDING_PROVIDER`(auto|google|openai|bge|ollama) 로 전환 — auto 는 Ollama를 뜻하며
+  장애 시 다른 벡터 공간으로 자동 폴백하지 않음(웹앱은 키워드 검색만 유지, 인덱서는 중단).
+  **인덱서(rag7.py)와 웹앱은 같은 제공자/모델/차원/버전을 써야 함.**
 - **차트** recharts · **PDF** react-pdf · **날짜** date-fns
 - **인덱싱** Python (`indexing/`, 웹앱과 분리)
 
@@ -100,7 +101,7 @@ npm test           # 단위 테스트(vitest)
 npm run sql:setup  # 마이그레이션 → supabase/setup_new_project.sql 재생성
 
 # 인덱싱(자료 추가 시): SETUP.md 참고
-cd indexing && pip install -r requirements.txt && python embed_and_upload.py
+cd indexing && pip install -r requirements-rag7.txt && cd .. && python rag7.py
 ```
 
 ## 환경변수

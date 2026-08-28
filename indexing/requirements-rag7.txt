@@ -1,6 +1,7 @@
 # rag7.py GUI 인덱서 (Python 3.11 권장)
-supabase>=2.7,<3
-requests>=2.32,<3
-tqdm>=4.66,<5
-pypdf>=5,<7
-docling[easyocr]>=2.48,<3
+# 2026-08-28 Gemini 전체 재인덱싱에서 검증한 직접 의존성 버전
+supabase==2.31.0
+requests==2.34.2
+tqdm==4.70.0
+pypdf==6.16.2
+docling[easyocr]==2.123.0

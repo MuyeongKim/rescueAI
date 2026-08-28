@@ -1,4 +1,8 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
+
+// 서버 로직만 단위 검증하므로 Next 빌드의 server-only 경계 마커만 대체한다.
+vi.mock("server-only", () => ({}));
+
 import { buildSystemPrompt, NOT_FOUND_MESSAGE, MAX_SOURCES, DEFAULT_TOP_K } from "@/lib/rag";
 
 // 이 앱의 존재 이유에 가장 가까운 규칙 — "근거 없으면 지어내지 않는다".

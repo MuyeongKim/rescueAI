@@ -10,7 +10,7 @@ export async function fetchCategoryContext(
   category: string,
   limit = 40,
   topic?: string
-): Promise<{ contextText: string; sources: GeneratedDocSource[] }> {
+): Promise<{ contextText: string; sources: GeneratedDocSource[]; degraded: boolean }> {
   // RAG_TABLE=rag_rescue: 외부에서 임베딩해 둔 기존 테이블 사용
   if (ragTableEnabled()) return fetchExternalRagContext(category, limit, topic);
 
@@ -20,7 +20,9 @@ export async function fetchCategoryContext(
     .select("id, title")
     .eq("category", category)
     .limit(50);
-  if (!docs || docs.length === 0) return { contextText: "", sources: [] };
+  if (!docs || docs.length === 0) {
+    return { contextText: "", sources: [], degraded: false };
+  }
 
   const titleById = new Map<number, string>(docs.map((d) => [d.id, d.title]));
   const { data: chunks } = await supabase
@@ -31,7 +33,9 @@ export async function fetchCategoryContext(
       docs.map((d) => d.id)
     )
     .limit(limit);
-  if (!chunks || chunks.length === 0) return { contextText: "", sources: [] };
+  if (!chunks || chunks.length === 0) {
+    return { contextText: "", sources: [], degraded: false };
+  }
 
   const contextText = chunks
     .map(
@@ -54,5 +58,5 @@ export async function fetchCategoryContext(
     });
     if (sources.length >= 5) break;
   }
-  return { contextText, sources };
+  return { contextText, sources, degraded: false };
 }

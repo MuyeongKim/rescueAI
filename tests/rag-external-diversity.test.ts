@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+// 서버 로직만 단위 검증하므로 Next 빌드의 server-only 경계 마커만 대체한다.
+vi.mock("server-only", () => ({}));
+
 import { selectSourceDiverse } from "@/lib/rag-external";
 
 type Chunk = { id: string; source: string };

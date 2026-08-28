@@ -50,10 +50,17 @@ const QUALITY_LABELS: Partial<
   invalid_source_ref: "근거 출처 표기",
 };
 
-function qualityMeta(report: GenerationQualityReport, repaired: boolean): QualityMeta {
+function qualityMeta(
+  report: GenerationQualityReport,
+  repaired: boolean,
+  retrievalDegraded = false
+): QualityMeta {
   const labels = Array.from(
     new Set(report.issues.map((issue) => QUALITY_LABELS[issue.code] ?? issue.message))
   );
+  if (retrievalDegraded) {
+    labels.unshift("자료 검색 일부 기능 제한 — 회수 근거 확인 필요");
+  }
   const warnings = labels.slice(0, 4);
   if (labels.length > warnings.length) warnings.push(`그 밖의 점검 항목 ${labels.length - warnings.length}개`);
   return { checked: true, repaired, warnings };
@@ -128,7 +135,11 @@ export async function POST(req: Request) {
     model: body.model,
   };
 
-  const { contextText, sources } = await fetchCategoryContext(category, 40, genReq.topic);
+  const {
+    contextText,
+    sources,
+    degraded: retrievalDegraded,
+  } = await fetchCategoryContext(category, 40, genReq.topic);
   if (!contextText) {
     return Response.json(
       { error: "해당 분야에 인덱싱된 자료가 없어 생성할 수 없습니다." },
@@ -170,7 +181,7 @@ export async function POST(req: Request) {
       return Response.json({
         ...object,
         sources,
-        quality: qualityMeta(report, repaired),
+        quality: qualityMeta(report, repaired, retrievalDegraded),
       } satisfies GeneratedSlideDeck & { quality: QualityMeta });
     }
 
@@ -201,7 +212,7 @@ export async function POST(req: Request) {
     return Response.json({
       ...object,
       sources,
-      quality: qualityMeta(report, repaired),
+      quality: qualityMeta(report, repaired, retrievalDegraded),
     } satisfies GeneratedDoc & { quality: QualityMeta });
   } catch (e) {
     console.error("[generate] 실패:", e);

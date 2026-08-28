@@ -1,0 +1,20 @@
+# 운영 배포에 필요하지 않은 로컬 RAG 전환·검증 산출물
+/.rag-migration/
+/indexing/.venv/
+/.pytest_cache/
+/supabase/.temp/
+/__input__data/
+/.codex-review/
+/.agents/
+/.claude/
+/.vscode/
+/.ruff_cache/
+/tests/
+/eval/
+/supabase/
+/indexing/
+/rag7.py
+*.tsbuildinfo
+
+# 루트에 둔 보고·검토용 바이너리 문서는 Next.js 배포 소스가 아니다.
+/*.pptx

@@ -1,6 +1,6 @@
 // 평가셋 러너 런처 (PRD §11 M9, AC-11) — 정확도 측정용 오프라인 도구.
 //
-// 실제 검색·답변 로직은 앱과 동일한 lib 코드(쿼리 확장 → Ollama 임베딩 → match_rag_2026
+// 실제 검색·답변 로직은 앱과 동일한 lib 코드(쿼리 확장 → 운영 임베딩 → match_rag_rescue
 // 하이브리드 검색 → LLM 재순위 → Gemini 답변)를 그대로 호출해야 정확하다.
 // 그 코드는 TypeScript(@/lib/*)라 standalone .mjs 에서 직접 import 할 수 없으므로,
 // 이 스크립트는 동일 코드를 import 하는 vitest 통합 러너(tests/eval-run.integration.test.ts)에

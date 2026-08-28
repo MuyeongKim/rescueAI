@@ -8,6 +8,13 @@ import {
 } from "@/lib/rag-external";
 import type { DocSource } from "@/lib/database.types";
 
+type SearchSupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
+export type SearchContextOptions = {
+  // 요청 없는 통합평가/CLI에서만 명시적으로 주입한다. 생략하면 기존 쿠키 세션과 RLS를 사용한다.
+  supabase?: SearchSupabaseClient;
+};
+
 // 근거가 없을 때의 표준 답변 문구 (환각 차단). 평가/테스트에서 참조.
 export const NOT_FOUND_MESSAGE =
   "관련 매뉴얼에서 확인되지 않습니다. 구조 매뉴얼 담당자에게 문의하세요.";
@@ -37,19 +44,20 @@ export type SearchResult = {
 export async function searchContext(
   query: string,
   category?: string | null,
-  topK: number = DEFAULT_TOP_K
+  topK: number = DEFAULT_TOP_K,
+  options: SearchContextOptions = {}
 ): Promise<SearchResult> {
   // 쿼리 확장: 짧은 검색어가 제목·목차만 매칭하는 문제를 막기 위해 임베딩용 질의를 넓히고
   // 본문 매칭용 키워드를 함께 얻는다. (확장 실패/비활성 시 원문 query 로 폴백)
   const { embedText, keywords } = await expandQuery(query);
 
-  // RAG_TABLE=rag_rescue: 외부에서 임베딩해 둔 기존 테이블로 검색 (홈서버 BGE 임베딩)
+  // RAG_TABLE=rag_rescue: 외부에서 임베딩해 둔 운영 테이블로 검색(제공자 계약은 DB에서 검증)
   // 하이브리드(벡터+키워드 RRF) + LLM 재순위를 위해 원문 query·확장 키워드도 함께 넘긴다.
   if (ragTableEnabled()) {
     let embedding: number[] | null = null;
     let degraded = false;
     try {
-      await assertExternalEmbeddingContract();
+      await assertExternalEmbeddingContract(options.supabase);
       embedding = await getQueryEmbedding(embedText);
     } catch (error) {
       // 다른 임베딩 공간으로 폴백하지 않는다. 키워드 검색은 계속 제공한다.
@@ -59,12 +67,19 @@ export async function searchContext(
         error instanceof Error ? error.message : error
       );
     }
-    const result = await searchExternalRag(query, embedding, topK, category, keywords);
+    const result = await searchExternalRag(
+      query,
+      embedding,
+      topK,
+      category,
+      keywords,
+      options.supabase
+    );
     return { ...result, degraded: degraded || result.degraded };
   }
 
   const embedding = await getQueryEmbedding(embedText);
-  const supabase = await createClient();
+  const supabase = options.supabase ?? (await createClient());
 
   const { data, error } = await supabase.rpc("hybrid_search", {
     query_text: query,

@@ -89,7 +89,11 @@ export async function POST(req: Request) {
   const rl = rateLimit(`generate-section:${auth.user.id}`, 20, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
-  const { contextText } = await fetchCategoryContext(category, 40, body.topic);
+  const { contextText, degraded: retrievalDegraded } = await fetchCategoryContext(
+    category,
+    40,
+    body.topic
+  );
   if (!contextText) {
     return Response.json(
       { error: "해당 분야에 인덱싱된 자료가 없어 생성할 수 없습니다." },
@@ -100,6 +104,9 @@ export async function POST(req: Request) {
   try {
     const system = buildGenerateSystemPrompt(category, contextText);
     const model = getChatModel(body.model);
+    const responseInit = retrievalDegraded
+      ? { headers: { "X-RAG-Degraded": "1" } }
+      : undefined;
 
     if (kind === "slide") {
       const cur = body.current as GeneratedSlide;
@@ -123,7 +130,7 @@ export async function POST(req: Request) {
         }),
         temperature: 0.5,
       });
-      return Response.json(object satisfies GeneratedSlide);
+      return Response.json(object satisfies GeneratedSlide, responseInit);
     }
 
     const cur = body.current as GeneratedSection;
@@ -145,7 +152,10 @@ export async function POST(req: Request) {
       temperature: 0.5,
     });
     // 부분 보완이 훈련계획·교안의 고정 구조를 깨지 않도록 제목은 기존 값을 유지한다.
-    return Response.json({ ...object, heading: cur.heading } satisfies GeneratedSection);
+    return Response.json(
+      { ...object, heading: cur.heading } satisfies GeneratedSection,
+      responseInit
+    );
   } catch (e) {
     console.error("[generate/section] 실패:", e);
     return Response.json({ error: "재생성 중 오류가 발생했습니다." }, { status: 500 });

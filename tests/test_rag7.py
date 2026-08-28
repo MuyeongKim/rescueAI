@@ -533,3 +533,92 @@ def test_activate_ingestion_uses_atomic_rpc(monkeypatch):
         },
     )
     assert calls[1] == ("execute",)
+
+
+def test_stage_only_rejects_source_registration_and_deletion(monkeypatch, tmp_path):
+    rag7 = load_rag7(monkeypatch)
+    source = tmp_path / "manual.pdf"
+    source.write_bytes(b"%PDF-test")
+
+    with pytest.raises(ValueError, match="register_source=False"):
+        rag7.run_ingestion_pipeline(
+            source,
+            "화재",
+            "2026",
+            False,
+            register_source=True,
+            stage_only=True,
+        )
+
+    with pytest.raises(ValueError, match="should_delete=False"):
+        rag7.run_ingestion_pipeline(
+            source,
+            "화재",
+            "2026",
+            True,
+            register_source=False,
+            stage_only=True,
+        )
+
+
+def test_stage_only_preserves_active_contract_and_skips_activation(monkeypatch, tmp_path):
+    rag7 = load_rag7(monkeypatch)
+    source = tmp_path / "downloaded.pdf"
+    source.write_bytes(b"source-pdf")
+    calls = []
+
+    monkeypatch.setattr(
+        rag7,
+        "convert_file_to_pages",
+        lambda *_args, **_kwargs: (
+            [rag7.ConvertedPage(text="화학보호복 착용과 기밀도 점검 절차 " * 8, page_num=7)],
+            "stub-parser",
+        ),
+    )
+    monkeypatch.setattr(
+        rag7,
+        "embeddings",
+        StubEmbeddings(documents_result=[[0.01] * rag7.EMBEDDING_DIMENSIONS]),
+    )
+    monkeypatch.setattr(
+        rag7,
+        "ensure_embedding_contract",
+        lambda: pytest.fail("전체 전환 스테이징 중 기존 DB 계약을 바꾸면 안 됩니다."),
+    )
+    monkeypatch.setattr(
+        rag7,
+        "activate_ingestion",
+        lambda **_kwargs: pytest.fail("전체 전환 전에 단건 활성화하면 안 됩니다."),
+    )
+    monkeypatch.setattr(
+        rag7,
+        "execute_with_retry",
+        lambda operation_name, _query_factory, attempts=4: calls.append(operation_name),
+    )
+    monkeypatch.setattr(
+        rag7,
+        "validate_staged_ingestion",
+        lambda **kwargs: calls.append(("validate", kwargs)),
+    )
+
+    result = rag7.run_ingestion_pipeline(
+        source,
+        "화학사고",
+        "2026",
+        False,
+        register_source=False,
+        preview_cb=lambda _preview: True,
+        stage_only=True,
+        source_name_override="화학사고 대응 매뉴얼.pdf",
+        document_id_override=16,
+        file_hash_expected=rag7.file_sha256(source),
+        ingestion_id_override="7d29c722-5023-47af-b1dd-0fda32d51b4e",
+    )
+
+    assert result["stage_only"] is True
+    assert result["document_id"] == 16
+    assert result["uploaded_chunks"] > 0
+    assert any(call == "1번 배치 스테이징" for call in calls)
+    validation = next(call[1] for call in calls if isinstance(call, tuple))
+    assert validation["source_name"] == "화학사고 대응 매뉴얼.pdf"
+    assert validation["expected_count"] == result["uploaded_chunks"]
