@@ -1,13 +1,13 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
+  ChevronDown,
   FileText,
   Loader2,
   MessageSquareText,
   Presentation,
-  Sparkles,
   Wand2,
 } from "lucide-react";
 
@@ -16,6 +16,9 @@ import {
   DURATIONS,
   GEN_TYPES,
   buildNotebookLmPrompt,
+  generationQualityWarnings,
+  inspectCurrentGenerationQuality,
+  MAX_GENERATION_CONDITIONS_CHARS,
   type Audience,
   type Duration,
   type GenType,
@@ -25,12 +28,20 @@ import {
   type GeneratedSlideDeck,
   type SavedMaterial,
 } from "@/lib/generate";
-import { asAudience, asDuration, hydrateMaterial } from "@/lib/generate-material";
+import {
+  asAudience,
+  asDuration,
+  hydrateMaterial,
+  initialGenerationType,
+  mergeGeneratedSources,
+  preferredGenerationModel,
+} from "@/lib/generate-material";
 import { categoryStyle } from "@/lib/category";
 import { cn, sanitizeFilename } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -54,6 +65,46 @@ const TOPIC_SUGGESTIONS: Record<string, readonly string[]> = {
   화학사고: ["화학사고 초동대응", "보호복 착용과 오염통제", "누출물질 확인과 안전구역 설정"],
 };
 
+const DEFAULT_TRAINING_TYPE = "이론 + 현장실습";
+const DEFAULT_TRAINING_METHOD = "자체훈련";
+const RETRIEVAL_DEGRADED_WARNING = "자료 검색 일부 기능 제한 — 회수 근거 확인 필요";
+const MODEL_FALLBACK_WARNING = "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨";
+
+function mergedSourceLabels(
+  current: readonly string[] | undefined,
+  incoming: unknown
+): string[] | undefined {
+  if (!Array.isArray(incoming)) return current ? [...current] : undefined;
+  const next = Array.from(
+    new Set([
+      ...(current ?? []),
+      ...incoming
+        .filter((item): item is string => typeof item === "string")
+        .map((item) => item.trim().slice(0, 300))
+        .filter(Boolean),
+    ])
+  ).slice(0, 80);
+  return next.length > 0 ? next : undefined;
+}
+
+function localQuality(
+  kind: "plan" | "lesson" | "slides",
+  draft: GeneratedDoc | GeneratedSlideDeck,
+  duration: Duration,
+  previous: GenerationQuality | null
+): GenerationQuality {
+  const report = inspectCurrentGenerationQuality(kind, draft, duration);
+  const operationalWarnings =
+    previous?.warnings.filter(
+      (warning) => warning.startsWith("자료 검색") || warning.startsWith("정밀 생성 모델")
+    ) ?? [];
+  return {
+    checked: true,
+    repaired: previous?.repaired ?? false,
+    warnings: generationQualityWarnings(report, operationalWarnings),
+  };
+}
+
 export function GenerateForm({
   docsByCategory,
   models = [],
@@ -65,7 +116,8 @@ export function GenerateForm({
 }) {
   const categories = Object.keys(docsByCategory);
   const hydrated = hydrateMaterial(initialMaterial);
-  const [type, setType] = useState<GenType>(initialMaterial?.kind ?? "plan");
+  // 과거 NotebookLM 저장본은 결과만 호환하고, 새 자료 입력은 지원하는 세 유형 중 계획으로 연다.
+  const [type, setType] = useState<GenType>(initialGenerationType(initialMaterial?.kind));
   const [category, setCategory] = useState<string>(
     initialMaterial?.category ?? categories[0] ?? ""
   );
@@ -73,12 +125,12 @@ export function GenerateForm({
   const [duration, setDuration] = useState<Duration>(asDuration(initialMaterial?.duration));
   const [topic, setTopic] = useState(initialMaterial?.topic ?? "");
   const [topicError, setTopicError] = useState(false);
-  const [date, setDate] = useState("");
+  const [date, setDate] = useState(hydrated.date);
   // 훈련계획 양식(training_plan.hwpx) 전용 폼 입력
-  const [place, setPlace] = useState("");
-  const [trainingType, setTrainingType] = useState<string>("이론 + 현장실습");
-  const [method, setMethod] = useState<string>("자체훈련");
-  const [model, setModel] = useState<string>(models[0]?.key ?? "");
+  const [place, setPlace] = useState(hydrated.place);
+  const [conditions, setConditions] = useState(hydrated.conditions);
+  // 자료 제작은 품질 우선 모델을 자동 선택한다. 사용할 수 없을 때만 첫 모델로 폴백한다.
+  const model = preferredGenerationModel(models);
   const [loading, setLoading] = useState(false);
   const [doc, setDoc] = useState<GeneratedDoc | null>(hydrated.doc);
   const [deck, setDeck] = useState<GeneratedSlideDeck | null>(hydrated.deck);
@@ -95,49 +147,133 @@ export function GenerateForm({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [quality, setQuality] = useState<GenerationQuality | null>(null);
+  const [localQualityRevision, setLocalQualityRevision] = useState(0);
   const [loadedId, setLoadedId] = useState<number | null>(initialMaterial?.id ?? null); // 재편집 대상 id
 
-  const genReq = { type, category, audience, duration, topic: topic.trim(), date, place, model };
-  const subtitle = `대상: ${audience} · 교육 시간: ${duration}${date ? ` · ${date}` : ""}`;
+  const genReq = {
+    type,
+    category,
+    audience,
+    duration,
+    topic: topic.trim(),
+    date: type === "plan" ? date : "",
+    place: type === "plan" ? place.trim() : "",
+    conditions: conditions.trim(),
+    model,
+  };
+  const subtitle = `대상: ${audience} · 교육 시간: ${duration}${type === "plan" && date ? ` · ${date}` : ""}`;
   const connectedDocs = docsByCategory[category]?.length ?? 0;
   const suggestions =
     TOPIC_SUGGESTIONS[category] ??
     ([`${category} 핵심 절차`, `${category} 장비 점검`, `${category} 안전수칙`] as const);
 
+  // 사용자 편집은 함수형 상태 갱신으로 합치고, 최종 상태가 렌더된 뒤 한 번만 품질을 계산한다.
+  // 비동기 부분 재생성 중 다른 입력을 고쳐도 이전 스냅샷이 최신 편집을 덮지 않게 한다.
+  useEffect(() => {
+    if (localQualityRevision === 0) return;
+    if (resultKind === "slides" && deck) {
+      setQuality((previous) => localQuality("slides", deck, duration, previous));
+      return;
+    }
+    if (doc && (resultKind === "plan" || resultKind === "lesson")) {
+      setQuality((previous) => localQuality(resultKind, doc, duration, previous));
+    }
+  }, [deck, doc, duration, localQualityRevision, resultKind]);
+
   // 결과 부분 편집 — 편집 내용은 그대로 다운로드/복사에 반영된다(빌더가 state를 받음).
   function patchSection(i: number, patch: Partial<GeneratedSection>) {
     setSaved(false);
-    setQuality(null);
-    setDoc((prev) =>
-      prev
-        ? { ...prev, sections: prev.sections.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
-        : prev
+    setDoc((previous) =>
+      previous
+        ? {
+            ...previous,
+            sections: previous.sections.map((section, index) =>
+              index === i ? { ...section, ...patch } : section
+            ),
+          }
+        : previous
     );
+    setLocalQualityRevision((revision) => revision + 1);
   }
   function patchSlide(i: number, patch: Partial<GeneratedSlide>) {
     setSaved(false);
-    setQuality(null);
-    setDeck((prev) =>
-      prev
-        ? { ...prev, slides: prev.slides.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
-        : prev
+    setDeck((previous) =>
+      previous
+        ? {
+            ...previous,
+            slides: previous.slides.map((slide, index) =>
+              index === i ? { ...slide, ...patch } : slide
+            ),
+          }
+        : previous
     );
+    setLocalQualityRevision((revision) => revision + 1);
   }
   function patchBullet(slideI: number, bulletI: number, value: string) {
     setSaved(false);
-    setQuality(null);
-    setDeck((prev) =>
-      prev
+    setDeck((previous) =>
+      previous
         ? {
-            ...prev,
-            slides: prev.slides.map((s, j) =>
-              j === slideI
-                ? { ...s, bullets: s.bullets.map((b, k) => (k === bulletI ? value : b)) }
-                : s
+            ...previous,
+            slides: previous.slides.map((slide, slideIndex) =>
+              slideIndex === slideI
+                ? {
+                    ...slide,
+                    bullets: slide.bullets.map((bullet, bulletIndex) =>
+                      bulletIndex === bulletI ? value : bullet
+                    ),
+                  }
+                : slide
             ),
           }
-        : prev
+        : previous
     );
+    setLocalQualityRevision((revision) => revision + 1);
+  }
+  function moveSlide(index: number, direction: -1 | 1) {
+    setSaved(false);
+    setRegenIdx(null);
+    setDeck((previous) => {
+      if (!previous) return previous;
+      const target = index + direction;
+      if (target < 0 || target >= previous.slides.length) return previous;
+      const slides = [...previous.slides];
+      [slides[index], slides[target]] = [slides[target], slides[index]];
+      return { ...previous, slides };
+    });
+    setLocalQualityRevision((revision) => revision + 1);
+  }
+  function deleteSlide(index: number) {
+    setSaved(false);
+    setRegenIdx(null);
+    setDeck((previous) =>
+      previous
+        ? {
+            ...previous,
+            slides: previous.slides.filter((_, slideIndex) => slideIndex !== index),
+          }
+        : previous
+    );
+    setLocalQualityRevision((revision) => revision + 1);
+  }
+
+  /** 저장·파일 생성 직전에 현재 편집본을 다시 점검한다. */
+  function recheckCurrentQuality(): GenerationQuality | null {
+    const next =
+      resultKind === "slides" && deck
+        ? localQuality("slides", deck, duration, quality)
+        : doc && (resultKind === "plan" || resultKind === "lesson")
+          ? localQuality(resultKind, doc, duration, quality)
+          : null;
+    if (next) setQuality(next);
+    return next;
+  }
+
+  function notifyQualityWarnings(checked: GenerationQuality | null) {
+    if (!checked || checked.warnings.length === 0) return;
+    toast.warning("최종 확인이 필요한 항목이 있습니다", {
+      description: checked.warnings.join(" · "),
+    });
   }
 
   // AI 부분 재생성 — 섹션/슬라이드 1개만 다시 생성해 해당 부분만 교체한다.
@@ -165,6 +301,7 @@ export function GenerateForm({
           audience,
           duration,
           topic,
+          conditions: conditions.trim(),
           model,
           docTitle,
           outline,
@@ -182,12 +319,53 @@ export function GenerateForm({
       }
       const json = await res.json();
       const retrievalDegraded = res.headers.get("X-RAG-Degraded") === "1";
-      if (kind === "section") patchSection(index, json as GeneratedSection);
-      else patchSlide(index, json as GeneratedSlide);
+      const modelFallbackUsed = res.headers.get("X-Model-Fallback") === "1";
+      const { sourceLabels, sources, ...regenerated } = json as Record<string, unknown> & {
+        sourceLabels?: unknown;
+        sources?: unknown;
+      };
+      if (kind === "section") {
+        patchSection(index, regenerated as GeneratedSection);
+        setDoc((previous) =>
+          previous
+            ? {
+              ...previous,
+              sourceLabels: mergedSourceLabels(previous.sourceLabels, sourceLabels),
+              sources: mergeGeneratedSources(previous.sources, sources),
+            }
+          : previous
+        );
+      } else {
+        patchSlide(index, regenerated as GeneratedSlide);
+        setDeck((previous) =>
+          previous
+            ? {
+              ...previous,
+              sourceLabels: mergedSourceLabels(previous.sourceLabels, sourceLabels),
+              sources: mergeGeneratedSources(previous.sources, sources),
+            }
+          : previous
+        );
+      }
+      if (retrievalDegraded || modelFallbackUsed) {
+        setQuality((previous) => ({
+          checked: true,
+          repaired: previous?.repaired ?? false,
+          warnings: Array.from(
+            new Set([
+              ...(retrievalDegraded ? [RETRIEVAL_DEGRADED_WARNING] : []),
+              ...(modelFallbackUsed ? [MODEL_FALLBACK_WARNING] : []),
+              ...(previous?.warnings ?? []),
+            ])
+          ).slice(0, 5),
+        }));
+      }
       toast.success("다시 생성했습니다", {
         description: retrievalDegraded
           ? "자료 검색 일부 기능이 제한되어 회수 근거를 한 번 더 확인해 주세요."
-          : undefined,
+          : modelFallbackUsed
+            ? "정밀 모델이 일시 제한되어 빠른 모델로 생성했습니다. 결과를 한 번 더 확인해 주세요."
+            : undefined,
       });
       setRegenIdx(null);
       setRegenText("");
@@ -203,7 +381,7 @@ export function GenerateForm({
     if (trimmedTopic.length < 2) {
       setTopicError(true);
       document.getElementById("topic")?.focus();
-      toast.error("훈련 주제를 입력해 주세요", {
+      toast.error("자료 주제를 입력해 주세요", {
         description: "구체적인 주제가 있어야 관련 교범을 정확히 찾아 좋은 자료를 만들 수 있습니다.",
       });
       return;
@@ -215,6 +393,7 @@ export function GenerateForm({
     setRegenIdx(null);
     setSaved(false);
     setQuality(null);
+    setLocalQualityRevision(0);
     setResultKind(null);
     setLoadedId(null); // 새 생성은 저장 안 된 새 결과
     setDoc(null);
@@ -259,16 +438,36 @@ export function GenerateForm({
   // 생성물 저장 — 현재 결과(편집 반영분)를 개인 이력에 저장.
   async function handleSave() {
     if (!resultKind) return;
+    recheckCurrentQuality();
+    const resultMeta = GEN_TYPES.find((item) => item.key === resultKind) ?? typeMeta;
     const payload =
       resultKind === "slides" && deck
-        ? { title: deck.title, content: { slides: deck.slides, sources: deck.sources } }
+        ? {
+            title: deck.title,
+            content: {
+              slides: deck.slides,
+              sources: deck.sources,
+              sourceLabels: deck.sourceLabels,
+              conditions: conditions.trim(),
+            },
+          }
         : nlmPrompt && resultKind === "notebooklm"
           ? {
-              title: `${category} ${typeMeta.label}${topic ? ` — ${topic}` : ""}`.slice(0, 200),
-              content: { prompt: nlmPrompt },
+              title: `${category} ${resultMeta.label}${topic ? ` — ${topic}` : ""}`.slice(0, 200),
+              content: { prompt: nlmPrompt, conditions: conditions.trim() },
             }
           : doc
-            ? { title: doc.title, content: { sections: doc.sections, sources: doc.sources } }
+            ? {
+                title: doc.title,
+                content: {
+                  sections: doc.sections,
+                  sources: doc.sources,
+                  sourceLabels: doc.sourceLabels,
+                  conditions: conditions.trim(),
+                  date: resultKind === "plan" ? date : "",
+                  place: resultKind === "plan" ? place.trim() : "",
+                },
+              }
             : null;
     if (!payload) return;
 
@@ -308,6 +507,7 @@ export function GenerateForm({
 
   async function handlePptx() {
     if (!deck) return;
+    notifyQualityWarnings(recheckCurrentQuality());
     try {
       // pptxgenjs는 무거워서 다운로드 시점에만 로드
       const { downloadPptx } = await import("@/lib/pptx");
@@ -339,6 +539,7 @@ export function GenerateForm({
 
   async function handleDocx() {
     if (!doc) return;
+    notifyQualityWarnings(recheckCurrentQuality());
     try {
       // docx는 무거워서 다운로드 시점에만 로드
       const { buildDocxBlob } = await import("@/lib/docx");
@@ -350,6 +551,7 @@ export function GenerateForm({
 
   async function handleHwpx() {
     if (!doc) return;
+    notifyQualityWarnings(recheckCurrentQuality());
     try {
       // 미니서버(hwp-writer-api) 우선, 실패 시 로컬 생성 폴백.
       // 훈련계획(plan)은 전북소방 표준 양식(training_plan.hwpx)에 폼 입력 + AI 섹션을 채운다.
@@ -361,8 +563,8 @@ export function GenerateForm({
               plan: {
                 topic: topic || `${category} 훈련`,
                 datetime: date,
-                formType: trainingType,
-                method,
+                formType: DEFAULT_TRAINING_TYPE,
+                method: DEFAULT_TRAINING_METHOD,
                 duration,
                 target: audience,
                 place,
@@ -469,31 +671,6 @@ export function GenerateForm({
             {type !== "notebooklm" && (
               <p className="text-sm text-muted-foreground">{typeMeta.description}</p>
             )}
-
-            {/* NotebookLM — 외부 도구용 프롬프트라 동등 카드에서 분리한 보조 액션 */}
-            <button
-              type="button"
-              role="radio"
-              aria-checked={type === "notebooklm"}
-              onClick={() => setType("notebooklm")}
-              style={
-                type === "notebooklm"
-                  ? { borderColor: accent, backgroundColor: `${accent}14`, color: accent }
-                  : undefined
-              }
-              className={cn(
-                "mt-1 flex min-h-12 w-full items-center gap-2.5 rounded-md border border-dashed p-3 text-left text-sm transition-all duration-200 motion-reduce:transition-none",
-                type === "notebooklm"
-                  ? "shadow-sm"
-                  : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground"
-              )}
-            >
-              <Sparkles className="h-4 w-4 shrink-0" />
-              <span className="flex-1">
-                <span className="font-medium">또는 — NotebookLM 프롬프트</span>
-                <span className="ml-1.5 text-xs opacity-80">붙여넣어 슬라이드 만들기</span>
-              </span>
-            </button>
           </section>
 
           <div className="h-px bg-border/60" />
@@ -519,7 +696,10 @@ export function GenerateForm({
                       type="button"
                       role="radio"
                       aria-checked={active}
-                      onClick={() => setCategory(c)}
+                      onClick={() => {
+                        setCategory(c);
+                        setSaved(false);
+                      }}
                       style={
                         active
                           ? { borderColor: st.hex, color: st.hex, backgroundColor: `${st.hex}14` }
@@ -538,8 +718,25 @@ export function GenerateForm({
                 })}
               </div>
             </div>
-            <OptionGroup label="대상" options={AUDIENCES} value={audience} onChange={setAudience} />
-            <OptionGroup label="교육 시간" options={DURATIONS} value={duration} onChange={setDuration} />
+            <OptionGroup
+              label="대상"
+              options={AUDIENCES}
+              value={audience}
+              onChange={(value) => {
+                setAudience(value);
+                setSaved(false);
+              }}
+            />
+            <OptionGroup
+              label="교육 시간"
+              options={DURATIONS}
+              value={duration}
+              onChange={(value) => {
+                setDuration(value);
+                setSaved(false);
+                setLocalQualityRevision((revision) => revision + 1);
+              }}
+            />
           </section>
 
           <div className="h-px bg-border/60" />
@@ -567,132 +764,128 @@ export function GenerateForm({
                 </p>
               )}
             </div>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label htmlFor="topic" className="text-sm font-medium">
-                  훈련 내용(주제) <span className="text-destructive">*</span>
-                </Label>
-                <Input
-                  id="topic"
-                  placeholder="예: 공기호흡기 점검 절차"
-                  value={topic}
-                  onChange={(e) => {
-                    setTopic(e.target.value);
-                    if (e.target.value.trim().length >= 2) setTopicError(false);
-                  }}
-                  maxLength={100}
-                  aria-invalid={topicError}
-                  aria-describedby="topic-help"
-                  className={cn("h-12 text-base md:h-10", topicError && "border-destructive")}
-                />
-                <p
-                  id="topic-help"
-                  className={cn(
-                    "text-xs leading-relaxed",
-                    topicError ? "font-medium text-destructive" : "text-muted-foreground"
-                  )}
-                >
-                  {topicError
-                    ? "훈련 주제를 두 글자 이상 입력해 주세요."
-                    : "한 문장만 적으면 관련 자료를 찾아 교육 흐름까지 구성합니다."}
-                </p>
-                <div className="flex flex-wrap gap-1.5 pt-1" aria-label="추천 훈련 주제">
-                  {suggestions.map((suggestion) => (
-                    <button
-                      key={suggestion}
-                      type="button"
-                      onClick={() => {
-                        setTopic(suggestion);
-                        setTopicError(false);
-                      }}
-                      className="min-h-9 rounded-full border border-border bg-background px-3 text-left text-xs font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                    >
-                      {suggestion}
-                    </button>
-                  ))}
-                </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="topic" className="text-sm font-medium">
+                자료 주제 <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="topic"
+                placeholder="예: 공기호흡기 점검 절차"
+                value={topic}
+                onChange={(e) => {
+                  setTopic(e.target.value);
+                  setSaved(false);
+                  if (e.target.value.trim().length >= 2) setTopicError(false);
+                }}
+                maxLength={100}
+                aria-invalid={topicError}
+                aria-describedby="topic-help"
+                className={cn("h-12 text-base md:h-10", topicError && "border-destructive")}
+              />
+              <p
+                id="topic-help"
+                className={cn(
+                  "text-xs leading-relaxed",
+                  topicError ? "font-medium text-destructive" : "text-muted-foreground"
+                )}
+              >
+                {topicError
+                  ? "훈련 주제를 두 글자 이상 입력해 주세요."
+                  : "한 문장만 적으면 관련 자료를 찾아 교육 흐름까지 구성합니다."}
+              </p>
+              <div className="flex flex-wrap gap-1.5 pt-1" aria-label="추천 훈련 주제">
+                {suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => {
+                      setTopic(suggestion);
+                      setTopicError(false);
+                      setSaved(false);
+                    }}
+                    className="min-h-9 rounded-full border border-border bg-background px-3 text-left text-xs font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {suggestion}
+                  </button>
+                ))}
               </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="date" className="text-sm font-medium">
-                  훈련 일자
-                </Label>
-                <Input
-                  id="date"
-                  type="date"
-                  value={date}
-                  onChange={(e) => setDate(e.target.value)}
-                  className="h-12 text-base md:h-10"
-                />
-              </div>
-              {/* 훈련계획 양식 전용 — 훈련 장소 */}
-              {type === "plan" && (
-                <div className="space-y-1.5">
-                  <Label htmlFor="place" className="text-sm font-medium">
-                    훈련 장소
-                  </Label>
-                  <Input
-                    id="place"
-                    placeholder="예: 소방교육훈련센터 훈련탑"
-                    value={place}
-                    onChange={(e) => setPlace(e.target.value)}
-                    maxLength={100}
-                    className="h-12 text-base md:h-10"
-                  />
-                </div>
-              )}
             </div>
 
-            {/* 훈련계획 양식 전용 — 훈련 형태·방법(한글 다운로드 시 양식에 반영) */}
-            {type === "plan" && (
-              <div className="space-y-3">
-                <OptionGroup
-                  label="훈련 형태"
-                  options={["현장실습 훈련", "이론 교육훈련", "이론 + 현장실습"]}
-                  value={trainingType}
-                  onChange={setTrainingType}
-                />
-                <OptionGroup
-                  label="훈련 방법"
-                  options={["합동훈련", "자체훈련", "구조대장 기술지원"]}
-                  value={method}
-                  onChange={setMethod}
-                />
+            <div className="space-y-1.5">
+              <Label htmlFor="conditions" className="text-sm font-medium">
+                현장 조건 <span className="font-normal text-muted-foreground">(선택)</span>
+              </Label>
+              <Textarea
+                id="conditions"
+                value={conditions}
+                onChange={(event) => {
+                  setConditions(event.target.value);
+                  setSaved(false);
+                }}
+                maxLength={MAX_GENERATION_CONDITIONS_CHARS}
+                rows={3}
+                placeholder="예: 참여 12명, 교관 2명, 공기호흡기 6세트, 실내 훈련장"
+                aria-describedby="conditions-help"
+                className="min-h-24 resize-y text-base md:text-sm"
+              />
+              <div
+                id="conditions-help"
+                className="flex items-start justify-between gap-3 text-xs text-muted-foreground"
+              >
+                <span>인원·보유 장비·장소 제약을 적으면 실제 운영 조건에 맞춰 구성합니다.</span>
+                <span className="shrink-0 tabular-nums">
+                  {conditions.length}/{MAX_GENERATION_CONDITIONS_CHARS}
+                </span>
               </div>
-            )}
+            </div>
 
-            {/* 응답 방식 선택 — 2개 이상 사용 가능할 때만. NotebookLM은 AI를 안 쓰므로 숨김 */}
-            {type !== "notebooklm" && models.length > 1 && (
-              <div className="space-y-2.5">
-                <Label className="text-xs font-semibold uppercase text-muted-foreground">
-                  응답 방식
-                </Label>
-                <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="응답 방식">
-                  {models.map((m) => {
-                    const active = model === m.key;
-                    return (
-                      <button
-                        key={m.key}
-                        type="button"
-                        role="radio"
-                        aria-checked={active}
-                        onClick={() => setModel(m.key)}
-                        className={cn(
-                          "flex h-12 flex-col items-start justify-center rounded-md border px-4 transition-all duration-200 motion-reduce:transition-none md:h-11",
-                          "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
-                          active
-                            ? "border-primary bg-primary text-primary-foreground shadow-sm"
-                            : "border-border hover:border-primary/40 hover:bg-accent/40"
-                        )}
-                      >
-                        <span className="text-sm font-medium leading-tight">{m.label}</span>
-                        {m.note && (
-                          <span className="text-[11px] font-normal opacity-70">{m.note}</span>
-                        )}
-                      </button>
-                    );
-                  })}
+            {/* 공문 양식에 필요한 값만 훈련계획에서 선택 입력으로 접어 둔다. */}
+            {type === "plan" && (
+              <details className="group rounded-md border border-border/70 bg-muted/20">
+                <summary className="flex min-h-12 cursor-pointer items-center justify-between gap-3 px-3 py-2 text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                  <span>문서 정보 (선택)</span>
+                  <span className="flex items-center gap-1.5 text-xs font-normal text-muted-foreground">
+                    훈련 일자 · 장소
+                    <ChevronDown
+                      className="h-4 w-4 transition-transform group-open:rotate-180 motion-reduce:transition-none"
+                      aria-hidden="true"
+                    />
+                  </span>
+                </summary>
+                <div className="grid grid-cols-1 gap-3 border-t border-border/60 p-3 sm:grid-cols-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="date" className="text-sm font-medium">
+                      훈련 일자
+                    </Label>
+                    <Input
+                      id="date"
+                      type="date"
+                      value={date}
+                      onChange={(event) => {
+                        setDate(event.target.value);
+                        setSaved(false);
+                      }}
+                      className="h-12 text-base md:h-10"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="place" className="text-sm font-medium">
+                      훈련 장소
+                    </Label>
+                    <Input
+                      id="place"
+                      placeholder="예: 소방교육훈련센터 훈련탑"
+                      value={place}
+                      onChange={(event) => {
+                        setPlace(event.target.value);
+                        setSaved(false);
+                      }}
+                      maxLength={100}
+                      className="h-12 text-base md:h-10"
+                    />
+                  </div>
                 </div>
-              </div>
+              </details>
             )}
           </section>
 
@@ -759,11 +952,13 @@ export function GenerateForm({
           quality={quality}
           onTitleChange={(title) => {
             setSaved(false);
-            setQuality(null);
-            setDeck((prev) => (prev ? { ...prev, title } : prev));
+            setDeck((previous) => (previous ? { ...previous, title } : previous));
+            setLocalQualityRevision((revision) => revision + 1);
           }}
           onPatchSlide={patchSlide}
           onPatchBullet={patchBullet}
+          onMoveSlide={moveSlide}
+          onDeleteSlide={deleteSlide}
           onDownloadPptx={handlePptx}
         />
       )}
@@ -778,8 +973,8 @@ export function GenerateForm({
           quality={quality}
           onTitleChange={(title) => {
             setSaved(false);
-            setQuality(null);
-            setDoc((prev) => (prev ? { ...prev, title } : prev));
+            setDoc((previous) => (previous ? { ...previous, title } : previous));
+            setLocalQualityRevision((revision) => revision + 1);
           }}
           onPatchSection={patchSection}
           onDownloadHwpx={handleHwpx}

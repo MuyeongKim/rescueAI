@@ -29,7 +29,7 @@ async function loadMaterial(id?: string): Promise<SavedMaterial | undefined> {
 }
 
 // 인덱싱된 자료가 있는 분야와 분야별 자료 제목을 모은다.
-// 자료 제목은 NotebookLM 프롬프트의 "업로드할 자료" 안내에 쓰인다.
+// 분야 목록은 생성 범위를 제한하고, 자료 제목은 기존 NotebookLM 저장본 재편집 호환에만 쓴다.
 async function loadDocsByCategory(): Promise<Record<string, string[]>> {
   // RAG_TABLE=rag_rescue: 기존 임베딩 테이블의 분야·원본 파일 목록 사용
   if (!DEMO && ragTableEnabled()) return listExternalRagCategories();

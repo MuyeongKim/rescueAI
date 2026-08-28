@@ -10,7 +10,9 @@ import {
   generatedDocSchemaFor,
   generatedSlidesSchema,
   extractSourceLabels,
+  generationQualityWarnings,
   inspectGenerationQuality,
+  MAX_GENERATION_CONDITIONS_CHARS,
   type GenerateRequest,
   type GeneratedDoc,
   type GeneratedSlideDeck,
@@ -28,41 +30,19 @@ type QualityMeta = {
   warnings: string[];
 };
 
-const QUALITY_LABELS: Partial<
-  Record<GenerationQualityReport["issues"][number]["code"], string>
-> = {
-  missing_section: "필수 구성 누락",
-  unexpected_section: "예정되지 않은 구성",
-  section_order: "구성 순서",
-  thin_content: "일부 내용의 구체성·분량",
-  missing_safety: "안전·중단 기준",
-  missing_evaluation: "평가·통과 기준",
-  missing_time_allocation: "단계별 시간 배분",
-  time_total_mismatch: "교육 시간 합계",
-  slide_count: "교육 시간에 맞는 슬라이드 수",
-  thin_notes: "일부 발표자 노트 분량",
-  duplicate_slide_title: "중복 슬라이드 제목",
-  duplicate_slide_content: "중복 슬라이드 내용",
-  missing_slide_layout: "슬라이드 구성 방식",
-  generic_slide_title: "슬라이드 결론형 제목",
-  missing_source_citation: "핵심 내용의 근거 출처",
-  missing_source_refs: "슬라이드별 근거 출처",
-  invalid_source_ref: "근거 출처 표기",
-};
-
 function qualityMeta(
   report: GenerationQualityReport,
   repaired: boolean,
-  retrievalDegraded = false
+  retrievalDegraded = false,
+  modelFallbackUsed = false
 ): QualityMeta {
-  const labels = Array.from(
-    new Set(report.issues.map((issue) => QUALITY_LABELS[issue.code] ?? issue.message))
+  const warnings = generationQualityWarnings(
+    report,
+    [
+      ...(retrievalDegraded ? ["자료 검색 일부 기능 제한 — 회수 근거 확인 필요"] : []),
+      ...(modelFallbackUsed ? ["정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"] : []),
+    ]
   );
-  if (retrievalDegraded) {
-    labels.unshift("자료 검색 일부 기능 제한 — 회수 근거 확인 필요");
-  }
-  const warnings = labels.slice(0, 4);
-  if (labels.length > warnings.length) warnings.push(`그 밖의 점검 항목 ${labels.length - warnings.length}개`);
   return { checked: true, repaired, warnings };
 }
 
@@ -132,6 +112,10 @@ export async function POST(req: Request) {
     topic,
     date: /^\d{4}-\d{2}-\d{2}$/.test(body.date ?? "") ? body.date : undefined,
     place: body.place?.slice(0, 100),
+    conditions:
+      typeof body.conditions === "string"
+        ? body.conditions.trim().slice(0, MAX_GENERATION_CONDITIONS_CHARS) || undefined
+        : undefined,
     model: body.model,
   };
 
@@ -150,20 +134,37 @@ export async function POST(req: Request) {
   try {
     const system = buildGenerateSystemPrompt(category, contextText);
     const allowedSourceRefs = extractSourceLabels(contextText);
-    // 폼에서 선택한 모델 — 미지정/사용불가 시 서버 기본값으로 폴백
-    const model = getChatModel(genReq.model);
+    let activeModelKey = genReq.model;
+    let modelFallbackUsed = false;
+    const withGenerationModel = async <T,>(
+      run: (model: ReturnType<typeof getChatModel>) => Promise<T>
+    ): Promise<T> => {
+      try {
+        return await run(getChatModel(activeModelKey));
+      } catch (error) {
+        if (activeModelKey !== "gemini-pro") throw error;
+        activeModelKey = "gemini-flash";
+        modelFallbackUsed = true;
+        console.warn(
+          "[generate] 정밀 모델 호출 실패, 빠른 모델로 한 번 재시도:",
+          error instanceof Error ? error.message : "unknown error"
+        );
+        return run(getChatModel(activeModelKey));
+      }
+    };
 
     if (type === "slides") {
-      const generateSlides = async (prompt: string) => {
-        const { object } = await generateObject({
-          model,
-          schema: generatedSlidesSchema,
-          system,
-          prompt,
-          temperature: 0.4,
+      const generateSlides = async (prompt: string) =>
+        withGenerationModel(async (model) => {
+          const { object } = await generateObject({
+            model,
+            schema: generatedSlidesSchema,
+            system,
+            prompt,
+            temperature: 0.4,
+          });
+          return object;
         });
-        return object;
-      };
       let object = await generateSlides(buildGeneratePrompt(genReq));
       let report = inspectGenerationQuality("slides", object, duration, allowedSourceRefs);
       let repaired = false;
@@ -181,20 +182,22 @@ export async function POST(req: Request) {
       return Response.json({
         ...object,
         sources,
-        quality: qualityMeta(report, repaired, retrievalDegraded),
+        sourceLabels: allowedSourceRefs,
+        quality: qualityMeta(report, repaired, retrievalDegraded, modelFallbackUsed),
       } satisfies GeneratedSlideDeck & { quality: QualityMeta });
     }
 
-    const generateDoc = async (prompt: string) => {
-      const { object } = await generateObject({
-        model,
-        schema: generatedDocSchemaFor(type),
-        system,
-        prompt,
-        temperature: 0.4,
+    const generateDoc = async (prompt: string) =>
+      withGenerationModel(async (model) => {
+        const { object } = await generateObject({
+          model,
+          schema: generatedDocSchemaFor(type),
+          system,
+          prompt,
+          temperature: 0.4,
+        });
+        return object;
       });
-      return object;
-    };
     let object = await generateDoc(buildGeneratePrompt(genReq));
     let report = inspectGenerationQuality(type, object, duration, allowedSourceRefs);
     let repaired = false;
@@ -212,7 +215,8 @@ export async function POST(req: Request) {
     return Response.json({
       ...object,
       sources,
-      quality: qualityMeta(report, repaired, retrievalDegraded),
+      sourceLabels: allowedSourceRefs,
+      quality: qualityMeta(report, repaired, retrievalDegraded, modelFallbackUsed),
     } satisfies GeneratedDoc & { quality: QualityMeta });
   } catch (e) {
     console.error("[generate] 실패:", e);

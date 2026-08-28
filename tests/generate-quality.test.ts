@@ -1,15 +1,24 @@
 import { describe, expect, it } from "vitest";
 import {
   LESSON_SECTIONS,
+  GENERATION_QUALITY_LABELS,
+  MAX_GENERATION_CONDITIONS_CHARS,
+  MAX_SLIDE_BULLET_CHARS,
+  MAX_SLIDE_STEP_CHARS,
+  MAX_SLIDE_TITLE_CHARS,
   TRAINING_PLAN_SECTIONS,
   buildGeneratePrompt,
   buildGenerateSystemPrompt,
   buildGenerationRepairPrompt,
+  buildSectionRegenPrompt,
+  buildSlideRegenPrompt,
   generatedDocSchemaFor,
   generatedLessonSchema,
   generatedPlanSchema,
   generatedSlidesSchema,
   extractSourceLabels,
+  generationQualityWarnings,
+  inspectCurrentGenerationQuality,
   inspectGeneratedLesson,
   inspectGeneratedPlan,
   inspectGeneratedSlides,
@@ -249,6 +258,66 @@ describe("생성 프롬프트 품질 계약", () => {
     expect(prompt).toContain("layout을 지정");
     expect(prompt).toContain("sourceRefs");
     expect(prompt).toContain("없는 출처를 만들지 마세요");
+    expect(prompt).toContain(`서술형 문장으로 쓰고 ${MAX_SLIDE_TITLE_CHARS}자`);
+    expect(prompt).toContain(`각 문장은 ${MAX_SLIDE_BULLET_CHARS}자`);
+    expect(prompt).toContain(`각 단계어는 ${MAX_SLIDE_STEP_CHARS}자`);
+  });
+
+  it("사용자가 입력한 현장 조건은 반영하고 입력하지 않은 수량은 추정하지 않는다", () => {
+    const conditions = "참여 12명 / 교관 2명 / 공기호흡기 6세트 / 실내 훈련장";
+    const withConditions = buildGeneratePrompt({
+      ...base,
+      type: "plan",
+      conditions,
+    });
+    expect(withConditions).toContain(`현장 조건(사용자 입력): ${conditions}`);
+    expect(withConditions).toContain("입력되지 않은 수량이나 조건을 추가로 추정하지 마세요");
+
+    const withoutConditions = buildGeneratePrompt({ ...base, type: "lesson" });
+    expect(withoutConditions).toContain("현장 조건: 입력되지 않음");
+    expect(withoutConditions).toContain(
+      "참여 인원·교관 수·조 편성 인원·장비 수량을 임의로 특정하지 마세요"
+    );
+  });
+
+  it("현장 조건은 프롬프트에서도 최대 500자로 제한하고 줄바꿈을 정리한다", () => {
+    const normalized = `실내 훈련장 ${"가".repeat(MAX_GENERATION_CONDITIONS_CHARS)}`;
+    const prompt = buildGeneratePrompt({
+      ...base,
+      type: "slides",
+      conditions: `  실내\n훈련장 ${"가".repeat(MAX_GENERATION_CONDITIONS_CHARS)}  `,
+    });
+    expect(prompt).toContain(
+      `현장 조건(사용자 입력): ${normalized.slice(0, MAX_GENERATION_CONDITIONS_CHARS)}`
+    );
+    expect(prompt).not.toContain(normalized.slice(0, MAX_GENERATION_CONDITIONS_CHARS + 1));
+  });
+
+  it("부분 재생성에도 같은 현장 조건과 수량 추정 금지 규칙을 적용한다", () => {
+    const sectionPrompt = buildSectionRegenPrompt({
+      category: base.category,
+      audience: base.audience,
+      duration: base.duration,
+      docTitle: "공기호흡기 교안",
+      outline: ["학습목표", "대원실습"],
+      index: 1,
+      currentHeading: "대원실습",
+      currentContent: "현재 내용",
+      conditions: "대원 8명 / 공기호흡기 4세트",
+    });
+    expect(sectionPrompt).toContain("현장 조건(사용자 입력): 대원 8명 / 공기호흡기 4세트");
+
+    const slidePrompt = buildSlideRegenPrompt({
+      category: base.category,
+      audience: base.audience,
+      duration: base.duration,
+      deckTitle: "공기호흡기 발표",
+      outline: ["점검 순서"],
+      index: 0,
+      current: validSlide(0),
+    });
+    expect(slidePrompt).toContain("현장 조건: 입력되지 않음");
+    expect(slidePrompt).toContain("장비 수량을 임의로 특정하지 마세요");
   });
 
   it("시스템 컨텍스트에서 실제 출처 라벨만 추출한다", () => {
@@ -343,6 +412,51 @@ describe("결정론적 생성 품질 검사", () => {
     expect(inspectGeneratedSlides(validSlides(), "1시간")).toEqual({ ok: true, issues: [] });
   });
 
+  it("슬라이드 제목·핵심 문장·단계어가 화면 한계를 넘으면 각각 보고한다", () => {
+    const deck = validSlides();
+    deck.slides[0] = {
+      ...deck.slides[0],
+      title: "제".repeat(MAX_SLIDE_TITLE_CHARS + 1),
+      bullets: [
+        "문".repeat(MAX_SLIDE_BULLET_CHARS + 1),
+        deck.slides[0].bullets[1],
+      ],
+      steps: ["단".repeat(MAX_SLIDE_STEP_CHARS + 1), "확인", "보고"],
+    };
+    const issues = inspectGeneratedSlides(deck, "1시간").issues;
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "slide_title_too_long",
+          path: "slides.0.title",
+        }),
+        expect.objectContaining({
+          code: "slide_bullet_too_long",
+          path: "slides.0.bullets.0",
+        }),
+        expect.objectContaining({
+          code: "slide_step_too_long",
+          path: "slides.0.steps.0",
+        }),
+      ])
+    );
+  });
+
+  it("API와 화면에서 쓸 품질 경고 라벨을 중복 없이 요약한다", () => {
+    const warnings = generationQualityWarnings({
+      ok: false,
+      issues: [
+        { code: "slide_title_too_long", path: "slides.0.title", message: "긴 제목" },
+        { code: "slide_title_too_long", path: "slides.1.title", message: "긴 제목" },
+        { code: "slide_bullet_too_long", path: "slides.0.bullets.0", message: "긴 문장" },
+      ],
+    });
+    expect(warnings).toEqual([
+      GENERATION_QUALITY_LABELS.slide_title_too_long,
+      GENERATION_QUALITY_LABELS.slide_bullet_too_long,
+    ]);
+  });
+
   it("실제 참고 자료에 없는 문서 출처를 품질 문제로 잡는다", () => {
     const allowed = ["[공기호흡기 교육교범 p.3]"];
     const deck = validSlides();
@@ -354,6 +468,37 @@ describe("결정론적 생성 품질 검사", () => {
     const plan = validPlan();
     expect(inspectGeneratedPlan(plan, "1시간", allowed).issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "missing_source_citation" })])
+    );
+  });
+
+  it("편집본은 API가 보관한 실제 출처 라벨로 다시 검사한다", () => {
+    const deck = {
+      ...validSlides(),
+      sources: [],
+      sourceLabels: ["[공기호흡기 교육교범 p.3]"],
+    };
+    deck.slides[0].sourceRefs = ["[만들어낸 교범 p.99]"];
+
+    expect(inspectCurrentGenerationQuality("slides", deck, "1시간").issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ code: "invalid_source_ref" })])
+    );
+  });
+
+  it("과거 저장본에 허용 출처 목록이 없으면 재검증 불가를 명확히 알린다", () => {
+    const legacyDeck = {
+      ...validSlides(),
+      sources: [],
+    };
+
+    const quality = inspectCurrentGenerationQuality("slides", legacyDeck, "1시간");
+    expect(quality.ok).toBe(false);
+    expect(quality.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "source_validation_unavailable", path: "sourceLabels" }),
+      ])
+    );
+    expect(GENERATION_QUALITY_LABELS.source_validation_unavailable).toBe(
+      "근거 출처 재검증 정보"
     );
   });
 });
@@ -370,6 +515,7 @@ describe("자동 보완 프롬프트", () => {
         audience: "신임 대원",
         duration: "1시간",
         topic: "공기호흡기 점검",
+        conditions: "대원 8명 / 장비 4세트",
       },
       draft,
       report: quality,
@@ -380,6 +526,7 @@ describe("자동 보완 프롬프트", () => {
     expect(prompt).toContain(JSON.stringify(draft, null, 2));
     expect(prompt).toContain("일반 상식·수치·절차·사례를 만들지 마세요");
     expect(prompt).toContain("전체 JSON 객체만 반환");
+    expect(prompt).toContain("현장 조건(사용자 입력): 대원 8명 / 장비 4세트");
   });
 
   it("통과한 결과에는 불필요한 보완 호출을 만들지 않는다", () => {

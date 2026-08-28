@@ -13,6 +13,7 @@ import {
   buildSpeakerNotes,
   downloadPptx,
   formatDeckSources,
+  MIN_BODY_FONT_SIZE,
   resolveSlideLayout,
 } from "@/lib/pptx";
 
@@ -98,6 +99,7 @@ describe("PPTX 발표자 노트 출처", () => {
 
 describe("PPTX 실제 파일 생성", () => {
   it("모든 의미 레이아웃과 슬라이드별 Sources 노트를 포함한 PPTX를 만든다", async () => {
+    expect(MIN_BODY_FONT_SIZE).toBeGreaterThanOrEqual(16);
     const requestedOutput = process.env.PPTX_QA_OUTPUT_DIR;
     const workDir = requestedOutput ?? mkdtempSync(join(tmpdir(), "rescueai-pptx-test-"));
     if (requestedOutput) mkdirSync(workDir, { recursive: true });
@@ -148,6 +150,17 @@ describe("PPTX 실제 파일 생성", () => {
       ).join("\n");
       expect(notesXml).toContain("[Sources]");
       expect(notesXml).toContain("[구조대원 교육교범 p.12]");
+
+      const slideXml = (
+        await Promise.all(
+          Object.keys(zip.files)
+            .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+            .map((name) => zip.files[name].async("string"))
+        )
+      ).join("\n");
+      // 번호·출처 같은 본문 보조 요소도 13~14pt 대신 16pt 기준을 사용한다.
+      expect(slideXml).not.toContain('sz="1300"');
+      expect(slideXml).not.toContain('sz="1400"');
     } finally {
       process.chdir(previousCwd);
       if (!requestedOutput) rmSync(workDir, { recursive: true, force: true });

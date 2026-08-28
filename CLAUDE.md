@@ -3,7 +3,7 @@
 전북소방 구조 교육훈련 플랫폼(AI 튜터 포함). 제품 명세 [`PRD.md`](PRD.md), 설치/실행 [`SETUP.md`](SETUP.md) 참조.
 
 ## 한 줄 요약
-구조대원이 **AI 튜터에게 질의(RAG·출처)**, **클릭 몇 번으로 훈련계획·교안 생성(+NotebookLM 프롬프트)**,
+구조대원이 **AI 튜터에게 질의(RAG·출처)**, **클릭 몇 번으로 훈련계획·교안·PPT 생성**,
 **자료실에서 원본 열람**을 하는 교육훈련 플랫폼 PoC.
 챗봇·생성 기능은 인덱싱된 교육자료에 근거(출처·페이지)해 동작하고, 근거가 없으면
 "확인되지 않습니다"로 답해 환각을 차단한다.
@@ -39,7 +39,7 @@ app/home /generate  홈 · AI 자료제작 (+/api/generate)
 app/notices /me /docs  공지 · 마이페이지 · 자료실
 app/admin/  통계 + documents(자료) · users(사용자) · notices(공지 작성)
 components/learning/      CategoryBadge(분야색)·ProgressBar 재사용 컴포넌트 (학습 로직은 제거됨)
-components/generate/      GenerateForm(입력) · DocResult/SlideDeckResult/NotebookLmResult(결과)
+components/generate/      GenerateForm(입력) · DocResult/SlideDeckResult(결과) · NotebookLmResult(저장본 호환)
                           · parts.tsx(공용 조각)
 scripts/import-users.mjs  명단(CSV) 일괄 계정 등록 (--random-password 옵션)
 scripts/build-setup-sql.mjs  마이그레이션 → setup_new_project.sql 생성 (npm run sql:setup)
@@ -61,10 +61,12 @@ eval/           평가셋 러너(vitest 통합)
 - 출동 마일리지·체력단련 기능은 **제거됨**(2026-08-27). 기존 `workout_logs` 데이터와 스키마는
   복구 가능성을 위해 보존하지만 앱에서는 조회·기록하지 않음.
 - AI 자료제작: `/generate` 클릭·선택형 UI → `/api/generate`(분야 자료 컨텍스트+generateObject).
-  구체적인 주제 입력 필수. 훈련계획은 고정 5개, 교안은 실습형 7개 섹션으로 생성하고 시간·안전·평가·
-  분량·중복·출처를 결정론적으로 점검해 필요한 경우 전체 초안을 한 번 보완한다. 문서는 DOCX/HWPX,
-  슬라이드는 의미별 레이아웃과 장별 `[Sources]` 노트가 있는 분야 색 표준 양식 PPTX로 다운로드,
-  NotebookLM 프롬프트는 클라이언트 조립(AI 미호출).
+  필수 입력은 자료 유형·분야·주제·대상·시간이고, 날짜·장소·현장 조건은 필요한 경우만 입력한다.
+  사용자에게 모델 선택을 요구하지 않고 정밀 생성 모델을 우선 사용한다. 훈련계획은 고정 5개, 교안은
+  실습형 7개 섹션으로 생성하고 시간·안전·평가·분량·중복·출처·슬라이드 밀도를 결정론적으로 점검해
+  필요한 경우 전체 초안을 한 번 보완한다. 문서는 DOCX/HWPX로 다운로드한다. 슬라이드는 16:9
+  미리보기에서 레이아웃·순서·단계를 편집할 수 있고, 장별 `[Sources]` 노트가 있는 분야 색 표준
+  양식 PPTX로 다운로드한다. 과거 NotebookLM 저장본은 재열람 호환만 유지한다.
 
 ## 보안 규칙 (필수)
 - `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`·`SUPABASE_SERVICE_ROLE_KEY` 는 **서버 전용**.

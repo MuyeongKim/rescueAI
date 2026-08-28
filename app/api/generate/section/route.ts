@@ -7,10 +7,13 @@ import {
   buildGenerateSystemPrompt,
   buildSectionRegenPrompt,
   buildSlideRegenPrompt,
+  extractSourceLabels,
+  MAX_GENERATION_CONDITIONS_CHARS,
   regeneratedSectionSchema,
   regeneratedSlideSchema,
   type Audience,
   type Duration,
+  type GeneratedDocSource,
   type GeneratedSection,
   type GeneratedSlide,
 } from "@/lib/generate";
@@ -26,6 +29,7 @@ type RegenBody = {
   audience?: Audience;
   duration?: Duration;
   topic?: string;
+  conditions?: string;
   model?: string;
   docTitle?: string;
   outline?: string[];
@@ -50,6 +54,10 @@ export async function POST(req: Request) {
   const index = body.index;
   const outline = Array.isArray(body.outline) ? body.outline.slice(0, 30) : [];
   const instruction = body.instruction?.slice(0, 200);
+  const conditions =
+    typeof body.conditions === "string"
+      ? body.conditions.trim().slice(0, MAX_GENERATION_CONDITIONS_CHARS) || undefined
+      : undefined;
 
   if (
     (kind !== "section" && kind !== "slide") ||
@@ -89,11 +97,11 @@ export async function POST(req: Request) {
   const rl = rateLimit(`generate-section:${auth.user.id}`, 20, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
-  const { contextText, degraded: retrievalDegraded } = await fetchCategoryContext(
-    category,
-    40,
-    body.topic
-  );
+  const {
+    contextText,
+    sources: regeneratedSources,
+    degraded: retrievalDegraded,
+  } = await fetchCategoryContext(category, 40, body.topic);
   if (!contextText) {
     return Response.json(
       { error: "해당 분야에 인덱싱된 자료가 없어 생성할 수 없습니다." },
@@ -103,58 +111,96 @@ export async function POST(req: Request) {
 
   try {
     const system = buildGenerateSystemPrompt(category, contextText);
-    const model = getChatModel(body.model);
-    const responseInit = retrievalDegraded
-      ? { headers: { "X-RAG-Degraded": "1" } }
-      : undefined;
+    const sourceLabels = extractSourceLabels(contextText);
+    let activeModelKey = body.model;
+    let modelFallbackUsed = false;
+    const withGenerationModel = async <T,>(
+      run: (model: ReturnType<typeof getChatModel>) => Promise<T>
+    ): Promise<T> => {
+      try {
+        return await run(getChatModel(activeModelKey));
+      } catch (error) {
+        if (activeModelKey !== "gemini-pro") throw error;
+        activeModelKey = "gemini-flash";
+        modelFallbackUsed = true;
+        console.warn(
+          "[generate/section] 정밀 모델 호출 실패, 빠른 모델로 한 번 재시도:",
+          error instanceof Error ? error.message : "unknown error"
+        );
+        return run(getChatModel(activeModelKey));
+      }
+    };
+    const responseInit = () => {
+      const headers: Record<string, string> = {};
+      if (retrievalDegraded) headers["X-RAG-Degraded"] = "1";
+      if (modelFallbackUsed) headers["X-Model-Fallback"] = "1";
+      return Object.keys(headers).length > 0 ? { headers } : undefined;
+    };
 
     if (kind === "slide") {
       const cur = body.current as GeneratedSlide;
-      const { object } = await generateObject({
+      const object = await withGenerationModel(async (model) => {
+        const generated = await generateObject({
+          model,
+          schema: regeneratedSlideSchema,
+          system,
+          prompt: buildSlideRegenPrompt({
+            category,
+            audience,
+            duration,
+            deckTitle: body.docTitle ?? `${category} 발표`,
+            outline,
+            index,
+            current: {
+              title: cur.title ?? "",
+              bullets: cur.bullets ?? [],
+              notes: cur.notes ?? "",
+            },
+            conditions,
+            instruction,
+          }),
+          temperature: 0.5,
+        });
+        return generated.object;
+      });
+      return Response.json(
+        { ...object, sourceLabels, sources: regeneratedSources } satisfies GeneratedSlide & {
+          sourceLabels: string[];
+          sources: GeneratedDocSource[];
+        },
+        responseInit()
+      );
+    }
+
+    const cur = body.current as GeneratedSection;
+    const object = await withGenerationModel(async (model) => {
+      const generated = await generateObject({
         model,
-        schema: regeneratedSlideSchema,
+        schema: regeneratedSectionSchema,
         system,
-        prompt: buildSlideRegenPrompt({
+        prompt: buildSectionRegenPrompt({
           category,
           audience,
           duration,
-          deckTitle: body.docTitle ?? `${category} 발표`,
+          docTitle: body.docTitle ?? `${category} 교육 문서`,
           outline,
           index,
-          current: {
-            title: cur.title ?? "",
-            bullets: cur.bullets ?? [],
-            notes: cur.notes ?? "",
-          },
+          currentHeading: cur.heading ?? "",
+          currentContent: cur.content ?? "",
+          conditions,
           instruction,
         }),
         temperature: 0.5,
       });
-      return Response.json(object satisfies GeneratedSlide, responseInit);
-    }
-
-    const cur = body.current as GeneratedSection;
-    const { object } = await generateObject({
-      model,
-      schema: regeneratedSectionSchema,
-      system,
-      prompt: buildSectionRegenPrompt({
-        category,
-        audience,
-        duration,
-        docTitle: body.docTitle ?? `${category} 교육 문서`,
-        outline,
-        index,
-        currentHeading: cur.heading ?? "",
-        currentContent: cur.content ?? "",
-        instruction,
-      }),
-      temperature: 0.5,
+      return generated.object;
     });
     // 부분 보완이 훈련계획·교안의 고정 구조를 깨지 않도록 제목은 기존 값을 유지한다.
     return Response.json(
-      { ...object, heading: cur.heading } satisfies GeneratedSection,
-      responseInit
+      { ...object, heading: cur.heading, sourceLabels, sources: regeneratedSources } satisfies GeneratedSection & {
+        sourceLabels: string[];
+        sources: GeneratedDocSource[];
+      },
+      responseInit()
     );
   } catch (e) {
     console.error("[generate/section] 실패:", e);

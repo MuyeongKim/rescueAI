@@ -2,8 +2,8 @@
 //
 // 두 가지 사용법:
 //  1) 환경변수 기본값 — LLM_PROVIDER(claude|gemini|openai-compat) 로 서버 전역 기본 모델 지정
-//  2) 폼에서 모델 선택 — getChatModel("gemini-2.5-pro") 처럼 모델 키를 넘기면 그 모델 사용
-//     (선택지는 MODEL_OPTIONS 중 자격증명이 갖춰진 것만 availableModels() 가 노출)
+//  2) 호출부에서 모델 지정 — getChatModel("gemini-pro") 처럼 모델 키를 넘기면 그 모델 사용
+//     (자료제작은 availableModels() 안에서 정밀 모델을 자동 우선하고, 튜터는 화면 선택을 유지)
 import { anthropic } from "@ai-sdk/anthropic";
 import { google } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";

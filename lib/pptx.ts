@@ -25,6 +25,9 @@ const CONTENT_WIDTH = SLIDE_WIDTH - MARGIN_X * 2;
 const CONTENT_TOP = 1.66;
 const CONTENT_BOTTOM = 6.78;
 
+/** 발표 화면에서 실제 교육 내용을 읽을 수 있도록 보장하는 본문 최소 기준. */
+export const MIN_BODY_FONT_SIZE = 16;
+
 export type RenderLayout =
   | "objectives"
   | "process"
@@ -253,7 +256,7 @@ export async function downloadPptx(
         w: 0.62,
         h: 0.62,
         fontFace: FONT,
-        fontSize: 14,
+        fontSize: MIN_BODY_FONT_SIZE,
         color: index === 0 ? "FFFFFF" : accent,
         bold: true,
         align: "center",
@@ -500,7 +503,7 @@ export async function downloadPptx(
         w: 0.55,
         h: 0.38,
         fontFace: FONT,
-        fontSize: 14,
+        fontSize: MIN_BODY_FONT_SIZE,
         color: accent,
         bold: true,
         margin: 0,
@@ -643,7 +646,7 @@ export async function downloadPptx(
         w: 0.52,
         h: 0.36,
         fontFace: FONT,
-        fontSize: 14,
+        fontSize: MIN_BODY_FONT_SIZE,
         color: accent,
         bold: true,
         margin: 0,
@@ -806,10 +809,10 @@ export async function downloadPptx(
       last.addText(String(chunkIndex * 7 + index + 1).padStart(2, "0"), {
         x: 0.82,
         y,
-        w: 0.52,
+        w: 0.58,
         h: 0.35,
         fontFace: FONT,
-        fontSize: 13,
+        fontSize: MIN_BODY_FONT_SIZE,
         color: accent,
         bold: true,
         margin: 0,
@@ -817,7 +820,7 @@ export async function downloadPptx(
       last.addText(source.doc, {
         x: 1.54,
         y: y - 0.05,
-        w: 9.63,
+        w: 9.08,
         h: 0.48,
         fontFace: FONT,
         fontSize: 18,
@@ -828,12 +831,12 @@ export async function downloadPptx(
         fit: "shrink",
       });
       last.addText(source.page != null ? `p.${source.page}` : "페이지 정보 없음", {
-        x: 11.3,
+        x: 10.82,
         y: y - 0.03,
-        w: 1.18,
+        w: 1.66,
         h: 0.35,
         fontFace: FONT,
-        fontSize: 13,
+        fontSize: MIN_BODY_FONT_SIZE,
         color: GRAY,
         align: "right",
         margin: 0,
