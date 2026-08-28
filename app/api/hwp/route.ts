@@ -72,6 +72,33 @@ export async function POST(req: Request) {
 
   if (body.template === "training_plan") {
     const m = body.plan ?? {};
+    const planSections = {
+      goal: pick(sections, "목표"),
+      content: pick(sections, "내용"),
+      equipment: pick(sections, "장비"),
+      safety: pick(sections, "안전"),
+      evaluation: pick(sections, "평가"),
+    };
+    const requiredLabels: Record<keyof typeof planSections, string> = {
+      goal: "훈련 목표",
+      content: "훈련 내용",
+      equipment: "필요 장비",
+      safety: "안전 유의사항",
+      evaluation: "평가 기준",
+    };
+    const missing = (Object.keys(planSections) as (keyof typeof planSections)[])
+      .filter((keyName) => !planSections[keyName])
+      .map((keyName) => requiredLabels[keyName]);
+
+    if (missing.length > 0) {
+      return Response.json(
+        {
+          error: `훈련계획 필수 항목이 비어 있습니다: ${missing.join(", ")}. 생성 결과를 보완한 뒤 다시 내려받아 주세요.`,
+        },
+        { status: 422 }
+      );
+    }
+
     endpoint = `${base}/generate/template`;
     payload = {
       template_name: "training_plan.hwpx",
@@ -85,11 +112,7 @@ export async function POST(req: Request) {
         target: m.target ?? "",
         place: m.place ?? "",
         // AI 생성 5개 섹션 → 고정 제목으로 확정 매핑
-        goal: pick(sections, "목표"),
-        content: pick(sections, "내용"),
-        equipment: pick(sections, "장비"),
-        safety: pick(sections, "안전"),
-        evaluation: pick(sections, "평가"),
+        ...planSections,
       },
     };
   } else {

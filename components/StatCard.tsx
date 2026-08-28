@@ -1,7 +1,7 @@
 import type { LucideIcon } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
-// 통계/요약 지표 카드 — 관리자 대시보드·체력단련에서 공용.
+// 관리자 대시보드용 통계/요약 지표 카드.
 export function StatCard({
   icon: Icon,
   label,

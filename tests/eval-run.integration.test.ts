@@ -1,4 +1,4 @@
-// 평가셋 러너(현재 운영 경로): expandQuery→getQueryEmbedding(ollama)→searchRag2026→Gemini 답변.
+// 평가셋 러너(현재 운영 경로): searchContext(쿼리 확장·임베딩·외부 RAG)→LLM 답변.
 // 채점은 eval/run.mjs 와 동일 휴리스틱(키워드/문구 포함). RUN_INTEGRATION=1 일 때만 실행.
 //   RUN_INTEGRATION=1 npx vitest run tests/eval-run.integration.test.ts --reporter=verbose
 import { readFileSync } from "node:fs";
@@ -26,9 +26,7 @@ describe.skipIf(process.env.RUN_INTEGRATION !== "1")("평가셋 러너(운영 �
 
   it("eval 평가셋 정확도", async () => {
     const file = process.env.EVAL_FILE || "eval/questions.example.jsonl";
-    const { expandQuery, searchRag2026 } = await import("@/lib/rag2026");
-    const { getQueryEmbedding } = await import("@/lib/embeddings");
-    const { buildSystemPrompt } = await import("@/lib/rag");
+    const { searchContext, buildSystemPrompt } = await import("@/lib/rag");
     const { getChatModel } = await import("@/lib/llm");
 
     const items = readFileSync(file, "utf-8")
@@ -39,9 +37,7 @@ describe.skipIf(process.env.RUN_INTEGRATION !== "1")("평가셋 러너(운영 �
     for (let i = 0; i < items.length; i++) {
       const q = items[i];
       try {
-        const { embedText, keywords } = await expandQuery(q.question);
-        const embedding = await getQueryEmbedding(embedText);
-        const r = await searchRag2026(q.question, embedding, 5, q.category || null, keywords);
+        const r = await searchContext(q.question, q.category || null);
         const { text } = await generateText({
           model: getChatModel(),
           system: buildSystemPrompt(r.contextText),

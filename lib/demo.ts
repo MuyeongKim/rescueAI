@@ -1,6 +1,5 @@
 // 키 없는 데모/미리보기 모드. NEXT_PUBLIC_DEMO_MODE=1 일 때 Supabase/Anthropic/OpenAI 호출 없이
 // 목 데이터로 전체 UI를 둘러볼 수 있게 한다. 실제 흐름 코드는 if (DEMO) 가드로만 분기.
-import { calcWeekly } from "@/lib/fitness";
 import { kstDateStr } from "@/lib/kst";
 import type { DocSource } from "@/lib/database.types";
 import type { GeneratedDoc, GeneratedSlideDeck } from "@/lib/generate";
@@ -67,24 +66,29 @@ export const demoGeneratedDoc: GeneratedDoc = {
   title: "화재 분야 훈련계획 — 공기호흡기 착용·내화 진입 (2시간)",
   sections: [
     {
-      heading: "1. 훈련 개요",
+      heading: "훈련목표",
       content:
-        "대상: 일반 구조대원 / 시간: 2시간 / 장소: 소방서 훈련장\n목표: 공기호흡기 사용 전 점검 절차를 숙달하고, 내화 진입 시 대형 유지 요령을 체득한다.",
+        "· 공기호흡기 사용 전 점검 4단계를 순서대로 설명하고 누락 없이 수행한다.\n· 양압 상태를 확인한 뒤 2인 1조 대형을 유지하며 모의 진입을 수행한다. [공기호흡기 착용 절차 p.3]",
     },
     {
-      heading: "2. 준비물·안전조치",
+      heading: "훈련내용",
       content:
-        "공기호흡기 세트(인원수+예비 1), 방화복, 열화상카메라 1대.\n훈련 전 실린더 충전 압력(약 300bar)과 잔압 경보장치 작동을 전수 점검하고, 안전관리관 1명을 지정한다.",
+        "[이론교육 · 20분] 점검 4단계의 목적과 잔압 경보의 의미 설명.\n[교관시범 · 30분] 면체 밀착 → 충전 압력 → 잔압 경보 → 양압 누설 순서 시범.\n[반복실습 · 50분] 2인 1조로 역할을 바꾸어 착용·교차 점검하고 즉시 피드백.\n[종합수행 · 20분] 양압 유지 상태로 모의 진입하여 대형 유지와 상호 확인 수행. [공기호흡기 착용 절차 p.3]",
     },
     {
-      heading: "3. 단계별 진행 (120분)",
+      heading: "필요장비",
       content:
-        "① 이론·시범 (30분): 면체 밀착 점검 → 충전 압력 확인 → 잔압 경보 확인 → 양압 누설 점검 순서 시범.\n② 분임 실습 (60분): 2인 1조로 착용 절차 반복, 조별 교차 점검.\n③ 종합 훈련 (30분): 양압 유지 상태로 농연 환경 모의 진입, 대형 유지·상호 확인 훈련.",
+        "· 공기호흡기 세트: 대원별 1세트, 사용 전 충전 압력·경보장치·면체 결합 상태 점검.\n· 방화복과 개인보호장비: 착용 상태 상호 점검.\n· 열화상카메라: 모의 진입 시 시야 보완용 1대.",
     },
     {
-      heading: "4. 평가·강평",
+      heading: "안전관리",
       content:
-        "착용 절차 4단계 누락 없이 수행하는지 조별 체크리스트로 확인하고, 진입 훈련 중 대형 이탈 사례를 강평에서 공유한다.",
+        "· 안전관리관 1명을 지정하고 실습 전 장비 이상·대원 건강 상태·훈련구역 위험요소 확인.\n· 압력 미달, 경보장치 불량, 면체 누설 또는 대형 이탈 시 즉시 훈련 중단.\n· 이상 발견 대원은 교관과 안전관리관에게 보고하고 원인이 해소되기 전 재개 금지.",
+    },
+    {
+      heading: "훈련평가",
+      content:
+        "· 체크리스트로 면체 밀착, 충전 압력, 잔압 경보, 양압 누설 점검의 순서와 누락 여부 관찰.\n· 4단계를 순서대로 모두 수행하고 이상 상태를 정확히 보고하면 통과.\n· 누락 항목은 강평 후 해당 단계부터 다시 시연하여 기준 충족 여부 확인.",
     },
   ],
   sources: [
@@ -105,6 +109,8 @@ export const demoGeneratedSlides: GeneratedSlideDeck = {
       ],
       notes:
         "이번 교육의 세 가지 목표를 먼저 공유합니다. 점검 절차는 순서가 핵심이므로 4단계를 끝까지 강조해 주세요.",
+      layout: "objectives",
+      sourceRefs: ["[공기호흡기 착용 절차 p.3]"],
     },
     {
       title: "점검 1단계 — 면체 밀착 확인",
@@ -114,24 +120,33 @@ export const demoGeneratedSlides: GeneratedSlideDeck = {
       ],
       notes:
         "가장 먼저 면체 밀착 상태를 확인합니다. 머리카락이나 두건이 끼면 밀착이 깨질 수 있다는 점을 시범으로 보여주세요.",
+      layout: "concept",
+      sourceRefs: ["[공기호흡기 착용 절차 p.3]"],
     },
     {
       title: "점검 2단계 — 충전 압력 확인",
       bullets: ["잔압계로 충전 압력 확인 (통상 약 300bar)", "기준 미달 실린더는 교체"],
       notes:
         "잔압계를 직접 보여주며 300bar 내외 기준을 설명합니다. 압력이 낮은 실린더를 들고 진입하는 사례가 없도록 강조하세요.",
+      steps: ["압력 확인", "기준 비교", "교체 판단"],
+      layout: "process",
+      sourceRefs: ["[공기호흡기 착용 절차 p.3]"],
     },
     {
       title: "점검 3단계 — 잔압 경보 확인",
       bullets: ["경보장치 작동 여부 점검", "공기 잔량 부족 시 탈출 신호"],
       notes:
         "잔압 경보는 탈출 타이밍을 알려주는 생명줄입니다. 경보음을 실제로 들려주고 울리면 즉시 탈출이라는 원칙을 심어주세요.",
+      layout: "equipment",
+      sourceRefs: ["[공기호흡기 착용 절차 p.3]"],
     },
     {
       title: "점검 4단계 — 양압 누설 점검",
       bullets: ["양압 작동 상태에서 면체 누설 확인", "점검 완료 후 양압 유지한 채 진입"],
       notes:
         "양압 상태에서 면체 가장자리 누설을 확인합니다. 여기까지 4단계가 끝나야 진입 준비가 완료됩니다.",
+      layout: "safety",
+      sourceRefs: ["[공기호흡기 착용 절차 p.4]"],
     },
     {
       title: "내화 진입 — 대형 유지",
@@ -142,6 +157,8 @@ export const demoGeneratedSlides: GeneratedSlideDeck = {
       ],
       notes:
         "농연 속에서는 1m 앞도 보이지 않습니다. 대형 유지가 곧 상호 안전 확보임을 사례와 함께 설명하세요.",
+      layout: "case",
+      sourceRefs: ["[내화 진입과 대형 유지 p.2]"],
     },
     {
       title: "핵심 요약",
@@ -151,6 +168,8 @@ export const demoGeneratedSlides: GeneratedSlideDeck = {
         "대형 유지 = 상호 안전",
       ],
       notes: "마지막으로 점검 순서를 구호로 함께 복창하며 마무리합니다.",
+      layout: "summary",
+      sourceRefs: ["[공기호흡기 착용 절차 p.3]", "[내화 진입과 대형 유지 p.2]"],
     },
   ],
   sources: [
@@ -177,46 +196,7 @@ export const demoNotices = [
     pinned: false,
     created_at: "2026-06-02T14:30:00.000Z",
   },
-  {
-    id: 1,
-    title: "체력단련 마일리지 제도 시행",
-    content:
-      "운동 기록을 등록하면 1분당 1마일리지가 적립됩니다(일일 상한 120점). 월간 랭킹은 체력단련 메뉴에서 확인할 수 있습니다.",
-    pinned: false,
-    created_at: "2026-05-28T08:00:00.000Z",
-  },
 ];
-
-// ── 체력단련 마일리지 ──
-export function getDemoFitnessState() {
-  // 주차 라벨은 실제 달력 기준으로 생성하고 값만 보기 좋은 가짜 추이를 넣는다.
-  const weekly = calcWeekly([]).map((w, i) => ({
-    ...w,
-    points: [140, 180, 150, 210, 95, 160, 240, 195][i] ?? 0,
-  }));
-  return {
-    totalPoints: 1240,
-    monthPoints: 380,
-    monthRank: 3,
-    streakDays: 4,
-    weekly,
-    recent: [
-      { id: 6, activity: "달리기", duration_min: 40, note: "5km 인터벌", points: 40, performed_on: "2026-06-09" },
-      { id: 5, activity: "근력운동", duration_min: 60, note: "하체·코어", points: 60, performed_on: "2026-06-08" },
-      { id: 4, activity: "등산", duration_min: 120, note: "모악산 훈련", points: 120, performed_on: "2026-06-06" },
-      { id: 3, activity: "수영", duration_min: 45, note: null, points: 45, performed_on: "2026-06-04" },
-      { id: 2, activity: "달리기", duration_min: 30, note: null, points: 30, performed_on: "2026-06-02" },
-      { id: 1, activity: "근력운동", duration_min: 50, note: "상체", points: 50, performed_on: "2026-06-01" },
-    ],
-    leaderboard: [
-      { user_id: "u1", full_name: "김구조", division: "전주 119구조대", total_points: 520 },
-      { user_id: "u2", full_name: "이수난", division: "군산 119구조대", total_points: 455 },
-      { user_id: "demo-user", full_name: "데모 대원", division: "전북소방 구조대", total_points: 380 },
-      { user_id: "u3", full_name: "박산악", division: "남원 119구조대", total_points: 310 },
-      { user_id: "u4", full_name: "최화재", division: "익산 119구조대", total_points: 265 },
-    ],
-  };
-}
 
 // ── 관리자: 사용자 목록 ──
 export const demoUsers = [
@@ -258,8 +238,5 @@ export function getDemoAdminStats() {
       { q: "유압전개기 안전 사용 수칙", count: 14 },
       { q: "로프 하강 시 확보 방법", count: 11 },
     ],
-    fitnessActiveUsers: 18,
-    fitnessMonthPoints: 5840,
-    fitnessTotalLogs: 214,
   };
 }

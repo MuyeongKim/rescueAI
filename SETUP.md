@@ -29,7 +29,7 @@ Supabase 대시보드 → **SQL Editor** 에서 아래 파일을 **순서대로*
 2. `supabase/migrations/0002_hybrid_search.sql` (하이브리드 검색 RPC)
 3. `supabase/migrations/0003_triggers_rls.sql` (트리거 + RLS)
 4. `supabase/migrations/0004_learning.sql` (학습 진도 — 교육훈련 플랫폼)
-5. `supabase/migrations/0005_platform.sql` (공지 + 체력 마일리지)
+5. `supabase/migrations/0005_platform.sql` (공지 + 제거된 체력 기능의 보존 스키마)
 6. `supabase/migrations/0006_remove_quiz.sql` (퀴즈 제거 — 이수 기준 변경)
 
 > Supabase CLI가 있으면 `supabase db push` 로도 적용 가능합니다.

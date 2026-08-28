@@ -37,12 +37,22 @@ import {
   OptionGroup,
   ResultSkeleton,
   StepHeader,
+  type GenerationQuality,
   type RegenState,
   type ResultChrome,
 } from "@/components/generate/parts";
 import { DocResult } from "@/components/generate/DocResult";
 import { NotebookLmResult } from "@/components/generate/NotebookLmResult";
 import { SlideDeckResult } from "@/components/generate/SlideDeckResult";
+
+const TOPIC_SUGGESTIONS: Record<string, readonly string[]> = {
+  화재: ["공기호흡기 점검과 착용", "고립소방관 구조 절차", "화재현장 인명검색 안전수칙"],
+  수난: ["급류구조 안전수칙", "잠수구조 사전 점검", "구명보트 운용과 전복 대응"],
+  산악: ["로프 하강과 확보", "들것 결착과 환자 운반", "산악구조 안전관리"],
+  일반구조: ["교통사고 구조장비 운용", "문 개방 구조 절차", "중량물 인양 안전수칙"],
+  "현장지휘·공통": ["구조현장 지휘체계", "대원 안전관리와 위험성 평가", "현장 통신과 상황보고"],
+  화학사고: ["화학사고 초동대응", "보호복 착용과 오염통제", "누출물질 확인과 안전구역 설정"],
+};
 
 export function GenerateForm({
   docsByCategory,
@@ -62,6 +72,7 @@ export function GenerateForm({
   const [audience, setAudience] = useState<Audience>(asAudience(initialMaterial?.audience));
   const [duration, setDuration] = useState<Duration>(asDuration(initialMaterial?.duration));
   const [topic, setTopic] = useState(initialMaterial?.topic ?? "");
+  const [topicError, setTopicError] = useState(false);
   const [date, setDate] = useState("");
   // 훈련계획 양식(training_plan.hwpx) 전용 폼 입력
   const [place, setPlace] = useState("");
@@ -83,14 +94,20 @@ export function GenerateForm({
   const [resultKind, setResultKind] = useState<GenType | null>(initialMaterial?.kind ?? null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  const [quality, setQuality] = useState<GenerationQuality | null>(null);
   const [loadedId, setLoadedId] = useState<number | null>(initialMaterial?.id ?? null); // 재편집 대상 id
 
-  const genReq = { type, category, audience, duration, topic, date, place, model };
+  const genReq = { type, category, audience, duration, topic: topic.trim(), date, place, model };
   const subtitle = `대상: ${audience} · 교육 시간: ${duration}${date ? ` · ${date}` : ""}`;
+  const connectedDocs = docsByCategory[category]?.length ?? 0;
+  const suggestions =
+    TOPIC_SUGGESTIONS[category] ??
+    ([`${category} 핵심 절차`, `${category} 장비 점검`, `${category} 안전수칙`] as const);
 
   // 결과 부분 편집 — 편집 내용은 그대로 다운로드/복사에 반영된다(빌더가 state를 받음).
   function patchSection(i: number, patch: Partial<GeneratedSection>) {
     setSaved(false);
+    setQuality(null);
     setDoc((prev) =>
       prev
         ? { ...prev, sections: prev.sections.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
@@ -99,6 +116,7 @@ export function GenerateForm({
   }
   function patchSlide(i: number, patch: Partial<GeneratedSlide>) {
     setSaved(false);
+    setQuality(null);
     setDeck((prev) =>
       prev
         ? { ...prev, slides: prev.slides.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
@@ -107,6 +125,7 @@ export function GenerateForm({
   }
   function patchBullet(slideI: number, bulletI: number, value: string) {
     setSaved(false);
+    setQuality(null);
     setDeck((prev) =>
       prev
         ? {
@@ -175,10 +194,22 @@ export function GenerateForm({
   }
 
   async function handleGenerate() {
+    const trimmedTopic = topic.trim();
+    if (trimmedTopic.length < 2) {
+      setTopicError(true);
+      document.getElementById("topic")?.focus();
+      toast.error("훈련 주제를 입력해 주세요", {
+        description: "구체적인 주제가 있어야 관련 교범을 정확히 찾아 좋은 자료를 만들 수 있습니다.",
+      });
+      return;
+    }
+
+    setTopicError(false);
     setCopied(false);
     setEditing(false);
     setRegenIdx(null);
     setSaved(false);
+    setQuality(null);
     setResultKind(null);
     setLoadedId(null); // 새 생성은 저장 안 된 새 결과
     setDoc(null);
@@ -206,9 +237,12 @@ export function GenerateForm({
         });
         return;
       }
-      const json = await res.json();
-      if (type === "slides") setDeck(json as GeneratedSlideDeck);
-      else setDoc(json as GeneratedDoc);
+      const json = (await res.json()) as Record<string, unknown> & {
+        quality?: GenerationQuality;
+      };
+      setQuality(json.quality ?? null);
+      if (type === "slides") setDeck(json as unknown as GeneratedSlideDeck);
+      else setDoc(json as unknown as GeneratedDoc);
       setResultKind(type);
     } catch {
       toast.error("생성 중 오류가 발생했습니다.");
@@ -334,8 +368,10 @@ export function GenerateForm({
       if (via === "local") {
         toast.info("한글 작성 서버 미연결 — 기본 양식으로 생성했습니다");
       }
-    } catch {
-      toast.error("한글 파일 생성에 실패했습니다");
+    } catch (error) {
+      toast.error("한글 파일 생성에 실패했습니다", {
+        description: error instanceof Error ? error.message : undefined,
+      });
     }
   }
 
@@ -503,25 +539,73 @@ export function GenerateForm({
 
           <div className="h-px bg-border/60" />
 
-          {/* STEP 03 — 세부 설정(선택) */}
+          {/* STEP 03 — 검색 품질을 좌우하는 주제와 세부 설정 */}
           <section
             className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none"
             style={{ animationDelay: "140ms", animationFillMode: "backwards" }}
           >
-            <StepHeader n="03" title="세부 설정" hint="선택" />
+            <StepHeader n="03" title="무엇을 훈련할까요" hint="주제는 필수예요" />
+            <div
+              className="border-l-4 bg-muted/45 px-3 py-2.5"
+              style={{ borderLeftColor: accent }}
+            >
+              <p className="text-sm font-medium">
+                주제가 구체적일수록 교범의 정확한 절차를 찾습니다.
+              </p>
+              <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                현재 {category} 분야 자료 {connectedDocs}개 연결 · 목표, 절차, 장비, 안전사항을 함께
+                점검해 구성합니다.
+              </p>
+              {connectedDocs === 1 && (
+                <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+                  연결 자료가 1개라 해당 교범 범위 안에서만 작성됩니다.
+                </p>
+              )}
+            </div>
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label htmlFor="topic" className="text-sm font-medium">
-                  훈련 내용(주제)
+                  훈련 내용(주제) <span className="text-destructive">*</span>
                 </Label>
                 <Input
                   id="topic"
                   placeholder="예: 공기호흡기 점검 절차"
                   value={topic}
-                  onChange={(e) => setTopic(e.target.value)}
+                  onChange={(e) => {
+                    setTopic(e.target.value);
+                    if (e.target.value.trim().length >= 2) setTopicError(false);
+                  }}
                   maxLength={100}
-                  className="h-12 text-base md:h-10"
+                  aria-invalid={topicError}
+                  aria-describedby="topic-help"
+                  className={cn("h-12 text-base md:h-10", topicError && "border-destructive")}
                 />
+                <p
+                  id="topic-help"
+                  className={cn(
+                    "text-xs leading-relaxed",
+                    topicError ? "font-medium text-destructive" : "text-muted-foreground"
+                  )}
+                >
+                  {topicError
+                    ? "훈련 주제를 두 글자 이상 입력해 주세요."
+                    : "한 문장만 적으면 관련 자료를 찾아 교육 흐름까지 구성합니다."}
+                </p>
+                <div className="flex flex-wrap gap-1.5 pt-1" aria-label="추천 훈련 주제">
+                  {suggestions.map((suggestion) => (
+                    <button
+                      key={suggestion}
+                      type="button"
+                      onClick={() => {
+                        setTopic(suggestion);
+                        setTopicError(false);
+                      }}
+                      className="min-h-9 rounded-full border border-border bg-background px-3 text-left text-xs font-medium text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {suggestion}
+                    </button>
+                  ))}
+                </div>
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="date" className="text-sm font-medium">
@@ -620,6 +704,11 @@ export function GenerateForm({
                   {category}
                 </Badge>
               )}
+              {topic.trim() && (
+                <Badge variant="secondary" className="max-w-full font-normal">
+                  <span className="truncate">{topic.trim()}</span>
+                </Badge>
+              )}
               <Badge variant="secondary" className="font-normal">
                 {audience}
               </Badge>
@@ -638,7 +727,7 @@ export function GenerateForm({
               ) : (
                 <Wand2 className="h-5 w-5" />
               )}
-              {loading ? "생성 중… (수십 초 걸릴 수 있어요)" : `${typeMeta.label} 만들기`}
+              {loading ? "자료를 찾고 초안을 점검하는 중…" : `${typeMeta.label} 만들기`}
             </Button>
           </div>
         </CardContent>
@@ -662,8 +751,10 @@ export function GenerateForm({
           deck={deck}
           chrome={chrome}
           regen={makeRegen("slide")}
+          quality={quality}
           onTitleChange={(title) => {
             setSaved(false);
+            setQuality(null);
             setDeck((prev) => (prev ? { ...prev, title } : prev));
           }}
           onPatchSlide={patchSlide}
@@ -679,8 +770,10 @@ export function GenerateForm({
           chrome={chrome}
           regen={makeRegen("section")}
           copied={copied}
+          quality={quality}
           onTitleChange={(title) => {
             setSaved(false);
+            setQuality(null);
             setDoc((prev) => (prev ? { ...prev, title } : prev));
           }}
           onPatchSection={patchSection}

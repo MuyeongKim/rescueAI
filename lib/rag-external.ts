@@ -161,6 +161,48 @@ function refine(rows: RagRow[], keep: number): { meta: RagRow["metadata"]; text:
   return out;
 }
 
+// 관련도 순서(각 문서에서 처음 등장한 순서)는 유지하면서 문서별로 한 청크씩 번갈아 고른다.
+// 단일 문서뿐인 분야는 원래 순서대로 limit까지 채워져 자료량이 줄지 않는다.
+export function selectSourceDiverse<T>(
+  items: readonly T[],
+  limit: number,
+  sourceKeyOf: (item: T) => string
+): T[] {
+  const take = Math.max(0, Math.floor(limit));
+  if (take === 0 || items.length === 0) return [];
+
+  const buckets = new Map<string, T[]>();
+  for (const item of items) {
+    const key = sourceKeyOf(item);
+    const bucket = buckets.get(key);
+    if (bucket) bucket.push(item);
+    else buckets.set(key, [item]);
+  }
+
+  const selected: T[] = [];
+  let position = 0;
+  while (selected.length < take) {
+    let added = false;
+    for (const bucket of Array.from(buckets.values())) {
+      const item = bucket[position];
+      if (item === undefined) continue;
+      selected.push(item);
+      added = true;
+      if (selected.length >= take) break;
+    }
+    if (!added) break;
+    position += 1;
+  }
+  return selected;
+}
+
+function documentSourceKey(meta: RagRow["metadata"]): string {
+  const documentId = documentIdOf(meta);
+  if (documentId > 0) return `document:${documentId}`;
+  const source = meta?.source?.trim();
+  return `source:${source || "자료"}`;
+}
+
 // RRF(Reciprocal Rank Fusion): 여러 순위 리스트를 id 기준으로 융합. score=Σ 1/(k+rank).
 function rrfFuse(lists: RagRow[][], k = 60): RagRow[] {
   const score = new Map<string, number>();
@@ -338,11 +380,13 @@ export async function searchExternalRag(
   keywordTerms: string[] = []
 ): Promise<SearchResult> {
   const supabase = await createClient();
+  // 지나치게 큰 호출값으로 컨텍스트가 폭증하지 않게 하되, 호출자가 요청한 topK는 존중한다.
+  const keep = Math.max(1, Math.min(topK, 10));
   // 노이즈(목차·총론)가 섞여도 본문 청크가 충분히 남도록 후보를 넉넉히 받는다.
-  const candidateCount = Math.max(40, topK * 6);
+  const candidateCount = Math.max(40, keep * 6);
   const kwQuery = buildKeywordQuery(query, keywordTerms);
 
-  // ①② 하이브리드 후보 → ③ RRF 융합 → ④ 정제·노이즈 제외(후보 12) → ⑤ LLM 재순위(상위 8)
+  // ①② 하이브리드 후보 → ③ RRF 융합 → ④ 정제·노이즈 제외 → ⑤ LLM 재순위
   const candidates = await hybridCandidates(
     supabase,
     embedding,
@@ -354,11 +398,11 @@ export async function searchExternalRag(
   if (fused.length === 0) {
     return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded };
   }
-  const refined = refine(fused, 12);
+  const refined = refine(fused, Math.max(12, keep * 2));
   if (refined.length === 0) {
     return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded };
   }
-  const top = await llmRerank(query, refined, 8);
+  const top = await llmRerank(query, refined, keep);
 
   const contextText = top
     .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
@@ -387,6 +431,134 @@ export async function searchExternalRag(
 
 // 자료제작용 청크 수 — 문서/슬라이드는 챗봇 답변보다 넓은 커버리지가 필요(챗봇 8 vs 생성 24).
 const GEN_KEEP = 24;
+const GEN_FALLBACK_MAX_LIMIT = 80;
+const SOURCE_DISCOVERY_PAGE = 1000;
+const SOURCE_DISCOVERY_MAX_ROWS = 5000;
+const SOURCE_MAX_PER_CATEGORY = 24;
+const SOURCE_QUERY_MAX_ROWS = 160;
+
+type CategorySourceRow = {
+  id: string;
+  document_id: number | string | null;
+  source: string | null;
+};
+
+type CategorySourceRef = {
+  key: string;
+  documentId: string | null;
+  source: string | null;
+};
+
+function categorySourceRefOf(row: CategorySourceRow): CategorySourceRef | null {
+  const numericId = numberMetadata(row.document_id);
+  const documentId = numericId != null && numericId > 0 ? String(numericId) : null;
+  const source = row.source?.trim() || null;
+  if (!documentId && !source) return null;
+  return {
+    key: documentId ? `document:${documentId}` : `source:${source}`,
+    documentId,
+    source,
+  };
+}
+
+// 분야의 고유 문서를 먼저 가볍게 찾는다. 전체 테이블을 무제한 순회하지 않도록 조회량을 고정하고,
+// UUID id 순으로 읽은 뒤 문서 키를 정렬해 같은 데이터에서는 항상 같은 문서 순서를 얻는다.
+async function discoverCategorySources(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  category: string
+): Promise<CategorySourceRef[] | null> {
+  const byKey = new Map<string, CategorySourceRef>();
+
+  for (let from = 0; from < SOURCE_DISCOVERY_MAX_ROWS; from += SOURCE_DISCOVERY_PAGE) {
+    const to = Math.min(
+      from + SOURCE_DISCOVERY_PAGE - 1,
+      SOURCE_DISCOVERY_MAX_ROWS - 1
+    );
+    const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
+      .select("id, document_id:metadata->>document_id, source:metadata->>source")
+      .eq("is_active", true)
+      .eq(`metadata->>${CATEGORY_FIELD}`, category)
+      .order("id", { ascending: true })
+      .range(from, to);
+
+    if (error) {
+      console.error("[rag-external] source discovery error:", error.message);
+      return null;
+    }
+
+    const rows = (data ?? []) as CategorySourceRow[];
+    for (const row of rows) {
+      const ref = categorySourceRefOf(row);
+      if (ref && !byKey.has(ref.key)) byKey.set(ref.key, ref);
+    }
+    if (rows.length < to - from + 1) break;
+  }
+
+  return Array.from(byKey.values())
+    .sort((a, b) => (a.key < b.key ? -1 : a.key > b.key ? 1 : 0))
+    .slice(0, SOURCE_MAX_PER_CATEGORY);
+}
+
+// 발견한 각 원본 문서에서 제한된 수의 청크를 병렬 조회한다. 문서 하나만 있는 분야는 그 문서에서
+// 충분한 후보를 받고, 문서가 많으면 문서별 후보량을 줄여 전체 읽기량을 일정 범위로 유지한다.
+async function fetchRowsByCategorySources(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  category: string,
+  desiredLimit: number
+): Promise<RagRow[] | null> {
+  const sources = await discoverCategorySources(supabase, category);
+  if (!sources || sources.length === 0) return null;
+
+  const perSourceLimit = Math.min(
+    SOURCE_QUERY_MAX_ROWS,
+    Math.max(8, Math.ceil(desiredLimit / sources.length) * 3),
+    desiredLimit * 2
+  );
+  const results = await Promise.all(
+    sources.map(async (source) => {
+      let query = (supabase.from as CallableFunction)(RAG_TABLE)
+        .select("id, content, metadata")
+        .eq("is_active", true)
+        .eq(`metadata->>${CATEGORY_FIELD}`, category)
+        .order("id", { ascending: true })
+        .limit(perSourceLimit);
+      query = source.documentId
+        ? query.eq("metadata->>document_id", source.documentId)
+        : query.eq("metadata->>source", source.source);
+      return query;
+    })
+  );
+
+  const rows: RagRow[] = [];
+  for (const result of results) {
+    if (result.error) {
+      console.error("[rag-external] source context error:", result.error.message);
+      continue;
+    }
+    rows.push(...((result.data ?? []) as RagRow[]));
+  }
+  return rows.length > 0 ? rows : null;
+}
+
+// 문서별 조회가 실패하거나 구형 데이터에 source/document_id가 없을 때 사용하는 기존 방식 폴백.
+async function fetchLegacyCategoryRows(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  category: string,
+  desiredLimit: number
+): Promise<RagRow[] | null> {
+  const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
+    .select("id, content, metadata")
+    .eq("is_active", true)
+    .eq(`metadata->>${CATEGORY_FIELD}`, category)
+    .order("id", { ascending: true })
+    .limit(desiredLimit * 2);
+
+  if (error) {
+    console.error("[rag-external] fetch context error:", error.message);
+    return null;
+  }
+  return (data ?? []) as RagRow[];
+}
 
 // 분야 자료를 모아 생성(AI 자료제작) 컨텍스트를 만든다.
 // topic 이 있으면 챗봇과 동일한 하이브리드 검색으로 "주제 관련" 청크를 우선 모으고,
@@ -410,32 +582,39 @@ export async function fetchExternalRagContext(
         embedding,
         kwQuery,
         category,
-        Math.max(60, GEN_KEEP * 2)
+        Math.max(60, GEN_KEEP * 3)
       );
-      const refined = refine(candidates.rows, GEN_KEEP);
-      if (refined.length > 0) return buildContextFromRefined(refined, 5);
+      const refined = refine(candidates.rows, candidates.rows.length);
+      const diverse = selectSourceDiverse(refined, GEN_KEEP, (item) =>
+        documentSourceKey(item.meta)
+      );
+      if (diverse.length > 0) return buildContextFromRefined(diverse, 5);
       // 주제 검색 결과가 없으면 분야 전체로 폴백
     } catch (e) {
       console.error("[rag-external] 주제 기반 검색 실패, 분야 전체로 폴백:", e);
     }
   }
 
-  // ② 분야 전체(폴백/주제 미지정): 노이즈 제외 후에도 limit 만큼 남도록 후보를 2배로 받는다.
-  const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
-    .select("content, metadata")
-    .eq("is_active", true)
-    .eq(`metadata->>${CATEGORY_FIELD}`, category)
-    .limit(limit * 2);
+  // ② 분야 전체(폴백/주제 미지정): 원본 문서별 후보를 받은 뒤 라운드로빈으로 고른다.
+  // 단일 문서 분야는 같은 로직에서 해당 문서 청크로 요청량을 모두 채운다.
+  const normalizedLimit = Number.isFinite(limit) ? Math.floor(limit) : 40;
+  const desiredLimit = Math.max(1, Math.min(normalizedLimit, GEN_FALLBACK_MAX_LIMIT));
+  const sourceRows = await fetchRowsByCategorySources(supabase, category, desiredLimit);
+  let rows = sourceRows ?? (await fetchLegacyCategoryRows(supabase, category, desiredLimit));
+  if (!rows || rows.length === 0) return { contextText: "", sources: [] };
 
-  if (error) {
-    console.error("[rag-external] fetch context error:", error.message);
-    return { contextText: "", sources: [] };
+  // 모든 문서의 후보를 먼저 정제해야 앞 문서의 정상 청크만으로 keep이 차는 편향이 생기지 않는다.
+  let refined = refine(rows, rows.length);
+  if (refined.length === 0 && sourceRows) {
+    rows = await fetchLegacyCategoryRows(supabase, category, desiredLimit);
+    if (!rows || rows.length === 0) return { contextText: "", sources: [] };
+    refined = refine(rows, rows.length);
   }
-  const rows = (data ?? []) as RagRow[];
-  // 정제·노이즈제외 (생성 컨텍스트도 깨끗한 본문만). limit 만큼 의미 청크 확보.
-  const refined = refine(rows, limit);
-  if (refined.length === 0) return { contextText: "", sources: [] };
-  return buildContextFromRefined(refined, 5);
+  const diverse = selectSourceDiverse(refined, desiredLimit, (item) =>
+    documentSourceKey(item.meta)
+  );
+  if (diverse.length === 0) return { contextText: "", sources: [] };
+  return buildContextFromRefined(diverse, 5);
 }
 
 // 분야 → 원본 파일명 목록 (AI 자료제작 선택지·NotebookLM 자료 목록용)

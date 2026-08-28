@@ -5,9 +5,6 @@ import {
   MessageSquare,
   Clock,
   ThumbsUp,
-  Dumbbell,
-  Flame,
-  ListChecks,
 } from "lucide-react";
 
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -47,9 +44,6 @@ type AdminStats = {
   categories: { category: string; count: number }[];
   daily: { date: string; count: number }[];
   faq: { q: string; count: number }[];
-  fitnessActiveUsers: number;
-  fitnessMonthPoints: number;
-  fitnessTotalLogs: number;
 };
 
 const EMPTY_STATS: AdminStats = {
@@ -61,9 +55,6 @@ const EMPTY_STATS: AdminStats = {
   categories: [],
   daily: [],
   faq: [],
-  fitnessActiveUsers: 0,
-  fitnessMonthPoints: 0,
-  fitnessTotalLogs: 0,
 };
 
 // 실데이터 집계 (service-role). DEMO 모드에서는 호출되지 않는다.
@@ -97,9 +88,6 @@ export default async function AdminPage() {
     categories,
     daily,
     faq,
-    fitnessActiveUsers,
-    fitnessMonthPoints,
-    fitnessTotalLogs,
   } = DEMO ? getDemoAdminStats() : await loadAdminStats();
   const satisfaction = up + down > 0 ? Math.round((up / (up + down)) * 100) : null;
 
@@ -134,40 +122,6 @@ export default async function AdminPage() {
           value={satisfaction !== null ? `${satisfaction}%` : "-"}
           sub={`긍정 ${up} · 부정 ${down}`}
         />
-      </div>
-
-      {/* 체력단련 현황 */}
-      <div>
-        <h2 className="mb-2 text-sm font-semibold text-muted-foreground">
-          체력단련 현황
-        </h2>
-        <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-          <StatCard
-            icon={Dumbbell}
-            label="이번 달 참여 대원"
-            value={`${fitnessActiveUsers}명`}
-          />
-          <StatCard
-            icon={Flame}
-            label="이번 달 적립 마일리지"
-            value={`${fitnessMonthPoints.toLocaleString()}점`}
-          />
-          <StatCard
-            icon={ListChecks}
-            label="누적 운동 기록"
-            value={`${fitnessTotalLogs.toLocaleString()}건`}
-          />
-          <StatCard
-            icon={Users}
-            label="참여율"
-            value={
-              totalUsers > 0
-                ? `${Math.round((fitnessActiveUsers / totalUsers) * 100)}%`
-                : "-"
-            }
-            sub="이번 달, 전체 사용자 대비"
-          />
-        </div>
       </div>
 
       {/* 차트 */}

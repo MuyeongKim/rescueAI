@@ -43,3 +43,4 @@
 | `20260726100515_secure_versioned_rag_ingestion.sql` | 외부 RAG(rag_rescue) 보안·무중단 버전 적재 |
 | `20260808090000_fix_hybrid_search_and_cleanup.sql` | hybrid_search 코사인(`<=>`) 통일 + hnsw 인덱스, `lesson_progress` 삭제 |
 | `20260808091000_admin_dashboard_stats.sql` | 관리자 대시보드 집계 RPC(앱 메모리 집계 → DB 이관) |
+| `20260827131016_remove_retired_mileage_stats.sql` | 제거된 체력 기능을 관리자 통계 집계에서 제외(기존 기록 보존) |

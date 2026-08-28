@@ -354,9 +354,6 @@ export interface Database {
           categories: { category: string; count: number }[];
           daily: { date: string; count: number }[];
           faq: { q: string; count: number }[];
-          fitnessActiveUsers: number;
-          fitnessMonthPoints: number;
-          fitnessTotalLogs: number;
         };
       };
     };

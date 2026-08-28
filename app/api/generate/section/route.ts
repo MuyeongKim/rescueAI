@@ -144,7 +144,8 @@ export async function POST(req: Request) {
       }),
       temperature: 0.5,
     });
-    return Response.json(object satisfies GeneratedSection);
+    // 부분 보완이 훈련계획·교안의 고정 구조를 깨지 않도록 제목은 기존 값을 유지한다.
+    return Response.json({ ...object, heading: cur.heading } satisfies GeneratedSection);
   } catch (e) {
     console.error("[generate/section] 실패:", e);
     return Response.json({ error: "재생성 중 오류가 발생했습니다." }, { status: 500 });

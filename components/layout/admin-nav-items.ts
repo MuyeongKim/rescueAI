@@ -3,7 +3,6 @@ import {
   FolderCog,
   Megaphone,
   Newspaper,
-  Siren,
   Users,
   type LucideIcon,
 } from "lucide-react";
@@ -15,7 +14,6 @@ export type AdminNavItem = { key: string; href: string; label: string; icon: Luc
 export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { key: "admin", href: "/admin", label: "통계", icon: BarChart3 },
   { key: "admin-news", href: "/admin/news", label: "동향 관리", icon: Newspaper },
-  { key: "admin-dispatch", href: "/admin/dispatch", label: "출동통계 분석", icon: Siren },
   { key: "admin-documents", href: "/admin/documents", label: "자료 관리", icon: FolderCog },
   { key: "admin-users", href: "/admin/users", label: "사용자 관리", icon: Users },
   { key: "admin-notices", href: "/admin/notices", label: "공지 작성", icon: Megaphone },

@@ -4,7 +4,7 @@
 
 ## 한 줄 요약
 구조대원이 **AI 튜터에게 질의(RAG·출처)**, **클릭 몇 번으로 훈련계획·교안 생성(+NotebookLM 프롬프트)**,
-**자료실에서 원본 열람**, **체력단련 마일리지**를 쓰는 교육훈련 플랫폼 PoC.
+**자료실에서 원본 열람**을 하는 교육훈련 플랫폼 PoC.
 챗봇·생성 기능은 인덱싱된 교육자료에 근거(출처·페이지)해 동작하고, 근거가 없으면
 "확인되지 않습니다"로 답해 환각을 차단한다.
 ※ 학습/진도/이수(레슨) 기능은 2026-06-18 제거됨(퀴즈 없는 읽음표시라 가치 낮음·이수 보고 불필요).
@@ -32,15 +32,14 @@ lib/auth.ts     세션·프로필 조회 + API/페이지 가드   lib/safe-redir
 lib/chat-history.ts  대화 히스토리 상한(순수)   lib/rate-limit.ts  인메모리 레이트리밋
 lib/generate.ts AI 자료제작 스키마·프롬프트   lib/generate-material.ts  저장본↔폼 변환(순수)
 lib/docx.ts /pptx.ts /hwpx*.ts  문서 변환(클라이언트 동적 import)
-lib/fitness.ts  체력 마일리지 규칙·날짜 검증(순수)  lib/fitness-server.ts  마일리지 현황 조립(서버)
 lib/courses.ts  분야(카테고리) 상수만        lib/database.types.ts  수작성 DB 타입
 lib/demo-flag.ts  DEMO 플래그(미들웨어 공용)  lib/demo.ts  목 데이터
 app/home /generate  홈 · AI 자료제작 (+/api/generate)
-app/fitness /notices /me /docs  체력단련 · 공지 · 마이페이지 · 자료실
+app/notices /me /docs  공지 · 마이페이지 · 자료실
 app/admin/  통계 + documents(자료) · users(사용자) · notices(공지 작성)
 components/learning/      CategoryBadge(분야색)·ProgressBar 재사용 컴포넌트 (학습 로직은 제거됨)
 components/generate/      GenerateForm(입력) · DocResult/SlideDeckResult/NotebookLmResult(결과)
-                          · parts.tsx(공용 조각)   components/fitness/  운동 기록 폼
+                          · parts.tsx(공용 조각)
 scripts/import-users.mjs  명단(CSV) 일괄 계정 등록 (--random-password 옵션)
 scripts/build-setup-sql.mjs  마이그레이션 → setup_new_project.sql 생성 (npm run sql:setup)
 supabase/migrations/    0001 테이블 · 0002 RPC · 0003 트리거+RLS · 0004 학습(제거됨)
@@ -54,11 +53,16 @@ eval/           평가셋 러너(vitest 통합)
 ```
 
 ## 플랫폼 도메인 규칙
-- **분야(카테고리) = 산악·수난·화재·구급**(`lib/courses.ts`의 COURSE_CATEGORIES). 챗봇 필터·자료제작 분야에 사용.
+- **기본 분야(카테고리) = 산악·수난·화재·구급·일반구조**(`lib/courses.ts`의 COURSE_CATEGORIES).
+  외부 RAG에 존재하는 추가 분야도 동적으로 노출하며, 챗봇 필터·자료제작 분야에 함께 사용.
 - 학습/진도/이수(레슨) 기능은 **제거됨**(2026-06-18). `documents`는 자료실(`/docs`) 원본 열람용으로만.
   `lesson_progress` 테이블도 2026-08-08 마이그레이션에서 삭제됨.
+- 출동 마일리지·체력단련 기능은 **제거됨**(2026-08-27). 기존 `workout_logs` 데이터와 스키마는
+  복구 가능성을 위해 보존하지만 앱에서는 조회·기록하지 않음.
 - AI 자료제작: `/generate` 클릭·선택형 UI → `/api/generate`(분야 자료 컨텍스트+generateObject).
-  훈련계획/교안은 docx, 슬라이드는 분야 색 표준 양식 PPTX(발표자 노트 포함) 다운로드,
+  구체적인 주제 입력 필수. 훈련계획은 고정 5개, 교안은 실습형 7개 섹션으로 생성하고 시간·안전·평가·
+  분량·중복·출처를 결정론적으로 점검해 필요한 경우 전체 초안을 한 번 보완한다. 문서는 DOCX/HWPX,
+  슬라이드는 의미별 레이아웃과 장별 `[Sources]` 노트가 있는 분야 색 표준 양식 PPTX로 다운로드,
   NotebookLM 프롬프트는 클라이언트 조립(AI 미호출).
 
 ## 보안 규칙 (필수)

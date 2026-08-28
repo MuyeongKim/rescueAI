@@ -3,14 +3,12 @@ import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import {
   CircleUser,
-  Dumbbell,
   FileText,
   Home,
   LogOut,
   MessageSquare,
   Newspaper,
   ShieldCheck,
-  Siren,
   Wand2,
 } from "lucide-react";
 
@@ -25,14 +23,11 @@ export type NavKey =
   | "chat"
   | "generate"
   | "news"
-  | "dispatch"
   | "docs"
-  | "fitness"
   | "me"
   | "notices"
   | "admin"
   | "admin-news"
-  | "admin-dispatch"
   | "admin-documents"
   | "admin-users"
   | "admin-notices";
@@ -51,8 +46,6 @@ const NAV_ITEMS: NavItem[] = [
   { key: "generate", href: "/generate", label: "AI 자료제작", icon: Wand2, mobile: true },
   { key: "docs", href: "/docs", label: "자료실", icon: FileText, mobile: true },
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
-  { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
-  { key: "fitness", href: "/fitness", label: "체력단련", icon: Dumbbell },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
 ];
 

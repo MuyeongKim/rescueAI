@@ -31,6 +31,22 @@ describe("buildSystemPrompt (환각 가드레일)", () => {
     expect(prompt).toContain("119 의료지도");
   });
 
+  it("구체적이고 풍부한 튜터 답변 구조를 요구한다", () => {
+    const prompt = buildSystemPrompt("자료");
+    expect(prompt).toContain("단답으로 끝내지 말고");
+    expect(prompt).toContain("핵심 답변");
+    expect(prompt).toContain("세부 설명");
+    expect(prompt).toContain("현장 확인사항");
+    expect(prompt).toContain("안전 유의사항");
+    expect(prompt).toContain("문서명과 페이지");
+  });
+
+  it("답변 분량을 늘리더라도 근거 밖 내용을 보태지 못하게 한다", () => {
+    const prompt = buildSystemPrompt("자료");
+    expect(prompt).toContain("일반 상식이나 추측을 덧붙이지 마세요");
+    expect(prompt).toContain("참고 자료에 없는 문서명·페이지는 만들지 마세요");
+  });
+
   it("표준 문구가 실수로 비워지지 않았다", () => {
     expect(NOT_FOUND_MESSAGE.trim().length).toBeGreaterThan(10);
     expect(NOT_FOUND_MESSAGE).toContain("확인되지 않습니다");

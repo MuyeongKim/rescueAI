@@ -10,19 +10,15 @@ import {
   Newspaper,
   Pin,
   ShieldCheck,
-  Target,
   Wand2,
 } from "lucide-react";
 
 import { requireUserAndProfile } from "@/lib/auth";
-import { FITNESS_MONTH_GOAL } from "@/lib/fitness";
-import { getFitnessState } from "@/lib/fitness-server";
 import { createClient } from "@/lib/supabase/server";
 import { isNewNotice } from "@/lib/notices";
 import { getRecentNews } from "@/lib/news";
 import { kstDate } from "@/lib/kst";
 import { DEMO, demoNotices, demoConversations } from "@/lib/demo";
-import { ProgressBar } from "@/components/learning/ProgressBar";
 
 export const dynamic = "force-dynamic";
 
@@ -100,7 +96,6 @@ function SectionHeading({ title, href, action }: { title: string; href?: string;
 
 export default async function HomePage() {
   const { user, profile } = await requireUserAndProfile();
-  const userId = user?.id ?? "";
   const name = profile?.full_name || user?.email?.split("@")[0] || "구조대원";
   const greeting = name.endsWith("대원") ? `${name}님` : `${name} 대원님`;
   const meta = [profile?.division, profile?.rank, profile?.team].filter(Boolean).join(" · ");
@@ -110,13 +105,11 @@ export default async function HomePage() {
     ["일", "월", "화", "수", "목", "금", "토"][now.getUTCDay()]
   })`;
 
-  const [notices, fitness, conversations, news] = await Promise.all([
+  const [notices, conversations, news] = await Promise.all([
     loadRecentNotices(),
-    getFitnessState(userId),
     loadRecentConversations(),
     getRecentNews(3),
   ]);
-  const goalPct = Math.min(100, Math.round((fitness.monthPoints / FITNESS_MONTH_GOAL) * 100));
   const primaryNotice = notices[0];
 
   return (
@@ -210,7 +203,7 @@ export default async function HomePage() {
         </div>
       </section>
 
-      <div className="grid gap-6 lg:grid-cols-[1.25fr_0.75fr]">
+      <div>
         <section className="border-t-2 border-t-slate-900 dark:border-t-slate-200">
           <SectionHeading title="최근 AI 업무" href="/chat" action="새 질문" />
           <div className="divide-y divide-slate-200 dark:divide-slate-800">
@@ -237,43 +230,6 @@ export default async function HomePage() {
                 </Link>
               ))
             )}
-          </div>
-        </section>
-
-        <section className="border-t-2 border-t-primary">
-          <SectionHeading title="대원 준비도" href="/fitness" action="운동 기록" />
-          <div className="py-4">
-            <div className="grid grid-cols-3 divide-x divide-slate-200 text-center dark:divide-slate-800">
-              <div className="px-2">
-                <strong className="block text-xl font-black tabular-nums">
-                  {fitness.monthPoints.toLocaleString()}
-                </strong>
-                <span className="text-[11px] text-muted-foreground">이번 달</span>
-              </div>
-              <div className="px-2">
-                <strong className="block text-xl font-black tabular-nums">
-                  {fitness.monthRank ? `${fitness.monthRank}위` : "-"}
-                </strong>
-                <span className="text-[11px] text-muted-foreground">월간 순위</span>
-              </div>
-              <div className="px-2">
-                <strong className="block text-xl font-black tabular-nums">
-                  {fitness.streakDays > 0 ? `${fitness.streakDays}일` : "-"}
-                </strong>
-                <span className="text-[11px] text-muted-foreground">연속 운동</span>
-              </div>
-            </div>
-            <div className="mt-5 space-y-2 border-t border-slate-200 pt-4 dark:border-slate-800">
-              <div className="flex items-center justify-between gap-3 text-xs">
-                <span className="flex items-center gap-1.5 font-semibold text-slate-700 dark:text-slate-200">
-                  <Target className="h-4 w-4 text-primary" /> 이번 달 목표
-                </span>
-                <span className="tabular-nums text-muted-foreground">
-                  {fitness.monthPoints}/{FITNESS_MONTH_GOAL}점
-                </span>
-              </div>
-              <ProgressBar value={goalPct} />
-            </div>
           </div>
         </section>
       </div>

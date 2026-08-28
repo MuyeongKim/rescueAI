@@ -3,11 +3,9 @@
 import Link from "next/link";
 import {
   CircleUser,
-  Dumbbell,
   Megaphone,
   Menu,
   Newspaper,
-  Siren,
   Users,
 } from "lucide-react";
 
@@ -27,8 +25,6 @@ import {
 // 새 페이지를 만들면 여기(또는 탭)에 반드시 추가해 모바일 동선을 보장한다.
 const MORE_ITEMS = [
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
-  { key: "dispatch", href: "/dispatch", label: "출동 마일리지", icon: Siren },
-  { key: "fitness", href: "/fitness", label: "체력단련", icon: Dumbbell },
   { key: "generate-shared", href: "/generate/shared", label: "공유 자료실", icon: Users },
   { key: "notices", href: "/notices", label: "공지사항", icon: Megaphone },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },

@@ -19,10 +19,12 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   AccentBar,
   EditToggleButton,
+  QualityBanner,
   RegenControls,
   SaveButton,
   SourceBadges,
   type RegenState,
+  type GenerationQuality,
   type ResultChrome,
 } from "@/components/generate/parts";
 
@@ -36,6 +38,7 @@ export function DocResult({
   onDownloadHwpx,
   onDownloadDocx,
   onCopy,
+  quality,
 }: {
   doc: GeneratedDoc;
   chrome: ResultChrome;
@@ -46,6 +49,7 @@ export function DocResult({
   onDownloadHwpx: () => void;
   onDownloadDocx: () => void;
   onCopy: (text: string) => void;
+  quality?: GenerationQuality | null;
 }) {
   const { accent, editing } = chrome;
 
@@ -58,7 +62,7 @@ export function DocResult({
     >
       <AccentBar accent={accent} />
       <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
           {editing ? (
             <Input
               value={doc.title}
@@ -71,7 +75,7 @@ export function DocResult({
               <FileText className="h-4 w-4" style={{ color: accent }} /> {doc.title}
             </CardTitle>
           )}
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5 self-end sm:self-auto">
             <SaveButton chrome={chrome} />
             <EditToggleButton chrome={chrome} />
           </div>
@@ -82,6 +86,7 @@ export function DocResult({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        <QualityBanner quality={quality} />
         {doc.sections.map((s, i) => (
           <section key={i} className="space-y-1">
             {editing ? (

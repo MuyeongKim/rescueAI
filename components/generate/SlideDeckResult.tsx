@@ -18,10 +18,12 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   AccentBar,
   EditToggleButton,
+  QualityBanner,
   RegenControls,
   SaveButton,
   SourceBadges,
   type RegenState,
+  type GenerationQuality,
   type ResultChrome,
 } from "@/components/generate/parts";
 
@@ -33,6 +35,7 @@ export function SlideDeckResult({
   onPatchSlide,
   onPatchBullet,
   onDownloadPptx,
+  quality,
 }: {
   deck: GeneratedSlideDeck;
   chrome: ResultChrome;
@@ -41,6 +44,7 @@ export function SlideDeckResult({
   onPatchSlide: (index: number, patch: Partial<GeneratedSlide>) => void;
   onPatchBullet: (slideIndex: number, bulletIndex: number, value: string) => void;
   onDownloadPptx: () => void;
+  quality?: GenerationQuality | null;
 }) {
   const { accent, editing } = chrome;
 
@@ -53,7 +57,7 @@ export function SlideDeckResult({
     >
       <AccentBar accent={accent} />
       <CardHeader className="pb-3">
-        <div className="flex items-start justify-between gap-2">
+        <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
           {editing ? (
             <Input
               value={deck.title}
@@ -66,7 +70,7 @@ export function SlideDeckResult({
               <Presentation className="h-4 w-4" style={{ color: accent }} /> {deck.title}
             </CardTitle>
           )}
-          <div className="flex shrink-0 items-center gap-1.5">
+          <div className="flex shrink-0 items-center gap-1.5 self-end sm:self-auto">
             <SaveButton chrome={chrome} />
             <EditToggleButton chrome={chrome} />
           </div>
@@ -77,6 +81,7 @@ export function SlideDeckResult({
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
+        <QualityBanner quality={quality} />
         <div className="max-h-96 space-y-2 overflow-y-auto pr-1">
           {deck.slides.map((s, i) => (
             <div key={i} className="rounded-lg border p-3">
@@ -140,6 +145,11 @@ export function SlideDeckResult({
                     </p>
                   )}
                 </>
+              )}
+              {s.sourceRefs && s.sourceRefs.length > 0 && (
+                <p className="mt-2 break-words border-t pt-2 text-[11px] leading-relaxed text-muted-foreground">
+                  근거 {s.sourceRefs.join(" · ")}
+                </p>
               )}
             </div>
           ))}

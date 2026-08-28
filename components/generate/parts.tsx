@@ -1,7 +1,15 @@
 "use client";
 
 // AI 자료제작 화면의 공용 조각들 — 입력 폼(GenerateForm)과 결과 카드들이 함께 쓴다.
-import { Check, Loader2, Pencil, RefreshCw, Save } from "lucide-react";
+import {
+  Check,
+  CircleCheck,
+  Loader2,
+  Pencil,
+  RefreshCw,
+  Save,
+  TriangleAlert,
+} from "lucide-react";
 
 import { REGEN_INSTRUCTIONS, type GeneratedDocSource } from "@/lib/generate";
 import { cn } from "@/lib/utils";
@@ -76,6 +84,43 @@ export type ResultChrome = {
   loadedId: number | null;
   onSave: () => void;
 };
+
+/** 서버가 생성 직후 수행한 구조·분량 점검 결과. 사용자가 최종 확인할 지점을 짧게 보여준다. */
+export type GenerationQuality = {
+  checked: boolean;
+  repaired: boolean;
+  warnings: string[];
+};
+
+export function QualityBanner({ quality }: { quality?: GenerationQuality | null }) {
+  if (!quality?.checked) return null;
+
+  const needsReview = quality.warnings.length > 0;
+  const Icon = needsReview ? TriangleAlert : CircleCheck;
+  return (
+    <div
+      role="status"
+      className={cn(
+        "flex gap-2.5 border-l-4 px-3 py-2.5 text-sm",
+        needsReview
+          ? "border-l-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"
+          : "border-l-emerald-600 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-100"
+      )}
+    >
+      <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      <div className="min-w-0">
+        <p className="font-semibold">
+          {quality.repaired ? "초안을 한 번 보완하고 자동 점검했습니다" : "초안 구성을 자동 점검했습니다"}
+        </p>
+        <p className="mt-0.5 text-xs leading-relaxed opacity-80">
+          {needsReview
+            ? `최종 확인이 필요한 항목: ${quality.warnings.join(" · ")}`
+            : "필수 구성과 교육 흐름을 확인했습니다. 현장 적용 전 내용과 수치는 최종 검토해 주세요."}
+        </p>
+      </div>
+    </div>
+  );
+}
 
 export function SaveButton({ chrome }: { chrome: ResultChrome }) {
   const { saving, saved, loadedId, onSave } = chrome;
@@ -240,8 +285,13 @@ export function ResultSkeleton({ accent, label }: { accent: string; label: strin
           </div>
         ))}
         <p className="text-center text-xs text-muted-foreground">
-          {label}을(를) 만들고 있어요… 자료를 근거로 구성 중입니다.
+          {label}을(를) 만들고 있어요. 잠시만 기다려 주세요.
         </p>
+        <div className="grid grid-cols-3 gap-2 border-t pt-4 text-center text-[11px] text-muted-foreground">
+          <span>1. 관련 교범 선별</span>
+          <span>2. 현장형 초안 작성</span>
+          <span>3. 누락·중복 점검</span>
+        </div>
       </CardContent>
     </Card>
   );

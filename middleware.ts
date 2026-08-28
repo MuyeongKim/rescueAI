@@ -9,8 +9,6 @@ const PROTECTED_PREFIXES = [
   "/admin",
   "/generate",
   "/news",
-  "/dispatch",
-  "/fitness",
   "/notices",
   "/me",
   "/change-password",

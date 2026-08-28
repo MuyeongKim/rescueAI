@@ -4,19 +4,60 @@ import { requireApiUser } from "@/lib/auth";
 import {
   AUDIENCES,
   DURATIONS,
+  buildGenerationRepairPrompt,
   buildGeneratePrompt,
   buildGenerateSystemPrompt,
-  generatedDocSchema,
+  generatedDocSchemaFor,
   generatedSlidesSchema,
+  extractSourceLabels,
+  inspectGenerationQuality,
   type GenerateRequest,
   type GeneratedDoc,
   type GeneratedSlideDeck,
+  type GenerationQualityReport,
 } from "@/lib/generate";
 import { DEMO, demoGeneratedDoc, demoGeneratedSlides } from "@/lib/demo";
 import { fetchCategoryContext } from "@/lib/generate-context";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 
-export const maxDuration = 60;
+export const maxDuration = 120;
+
+type QualityMeta = {
+  checked: true;
+  repaired: boolean;
+  warnings: string[];
+};
+
+const QUALITY_LABELS: Partial<
+  Record<GenerationQualityReport["issues"][number]["code"], string>
+> = {
+  missing_section: "필수 구성 누락",
+  unexpected_section: "예정되지 않은 구성",
+  section_order: "구성 순서",
+  thin_content: "일부 내용의 구체성·분량",
+  missing_safety: "안전·중단 기준",
+  missing_evaluation: "평가·통과 기준",
+  missing_time_allocation: "단계별 시간 배분",
+  time_total_mismatch: "교육 시간 합계",
+  slide_count: "교육 시간에 맞는 슬라이드 수",
+  thin_notes: "일부 발표자 노트 분량",
+  duplicate_slide_title: "중복 슬라이드 제목",
+  duplicate_slide_content: "중복 슬라이드 내용",
+  missing_slide_layout: "슬라이드 구성 방식",
+  generic_slide_title: "슬라이드 결론형 제목",
+  missing_source_citation: "핵심 내용의 근거 출처",
+  missing_source_refs: "슬라이드별 근거 출처",
+  invalid_source_ref: "근거 출처 표기",
+};
+
+function qualityMeta(report: GenerationQualityReport, repaired: boolean): QualityMeta {
+  const labels = Array.from(
+    new Set(report.issues.map((issue) => QUALITY_LABELS[issue.code] ?? issue.message))
+  );
+  const warnings = labels.slice(0, 4);
+  if (labels.length > warnings.length) warnings.push(`그 밖의 점검 항목 ${labels.length - warnings.length}개`);
+  return { checked: true, repaired, warnings };
+}
 
 // 인덱싱 자료를 근거로 훈련계획/교안을 생성한다. (NotebookLM 프롬프트는 클라이언트에서 조립)
 export async function POST(req: Request) {
@@ -27,6 +68,14 @@ export async function POST(req: Request) {
     return new Response("Bad Request", { status: 400 });
   }
 
+  const topic = (body.topic ?? "").trim().slice(0, 100);
+  if (topic.length < 2) {
+    return Response.json(
+      { error: "훈련 주제를 두 글자 이상 입력해 주세요." },
+      { status: 400 }
+    );
+  }
+
   // 데모 모드: AI/DB 없이 목 문서/슬라이드 반환
   if (DEMO) {
     if (body.type === "slides") {
@@ -35,14 +84,16 @@ export async function POST(req: Request) {
         title: body.category
           ? demoGeneratedSlides.title.replace("화재", body.category)
           : demoGeneratedSlides.title,
-      } satisfies GeneratedSlideDeck);
+        quality: { checked: true, repaired: false, warnings: [] },
+      } satisfies GeneratedSlideDeck & { quality: QualityMeta });
     }
     return Response.json({
       ...demoGeneratedDoc,
       title: body.category
         ? demoGeneratedDoc.title.replace("화재", body.category)
         : demoGeneratedDoc.title,
-    } satisfies GeneratedDoc);
+      quality: { checked: true, repaired: false, warnings: [] },
+    } satisfies GeneratedDoc & { quality: QualityMeta });
   }
 
   const auth = await requireApiUser();
@@ -71,7 +122,7 @@ export async function POST(req: Request) {
     category,
     audience,
     duration,
-    topic: body.topic?.slice(0, 100),
+    topic,
     date: /^\d{4}-\d{2}-\d{2}$/.test(body.date ?? "") ? body.date : undefined,
     place: body.place?.slice(0, 100),
     model: body.model,
@@ -87,28 +138,71 @@ export async function POST(req: Request) {
 
   try {
     const system = buildGenerateSystemPrompt(category, contextText);
+    const allowedSourceRefs = extractSourceLabels(contextText);
     // 폼에서 선택한 모델 — 미지정/사용불가 시 서버 기본값으로 폴백
     const model = getChatModel(genReq.model);
 
     if (type === "slides") {
-      const { object } = await generateObject({
-        model,
-        schema: generatedSlidesSchema,
-        system,
-        prompt: buildGeneratePrompt(genReq),
-        temperature: 0.4,
-      });
-      return Response.json({ ...object, sources } satisfies GeneratedSlideDeck);
+      const generateSlides = async (prompt: string) => {
+        const { object } = await generateObject({
+          model,
+          schema: generatedSlidesSchema,
+          system,
+          prompt,
+          temperature: 0.4,
+        });
+        return object;
+      };
+      let object = await generateSlides(buildGeneratePrompt(genReq));
+      let report = inspectGenerationQuality("slides", object, duration, allowedSourceRefs);
+      let repaired = false;
+      if (!report.ok) {
+        try {
+          object = await generateSlides(
+            buildGenerationRepairPrompt({ type: "slides", request: genReq, draft: object, report })
+          );
+          report = inspectGenerationQuality("slides", object, duration, allowedSourceRefs);
+          repaired = true;
+        } catch (repairError) {
+          console.error("[generate] 슬라이드 자동 보완 실패, 1차 초안 반환:", repairError);
+        }
+      }
+      return Response.json({
+        ...object,
+        sources,
+        quality: qualityMeta(report, repaired),
+      } satisfies GeneratedSlideDeck & { quality: QualityMeta });
     }
 
-    const { object } = await generateObject({
-      model,
-      schema: generatedDocSchema,
-      system,
-      prompt: buildGeneratePrompt(genReq),
-      temperature: 0.4,
-    });
-    return Response.json({ ...object, sources } satisfies GeneratedDoc);
+    const generateDoc = async (prompt: string) => {
+      const { object } = await generateObject({
+        model,
+        schema: generatedDocSchemaFor(type),
+        system,
+        prompt,
+        temperature: 0.4,
+      });
+      return object;
+    };
+    let object = await generateDoc(buildGeneratePrompt(genReq));
+    let report = inspectGenerationQuality(type, object, duration, allowedSourceRefs);
+    let repaired = false;
+    if (!report.ok) {
+      try {
+        object = await generateDoc(
+          buildGenerationRepairPrompt({ type, request: genReq, draft: object, report })
+        );
+        report = inspectGenerationQuality(type, object, duration, allowedSourceRefs);
+        repaired = true;
+      } catch (repairError) {
+        console.error("[generate] 문서 자동 보완 실패, 1차 초안 반환:", repairError);
+      }
+    }
+    return Response.json({
+      ...object,
+      sources,
+      quality: qualityMeta(report, repaired),
+    } satisfies GeneratedDoc & { quality: QualityMeta });
   } catch (e) {
     console.error("[generate] 실패:", e);
     return Response.json(

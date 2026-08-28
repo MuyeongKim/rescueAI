@@ -12,6 +12,8 @@ export type HwpxPlanMeta = {
   place?: string;
 };
 
+class HwpxRequestError extends Error {}
+
 // 한글(hwpx) 다운로드 공용 헬퍼 (클라이언트 전용).
 // 1순위: 미니서버 hwp-writer-api(/api/hwp 중계) — python-hwpx 가 만든 정식 hwpx.
 //   opts.template === "training_plan" 이면 전북소방 표준 양식에 채워 넣는다.
@@ -38,7 +40,14 @@ export async function downloadHwpx(
       saveBlob(await res.blob(), filename);
       return "server";
     }
-  } catch {
+    // 미설정/일시 장애일 때만 로컬 생성으로 폴백한다. 입력 누락·인증·레이트리밋은
+    // 조용히 다른 양식을 내려받지 않고 서버의 설명을 사용자에게 전달한다.
+    if (res.status !== 501 && res.status !== 502) {
+      const body = (await res.json().catch(() => null)) as { error?: string } | null;
+      throw new HwpxRequestError(body?.error ?? "한글 파일 요청을 처리할 수 없습니다.");
+    }
+  } catch (error) {
+    if (error instanceof HwpxRequestError) throw error;
     // 네트워크 오류 → 로컬 폴백
   }
 

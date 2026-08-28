@@ -27,7 +27,7 @@
 
 - [ ] **P1-1.** Supabase 프로젝트 생성(서울 리전) — *사용자가 supabase.com에서 생성*
 - [ ] **P1-2.** 마이그레이션 `supabase/migrations/0001~0005` 적용 (SQL Editor 또는 CLI)
-      — `0005`는 LMS 확장(공지사항·체력단련 마일리지)
+      — `0005`는 공지사항과 제거된 체력 기능의 보존 스키마를 포함
 - [ ] **P1-3.** Storage `documents` 버킷 생성 + 매직링크 Auth 설정 ([`SETUP.md`](SETUP.md) §2~5)
 - [ ] **P1-4.** `.env.local`에 실제 키 입력: Supabase URL/anon/service role,
       `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` (목록·설명: `.env.local.example`)
@@ -54,9 +54,9 @@
 ### Phase 4 — 플랫폼 보강 (운영다운 모습 갖추기)
 
 - [x] **P4-1.** **메뉴(IA) 확정 — 정식 LMS형으로 확정·구현됨.**
-      일반: 홈 / 학습 / AI 튜터 / 자료실 / **체력단련(마일리지)** / 공지사항 / 마이페이지.
-      관리자: 통계 / 자료 관리 / 사용자 관리 / 공지 작성.
-      (모바일 하단 탭은 홈·학습·AI 튜터·체력단련·마이페이지 5개)
+      일반: 홈 / AI 튜터 / AI 자료제작 / 자료실 / 구조 동향 / 공지사항 / 마이페이지.
+      관리자: 통계 / 동향 관리 / 자료 관리 / 사용자 관리 / 공지 작성.
+      (출동 마일리지·체력단련은 2026-08-27 제거)
 - [ ] **P4-2.** 관리자 자료 업로드 UI (현재는 Python 스크립트 대체 — `/admin/documents`에 안내 표시)
 - [ ] **P4-3.** 계정 발급 — 명단 일괄 등록은 `scripts/import-users.mjs` 사용
       (엑셀 → CSV 저장: email, full_name, division, role). 관리자 승격은 `/admin/users`에서 가능.
