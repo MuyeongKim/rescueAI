@@ -1180,17 +1180,23 @@ export function GenerateForm({
     try {
       // PPTX·PDF 렌더러는 무거워서 다운로드 시점에만 로드한다.
       visualToastId = toast.loading("원문 시각자료를 준비하고 있습니다…");
-      const [{ downloadPptx }, { prepareDeckSourceVisuals }] = await Promise.all([
+      const [
+        { downloadPptx },
+        { autoAssignDeckSourceVisuals, prepareDeckSourceVisuals },
+      ] = await Promise.all([
         import("@/lib/pptx"),
         import("@/lib/source-visuals"),
       ]);
-      const prepared = await prepareDeckSourceVisuals(exportDeck, (progress) => {
-        if (visualToastId === undefined) return;
-        toast.loading("원문 시각자료를 준비하고 있습니다…", {
-          id: visualToastId,
-          description: `${progress.completed}/${progress.total} · ${progress.title} ${progress.page}쪽`,
-        });
-      });
+      const prepared = await prepareDeckSourceVisuals(
+        autoAssignDeckSourceVisuals(exportDeck),
+        (progress) => {
+          if (visualToastId === undefined) return;
+          toast.loading("원문 시각자료를 준비하고 있습니다…", {
+            id: visualToastId,
+            description: `${progress.completed}/${progress.total} · ${progress.title} ${progress.page}쪽`,
+          });
+        }
+      );
       if (prepared.requested === 0) {
         toast.dismiss(visualToastId);
         visualToastId = undefined;

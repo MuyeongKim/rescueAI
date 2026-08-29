@@ -20,6 +20,7 @@ import {
   resolveSlideDeckMode,
   regeneratedSectionSchema,
   regeneratedSlideSchema,
+  stripSectionInlineSourceRefs,
   type GeneratedDocSource,
   type GeneratedSection,
   type GeneratedSlide,
@@ -341,7 +342,10 @@ export async function POST(req: Request) {
       });
       return generated.object;
     });
-    let object = await generateSection(cur.content ?? "");
+    let object = stripSectionInlineSourceRefs(
+      await generateSection(cur.content ?? ""),
+      sourceLabels
+    );
     const isSopSection = cur.heading === "훈련내용" || cur.heading === "핵심이론";
     if (isSopSection) {
       const sopType = cur.heading === "훈련내용" ? "plan" : "lesson";
@@ -351,9 +355,12 @@ export async function POST(req: Request) {
         sopEvidence
       );
       if (!sopReport.ok) {
-        object = await generateSection(
-          object.content,
-          `SOP 계약 오류를 모두 수정하세요: ${sopReport.issues.map((issue) => issue.message).join(" / ")}`
+        object = stripSectionInlineSourceRefs(
+          await generateSection(
+            object.content,
+            `SOP 계약 오류를 모두 수정하세요: ${sopReport.issues.map((issue) => issue.message).join(" / ")}`
+          ),
+          sourceLabels
         );
       }
       const repairedSopReport = inspectSopContract(
@@ -378,8 +385,8 @@ export async function POST(req: Request) {
         ...object,
         heading: cur.heading,
         sourceLabels,
-        // 부분 재생성으로 새 인용이 추가돼도 저장 단계에서 검증할 수 있도록 전체
-        // 바인딩 출처를 돌려준다. UI 출처 배지는 별도로 5개만 노출한다.
+        // 부분 재생성 본문에서 분리한 출처를 전체 문서 맨 뒤에 유지하고,
+        // 저장 단계에서 재검증할 수 있도록 전체 바인딩 출처를 돌려준다.
         sources: regeneratedBindingSources,
         sopEvidence,
       } satisfies GeneratedSection & {

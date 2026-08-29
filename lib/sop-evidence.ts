@@ -250,8 +250,8 @@ function hasUnverifiedSpecificSopClaim(
 /**
  * 생성 유형별 지정 위치에서 SOP 표식·근거·고정 안내문을 검사한다.
  *
- * - plan: `훈련내용` 섹션
- * - lesson: `핵심이론` 섹션
+ * - plan: `훈련내용` 섹션의 표식 + 문서 맨 뒤에 서버가 연결하는 SOP 근거
+ * - lesson: `핵심이론` 섹션의 표식 + 문서 맨 뒤에 서버가 연결하는 SOP 근거
  * - slides: 동일 슬라이드 안의 표식과 sourceRefs(또는 본문 인라인 라벨)
  *
  * 허용 라벨은 `SopEvidence.sourceLabels`의 정확한 값만 인정한다. 따라서 일반 문서
@@ -266,6 +266,7 @@ export function inspectSopContract(
   const designated = designatedTargets(type, result);
   const allTargets = allResultTargets(result);
   const allowedLabels = new Set(uniqueTrimmed(evidence.sourceLabels));
+  const documentMode = type !== "slides";
 
   if (evidence.status === "found") {
     const applicationTargets = designated.filter((target) =>
@@ -279,14 +280,18 @@ export function inspectSopContract(
       });
     }
 
-    const hasGroundedApplication = applicationTargets.some((target) =>
-      target.references.some((reference) => allowedLabels.has(reference))
-    );
+    const hasGroundedApplication = documentMode
+      ? allowedLabels.size > 0
+      : applicationTargets.some((target) =>
+          target.references.some((reference) => allowedLabels.has(reference))
+        );
     if (!hasGroundedApplication) {
       issues.push({
         code: "missing_sop_reference",
         path: applicationTargets[0]?.path ?? designated[0]?.path ?? (type === "slides" ? "slides" : "sections"),
-        message: "SOP 적용 표식과 같은 위치에 확인된 SOP 출처 라벨을 연결해야 합니다.",
+        message: documentMode
+          ? "문서 맨 뒤의 근거 자료 및 출처 목록에 확인된 SOP 출처를 연결해야 합니다."
+          : "SOP 적용 표식과 같은 슬라이드의 sourceRefs에 확인된 SOP 출처 라벨을 연결해야 합니다.",
       });
     }
 
@@ -295,7 +300,7 @@ export function inspectSopContract(
         allowedLabels.has(reference)
       );
       const proceduralClaimWithoutLocalReference =
-        SOP_PROCEDURE_CLAIM.test(target.text) && !hasAllowedReference;
+        !documentMode && SOP_PROCEDURE_CLAIM.test(target.text) && !hasAllowedReference;
       if (
         !proceduralClaimWithoutLocalReference &&
         !hasUnverifiedSpecificSopClaim(target.text, Array.from(allowedLabels))

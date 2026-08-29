@@ -18,6 +18,7 @@ import {
   inspectGenerationQuality,
   MAX_GENERATION_CONDITIONS_CHARS,
   resolveSlideDeckMode,
+  stripDocumentInlineSourceRefs,
   type GenerateRequest,
   type GeneratedDoc,
   type GeneratedSlideDeck,
@@ -39,6 +40,50 @@ import {
 export const maxDuration = 120;
 
 const MAX_GENERATE_REQUEST_BYTES = 8 * 1024;
+// Vercel 함수 종료 직전까지 LLM 재시도를 끌지 않고 JSON 응답 시간을 남긴다.
+const GENERATION_REQUEST_BUDGET_MS = 114_000;
+const GENERATION_RESPONSE_RESERVE_MS = 5_000;
+const GENERATION_PRO_CALL_MAX_MS = 72_000;
+const GENERATION_FALLBACK_RESERVE_MS = 28_000;
+const GENERATION_FAST_CALL_MAX_MS = 40_000;
+const GENERATION_OTHER_CALL_MAX_MS = 90_000;
+const GENERATION_MIN_CALL_MS = 5_000;
+const GENERATION_REPAIR_MIN_REMAINING_MS = 32_000;
+const GENERATION_PRO_REPAIR_MIN_REMAINING_MS = 60_000;
+
+class GenerationTimeBudgetError extends Error {
+  constructor() {
+    super("AI 자료제작 시간 예산이 부족합니다.");
+    this.name = "GenerationTimeBudgetError";
+  }
+}
+
+function remainingGenerationMs(deadlineMs: number): number {
+  return Math.max(0, deadlineMs - Date.now());
+}
+
+function generationAbortSignal(
+  deadlineMs: number,
+  maxCallMs: number,
+  additionalReserveMs = 0
+): AbortSignal {
+  const availableMs =
+    remainingGenerationMs(deadlineMs) - GENERATION_RESPONSE_RESERVE_MS - additionalReserveMs;
+  if (availableMs < GENERATION_MIN_CALL_MS) throw new GenerationTimeBudgetError();
+  return AbortSignal.timeout(Math.max(1, Math.min(maxCallMs, availableMs)));
+}
+
+function isGenerationBudgetError(error: unknown): boolean {
+  const errorName =
+    error && typeof error === "object" && "name" in error
+      ? String((error as { name?: unknown }).name ?? "")
+      : "";
+  return (
+    error instanceof GenerationTimeBudgetError ||
+    errorName === "AbortError" ||
+    errorName === "TimeoutError"
+  );
+}
 
 const optionalText = (max: number) =>
   z
@@ -84,13 +129,17 @@ function qualityMeta(
   repaired: boolean,
   retrievalDegraded = false,
   modelFallbackUsed = false,
-  sopEvidence?: SopEvidence
+  sopEvidence?: SopEvidence,
+  generationBudgetLimited = false
 ): QualityMeta {
   const messages = generationQualityMessages(
     report,
     [
       ...(retrievalDegraded ? ["자료 검색 일부 기능 제한 — 회수 근거 확인 필요"] : []),
       ...(modelFallbackUsed ? ["정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"] : []),
+      ...(generationBudgetLimited
+        ? ["생성 시간 보호 — 자동 보완을 생략했으므로 표시된 항목만 확인 필요"]
+        : []),
       ...(sopEvidence?.status === "not_found"
         ? ["관련 SOP 근거 미확인 — 시행 전 최신 SOP 확인 필요"]
         : sopEvidence?.status === "degraded"
@@ -103,6 +152,7 @@ function qualityMeta(
 
 // 인덱싱 자료를 근거로 훈련계획/교안을 생성한다. (NotebookLM 프롬프트는 클라이언트에서 조립)
 export async function POST(req: Request) {
+  const generationDeadlineMs = Date.now() + GENERATION_REQUEST_BUDGET_MS;
   // 실제 LLM 요청은 비정상·대용량 본문을 읽기 전에 인증과 비용 제한을 먼저 적용한다.
   if (!DEMO) {
     const auth = await requireApiUser();
@@ -223,35 +273,87 @@ export async function POST(req: Request) {
     const allowedSourceRefs = extractSourceLabels(contextText);
     let activeModelKey = genReq.model;
     let modelFallbackUsed = false;
+    let generationBudgetLimited = false;
     const withGenerationModel = async <T,>(
-      run: (model: ReturnType<typeof getChatModel>) => Promise<T>
+      run: (model: ReturnType<typeof getChatModel>, abortSignal: AbortSignal) => Promise<T>,
+      phase: "draft" | "repair"
     ): Promise<T> => {
-      try {
-        return await run(getChatModel(activeModelKey));
-      } catch (error) {
-        if (activeModelKey !== "gemini-pro") throw error;
+      const switchToFlash = (reason: string, error?: unknown) => {
         activeModelKey = "gemini-flash";
         modelFallbackUsed = true;
         console.warn(
-          "[generate] 정밀 모델 호출 실패, 빠른 모델로 한 번 재시도:",
-          error instanceof Error ? error.message : "unknown error"
+          `[generate] ${reason}, 빠른 모델로 전환:`,
+          error instanceof Error ? error.message : "time budget"
         );
-        return run(getChatModel(activeModelKey));
+      };
+
+      if (
+        phase === "repair" &&
+        activeModelKey === "gemini-pro" &&
+        remainingGenerationMs(generationDeadlineMs) < GENERATION_PRO_REPAIR_MIN_REMAINING_MS
+      ) {
+        switchToFlash("자동 보완 시간 예산 부족");
+      }
+
+      const canFallback = activeModelKey === "gemini-pro";
+      if (
+        canFallback &&
+        remainingGenerationMs(generationDeadlineMs) <
+          GENERATION_FALLBACK_RESERVE_MS +
+            GENERATION_RESPONSE_RESERVE_MS +
+            GENERATION_MIN_CALL_MS
+      ) {
+        switchToFlash("정밀 모델 실행 시간 예산 부족");
+      }
+
+      try {
+        const reserveMs =
+          activeModelKey === "gemini-pro" ? GENERATION_FALLBACK_RESERVE_MS : 0;
+        const maxCallMs =
+          activeModelKey === "gemini-pro"
+            ? GENERATION_PRO_CALL_MAX_MS
+            : activeModelKey === "gemini-flash"
+              ? GENERATION_FAST_CALL_MAX_MS
+              : GENERATION_OTHER_CALL_MAX_MS;
+        return await run(
+          getChatModel(activeModelKey),
+          generationAbortSignal(generationDeadlineMs, maxCallMs, reserveMs)
+        );
+      } catch (error) {
+        if (activeModelKey !== "gemini-pro") throw error;
+        switchToFlash("정밀 모델 호출 실패", error);
+        return run(
+          getChatModel(activeModelKey),
+          generationAbortSignal(generationDeadlineMs, GENERATION_FAST_CALL_MAX_MS)
+        );
       }
     };
 
     if (type === "slides") {
       const generateSlides = async (prompt: string) =>
-        withGenerationModel(async (model) => {
+        withGenerationModel(async (model, abortSignal) => {
           const { object } = await generateObject({
             model,
             schema: generatedSlidesSchema,
             system,
             prompt,
             temperature: 0.4,
+            abortSignal,
           });
           return object;
-        });
+        }, "draft");
+      const repairSlides = async (prompt: string) =>
+        withGenerationModel(async (model, abortSignal) => {
+          const { object } = await generateObject({
+            model,
+            schema: generatedSlidesSchema,
+            system,
+            prompt,
+            temperature: 0.4,
+            abortSignal,
+          });
+          return object;
+        }, "repair");
       let object = await generateSlides(buildGeneratePrompt(genReq, sopEvidence));
       let report = inspectGenerationQuality(
         "slides",
@@ -261,9 +363,12 @@ export async function POST(req: Request) {
         sopEvidence
       );
       let repaired = false;
-      if (!report.ok) {
+      if (
+        !report.ok &&
+        remainingGenerationMs(generationDeadlineMs) >= GENERATION_REPAIR_MIN_REMAINING_MS
+      ) {
         try {
-          object = await generateSlides(
+          object = await repairSlides(
             buildGenerationRepairPrompt({
               type: "slides",
               request: genReq,
@@ -281,8 +386,12 @@ export async function POST(req: Request) {
           );
           repaired = true;
         } catch (repairError) {
+          generationBudgetLimited ||= isGenerationBudgetError(repairError);
           console.error("[generate] 슬라이드 자동 보완 실패, 1차 초안 반환:", repairError);
         }
+      } else if (!report.ok) {
+        generationBudgetLimited = true;
+        console.warn("[generate] 슬라이드 자동 보완 생략: 응답 시간 예산 보호");
       }
       const verifiedDeck = bindSlideVisualsToSources(
         { ...object, mode: resolveSlideDeckMode(genReq.slideMode) },
@@ -304,23 +413,40 @@ export async function POST(req: Request) {
           repaired,
           retrievalDegraded,
           modelFallbackUsed,
-          sopEvidence
+          sopEvidence,
+          generationBudgetLimited
         ),
       } satisfies GeneratedSlideDeck & { quality: QualityMeta });
     }
 
     const generateDoc = async (prompt: string) =>
-      withGenerationModel(async (model) => {
+      withGenerationModel(async (model, abortSignal) => {
         const { object } = await generateObject({
           model,
           schema: generatedDocSchemaFor(type),
           system,
           prompt,
           temperature: 0.4,
+          abortSignal,
         });
         return object;
-      });
-    let object = await generateDoc(buildGeneratePrompt(genReq, sopEvidence));
+      }, "draft");
+    const repairDoc = async (prompt: string) =>
+      withGenerationModel(async (model, abortSignal) => {
+        const { object } = await generateObject({
+          model,
+          schema: generatedDocSchemaFor(type),
+          system,
+          prompt,
+          temperature: 0.4,
+          abortSignal,
+        });
+        return object;
+      }, "repair");
+    let object = stripDocumentInlineSourceRefs(
+      await generateDoc(buildGeneratePrompt(genReq, sopEvidence)),
+      allowedSourceRefs
+    );
     let report = inspectGenerationQuality(
       type,
       object,
@@ -329,16 +455,22 @@ export async function POST(req: Request) {
       sopEvidence
     );
     let repaired = false;
-    if (!report.ok) {
+    if (
+      !report.ok &&
+      remainingGenerationMs(generationDeadlineMs) >= GENERATION_REPAIR_MIN_REMAINING_MS
+    ) {
       try {
-        object = await generateDoc(
-          buildGenerationRepairPrompt({
-            type,
-            request: genReq,
-            draft: object,
-            report,
-            sopEvidence,
-          })
+        object = stripDocumentInlineSourceRefs(
+          await repairDoc(
+            buildGenerationRepairPrompt({
+              type,
+              request: genReq,
+              draft: object,
+              report,
+              sopEvidence,
+            })
+          ),
+          allowedSourceRefs
         );
         report = inspectGenerationQuality(
           type,
@@ -349,13 +481,17 @@ export async function POST(req: Request) {
         );
         repaired = true;
       } catch (repairError) {
+        generationBudgetLimited ||= isGenerationBudgetError(repairError);
         console.error("[generate] 문서 자동 보완 실패, 1차 초안 반환:", repairError);
       }
+    } else if (!report.ok) {
+      generationBudgetLimited = true;
+      console.warn("[generate] 문서 자동 보완 생략: 응답 시간 예산 보호");
     }
     const finalDoc: GeneratedDoc = {
       ...object,
-      // 생성 본문은 화면 표시용 5개 밖의 근거도 인용할 수 있으므로 전체 검색 출처를
-      // 저장 응답에 남긴다. 화면 배지는 SourceBadges에서 별도로 5개만 보여 준다.
+      // 본문에서 분리한 검증 출처를 완성 문서 맨 뒤의 '근거 자료 및 출처'에 쓸 수 있도록
+      // 화면 표시 한도와 무관하게 전체 바인딩 출처를 보존한다.
       sources: bindingSources,
       sourceLabels: allowedSourceRefs,
       sopEvidence,
@@ -368,11 +504,18 @@ export async function POST(req: Request) {
         repaired,
         retrievalDegraded,
         modelFallbackUsed,
-        sopEvidence
+        sopEvidence,
+        generationBudgetLimited
       ),
     } satisfies GeneratedDoc & { quality: QualityMeta });
   } catch (e) {
     console.error("[generate] 실패:", e);
+    if (isGenerationBudgetError(e)) {
+      return Response.json(
+        { error: "생성 시간이 길어 요청을 안전하게 종료했습니다. 잠시 후 다시 시도해 주세요." },
+        { status: 503 }
+      );
+    }
     return Response.json(
       { error: "문서 생성 중 오류가 발생했습니다." },
       { status: 500 }

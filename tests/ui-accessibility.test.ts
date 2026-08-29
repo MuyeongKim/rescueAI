@@ -38,7 +38,11 @@ const sampleDeck: GeneratedSlideDeck = {
   title: "화학보호복 교육",
   mode: "presenter",
   slides: [sampleSlide],
-  sources: [],
+  sources: Array.from({ length: 8 }, (_, index) => ({
+    document_id: index + 1,
+    doc: `교육자료 ${index + 1}`,
+    page: index + 1,
+  })),
 };
 
 function renderSlideDeck({
@@ -93,7 +97,7 @@ function renderSlideDeck({
 const sampleDoc: GeneratedDoc = {
   title: "화학보호복 훈련계획",
   sections: [{ heading: "훈련내용", content: "보호복 착용 절차를 반복 숙달합니다." }],
-  sources: [],
+  sources: [{ document_id: 1, doc: "화학보호복 교육자료", page: 12 }],
 };
 
 function renderDoc({
@@ -222,6 +226,13 @@ describe("통계 차트 대체 정보", () => {
 });
 
 describe("슬라이드 편집 접근성과 상태", () => {
+  it("본문 장수와 표지·근거 부록을 포함한 실제 다운로드 장수를 구분한다", () => {
+    const html = renderSlideDeck({ editing: false });
+
+    expect(html).toContain("본문 1장 · 다운로드 총 4장(표지·근거 포함)");
+    expect(html).toContain("PPTX 다운로드 · 총 4장 (발표자 노트 포함)");
+  });
+
   it("썸네일 버튼은 간결한 이름을 갖고 장문 미리보기는 접근성 트리에서 숨긴다", () => {
     const html = renderSlideDeck();
 
@@ -278,6 +289,17 @@ describe("슬라이드 편집 접근성과 상태", () => {
 });
 
 describe("문서 편집 상태 잠금", () => {
+  it("본문 뒤에 근거 자료와 페이지를 한 번만 모아 표시한다", () => {
+    const html = renderDoc();
+
+    expect(html).toContain("근거 자료 및 출처");
+    expect(html).toContain("화학보호복 교육자료 p.12");
+    expect(html.indexOf("근거 자료 및 출처")).toBeGreaterThan(
+      html.indexOf("보호복 착용 절차를 반복 숙달합니다.")
+    );
+    expect(html).not.toContain("근거:");
+  });
+
   it("저장 중에는 제목·본문 편집과 내보내기를 잠그고 상태를 알린다", () => {
     const html = renderDoc({ saving: true });
 

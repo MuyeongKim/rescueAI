@@ -27,4 +27,46 @@ describe("downloadHwpx", () => {
       downloadHwpx(doc, { template: "training_plan" })
     ).rejects.toThrow("평가 기준");
   });
+
+  it("미니서버 요청에도 인라인 출처를 제거한 본문과 마지막 근거 목록을 전달한다", async () => {
+    const inlineRef = "[로프구조 — 경사면 구조 p.44]";
+    const fetchMock = vi.fn().mockResolvedValue(
+      Response.json({ error: "검증 종료" }, { status: 422 })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      downloadHwpx(
+        {
+          title: "경사면 구조 훈련계획",
+          sections: [
+            {
+              heading: "훈련목표",
+              content: `구조시스템을 결정할 수 있다 ${inlineRef}.`,
+            },
+          ],
+          sources: [
+            {
+              document_id: 1,
+              doc: "로프구조 — 경사면 구조",
+              page: 44,
+            },
+          ],
+          sourceLabels: [inlineRef],
+        },
+        { template: "training_plan" }
+      )
+    ).rejects.toThrow("검증 종료");
+
+    const request = fetchMock.mock.calls[0][1] as RequestInit;
+    const payload = JSON.parse(String(request.body));
+    expect(payload.sections[0].content).toBe("구조시스템을 결정할 수 있다.");
+    expect(payload.sources).toEqual([
+      {
+        document_id: 1,
+        doc: "로프구조 — 경사면 구조",
+        page: 44,
+      },
+    ]);
+  });
 });

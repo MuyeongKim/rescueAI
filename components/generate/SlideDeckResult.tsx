@@ -24,6 +24,7 @@ import type {
   SlideCompositionType,
   SlideLayoutType,
 } from "@/lib/generate";
+import { generatedPptxSlideCount } from "@/lib/pptx-plan";
 import { fallbackSlideVisualMode, resolveSlideDeckMode } from "@/lib/generate";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -591,6 +592,7 @@ export function SlideDeckResult({
   const [announcement, setAnnouncement] = useState("");
   const selectedSlide = deck.slides[selectedIndex];
   const mode = resolveSlideDeckMode(deck.mode);
+  const downloadSlideCount = generatedPptxSlideCount(deck.slides.length, deck.sources.length);
   const editorLocked =
     chrome.saving || Boolean(chrome.locked) || regen.loadingIndex !== null || pptxLoading;
   const outputBlocked = Boolean(chrome.outputBlocked);
@@ -698,7 +700,9 @@ export function SlideDeckResult({
             <span className="rounded-full border bg-muted/40 px-2 py-0.5 text-xs font-medium text-foreground/80">
               {mode === "presenter" ? "발표형" : "상세형"}
             </span>
-            <span>슬라이드 {deck.slides.length}장 · 근거:</span>
+            <span>
+              본문 {deck.slides.length}장 · 다운로드 총 {downloadSlideCount}장(표지·근거 포함) · 근거:
+            </span>
             <SourceBadges sources={deck.sources} />
           </CardDescription>
         </CardHeader>
@@ -1044,7 +1048,9 @@ export function SlideDeckResult({
             ) : (
               <Download className="h-4 w-4" aria-hidden="true" />
             )}
-            {pptxLoading ? "PPTX 준비 중…" : "PPTX 다운로드 (발표자 노트 포함)"}
+            {pptxLoading
+              ? "PPTX 준비 중…"
+              : `PPTX 다운로드 · 총 ${downloadSlideCount}장 (발표자 노트 포함)`}
           </Button>
           <p className="text-sm leading-relaxed text-muted-foreground">
             분야 색 표준 양식으로 만들어집니다. 미리보기는 화면 구성을 간략히 보여 주며, 실제

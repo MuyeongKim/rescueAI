@@ -265,7 +265,8 @@ describe("POST /api/generate/section 입력 경계", () => {
     mocks.generateObject.mockResolvedValue({
       object: {
         heading: "필요장비",
-        content: "공기호흡기와 개인보호장비를 인원별로 준비하고 점검합니다.",
+        content:
+          "공기호흡기와 개인보호장비를 인원별로 준비하고 점검합니다. [공기호흡기 교육자료 1 p.1]",
       },
     });
 
@@ -284,5 +285,11 @@ describe("POST /api/generate/section 입력 경계", () => {
     expect(mocks.generateObject).toHaveBeenCalledOnce();
     expect(payload.sources).toEqual(bindingSources);
     expect(payload.sourceLabels).toHaveLength(7);
+    expect(payload.content).toBe(
+      "공기호흡기와 개인보호장비를 인원별로 준비하고 점검합니다."
+    );
+    expect(mocks.generateObject.mock.calls[0][0].prompt).toContain(
+      "문서 맨 뒤의 '근거 자료 및 출처'"
+    );
   });
 });

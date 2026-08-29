@@ -9,6 +9,7 @@ import {
   type GeneratedSlideDeck,
 } from "@/lib/generate";
 import { categoryStyle } from "@/lib/category";
+import { PPTX_SOURCES_PER_APPENDIX_SLIDE } from "@/lib/pptx-plan";
 import { sanitizeFilename } from "@/lib/utils";
 
 const FONT = "Noto Sans KR"; // 업로드 서식과 동일 계열(공직 PC 기본 설치)
@@ -1209,8 +1210,8 @@ export async function downloadPptx(
 
   // ───────── 근거 자료 ─────────
   const sourceChunks: GeneratedDocSource[][] = [];
-  for (let index = 0; index < deck.sources.length; index += 7) {
-    sourceChunks.push(deck.sources.slice(index, index + 7));
+  for (let index = 0; index < deck.sources.length; index += PPTX_SOURCES_PER_APPENDIX_SLIDE) {
+    sourceChunks.push(deck.sources.slice(index, index + PPTX_SOURCES_PER_APPENDIX_SLIDE));
   }
 
   sourceChunks.forEach((sources, chunkIndex) => {
@@ -1242,17 +1243,20 @@ export async function downloadPptx(
 
     sources.forEach((source, index) => {
       const y = 1.72 + index * 0.72;
-      last.addText(String(chunkIndex * 7 + index + 1).padStart(2, "0"), {
-        x: 0.82,
-        y,
-        w: 0.58,
-        h: 0.35,
-        fontFace: FONT,
-        fontSize: MIN_BODY_FONT_SIZE,
-        color: accent,
-        bold: true,
-        margin: 0,
-      });
+      last.addText(
+        String(chunkIndex * PPTX_SOURCES_PER_APPENDIX_SLIDE + index + 1).padStart(2, "0"),
+        {
+          x: 0.82,
+          y,
+          w: 0.58,
+          h: 0.35,
+          fontFace: FONT,
+          fontSize: MIN_BODY_FONT_SIZE,
+          color: accent,
+          bold: true,
+          margin: 0,
+        }
+      );
       last.addText(source.doc, {
         x: 1.54,
         y: y - 0.05,

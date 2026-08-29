@@ -30,6 +30,7 @@ import {
   type SavedMaterial,
 } from "@/lib/generate";
 import { hydrateMaterial } from "@/lib/generate-material";
+import { prepareGeneratedDocForExport } from "@/lib/document-export";
 import {
   inspectSopContract,
   type SopContractReport,
@@ -246,11 +247,14 @@ export function SavedList({
         const deck = hydrateMaterial(it).deck;
         if (!deck) throw new Error("저장한 슬라이드를 불러오지 못했습니다.");
         visualToastId = toast.loading("원문 시각자료를 준비하고 있습니다…");
-        const [{ downloadPptx }, { prepareDeckSourceVisuals }] = await Promise.all([
+        const [
+          { downloadPptx },
+          { autoAssignDeckSourceVisuals, prepareDeckSourceVisuals },
+        ] = await Promise.all([
           import("@/lib/pptx"),
           import("@/lib/source-visuals"),
         ]);
-        const prepared = await prepareDeckSourceVisuals(deck);
+        const prepared = await prepareDeckSourceVisuals(autoAssignDeckSourceVisuals(deck));
         if (prepared.requested === 0) {
           toast.dismiss(visualToastId);
           visualToastId = undefined;
@@ -392,6 +396,11 @@ export function SavedList({
         const blockingIssues = diagnostic?.blockingIssues ?? [];
         const qualityReady = blockingIssues.length === 0;
         const sopSearchUnavailable = diagnostic?.sopStatus === "degraded";
+        const hydratedPreview = open && it.kind !== "notebooklm" ? hydrateMaterial(it) : null;
+        const previewDoc = hydratedPreview?.doc
+          ? prepareGeneratedDocForExport(hydratedPreview.doc)
+          : null;
+        const previewDeck = hydratedPreview?.deck;
         return (
           <Card
             key={it.id}
@@ -570,7 +579,7 @@ export function SavedList({
               {open && (
                 <div className="animate-in fade-in slide-in-from-top-1 space-y-3 border-t pt-3 text-sm duration-200">
                   {it.kind === "slides" ? (
-                    (hydrateMaterial(it).deck?.slides ?? []).map((s, i) => (
+                    (previewDeck?.slides ?? []).map((s, i) => (
                       <div key={i}>
                         <p className="flex items-baseline gap-2 font-semibold">
                           <span className="text-xs text-muted-foreground">{i + 1}</span>
@@ -588,14 +597,29 @@ export function SavedList({
                       {(it.content as NlmContent).prompt}
                     </pre>
                   ) : (
-                    ((it.content as DocContent).sections ?? []).map((s, i) => (
-                      <section key={i}>
-                        <h3 className="font-semibold">{s.heading}</h3>
-                        <p className="whitespace-pre-wrap leading-relaxed text-muted-foreground">
-                          {s.content}
-                        </p>
-                      </section>
-                    ))
+                    <>
+                      {(previewDoc?.sections ?? []).map((s, i) => (
+                        <section key={i}>
+                          <h3 className="font-semibold">{s.heading}</h3>
+                          <p className="whitespace-pre-wrap leading-relaxed text-muted-foreground">
+                            {s.content}
+                          </p>
+                        </section>
+                      ))}
+                      {previewDoc && previewDoc.sources.length > 0 && (
+                        <section className="rounded-lg border border-border/60 bg-muted/30 p-3">
+                          <h3 className="font-semibold">근거 자료 및 출처</h3>
+                          <ul className="mt-1 space-y-0.5 text-muted-foreground">
+                            {previewDoc.sources.map((source) => (
+                              <li key={`${source.document_id}:${source.page ?? "-"}`}>
+                                {source.doc}
+                                {source.page != null ? ` p.${source.page}` : ""}
+                              </li>
+                            ))}
+                          </ul>
+                        </section>
+                      )}
+                    </>
                   )}
                 </div>
               )}

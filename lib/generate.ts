@@ -84,7 +84,9 @@ export const LESSON_SECTIONS = [
 // ── 생성 결과 ──
 const generatedSectionSchema = z.object({
   heading: z.string().describe("섹션 제목"),
-  content: z.string().describe("섹션 본문. 줄바꿈(\\n)으로 항목 구분"),
+  content: z
+    .string()
+    .describe("섹션 본문. 줄바꿈(\\n)으로 항목을 구분하고 출처 라벨은 본문에 적지 않음"),
 });
 
 // 과거 저장본·문서 변환기와의 호환용 범용 스키마. 신규 생성은 아래 유형별 스키마를 사용한다.
@@ -531,7 +533,8 @@ export function buildSopPromptContract(evidence?: SopEvidence): string {
     return `[SOP·표준절차 적용 계약]
 - 생성 결과의 지정 위치에 소제목 ${SOP_APPLICATION_MARKER}을 정확히 넣습니다.
 - SOP·현장지침의 명칭·순서·역할·중단·보고 기준은 아래 허용 SOP 출처에서 직접 확인되는 범위만 씁니다.
-- ${SOP_APPLICATION_MARKER} 내용과 같은 위치에 다음 허용 SOP 출처 라벨 중 최소 하나를 정확히 인용합니다.
+- 훈련계획·교안은 본문에 출처 라벨을 쓰지 않고 문서 맨 뒤의 '근거 자료 및 출처' 목록에만 서버가 자동으로 모읍니다. 슬라이드는 적용 장의 sourceRefs에 연결합니다.
+- 서버가 연결할 수 있는 허용 SOP 출처는 다음과 같습니다.
 ${safe.sourceLabels.map((label) => `  · ${label}`).join("\n")}
 - 일반 교육자료의 출처는 SOP 근거로 대신하지 않습니다.`;
   }
@@ -560,7 +563,8 @@ export function buildGenerateSystemPrompt(
 - 참고 자료가 특정 항목을 다루지 않으면, 억지로 채우지 말고 자료에 담긴 범위 안에서 충실히 구성합니다.
 - 일반 상식이나 타 기관 기준을 임의로 끌어오지 않습니다. 근거는 오직 이 자료입니다.
 - 참고 자료에 없는 내용은 "참고 자료에서 확인되지 않습니다"라고 명시합니다. 분량을 늘리기 위해 추측하지 않습니다.
-- 출처는 참고 자료에 표시된 라벨을 글자 하나 바꾸지 않고 그대로 인용합니다(예: [문서명 p.3]).
+- 훈련계획·교안은 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 않습니다. 검증된 출처는 서버가 문서 맨 뒤의 '근거 자료 및 출처' 목록으로 자동 구성합니다.
+- 슬라이드는 각 장의 sourceRefs에만 참고 자료에 표시된 라벨을 글자 하나 바꾸지 않고 적습니다(예: [문서명 p.3]).
 - 출처 라벨만으로 뒷받침되지 않는 새로운 주장·수치·절차를 추가하지 않습니다.
 
 ${buildSopPromptContract(sopEvidence)}
@@ -678,6 +682,9 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
   · role: objectives, concept, procedure, equipment, comparison, timeline, decision, case, safety, evidence, summary
   · composition: statement, list, process, comparison, timeline, decision-flow, checklist, scenario, visual-explanation, summary
   같은 role을 여러 장에서 써도 화면 목적이 다르면 composition을 달리하고, 전체 덱에 최소 4종류의 composition을 사용하세요.
+- 구체적인 현장 상황에서 대원이 우선 조치를 판단하는 장 → 대원이 직접 수행하고 피드백받는 실습 장 → 관찰 가능한 기준으로 평가하는 장의 순서를 포함하세요.
+- 화학보호복 보호등급이나 장비 압력 수치가 둘 이상 나오면 한 절차로 섞거나 임의로 통일하지 말고, 등급·장비 모델·측정 조건과 해당 출처를 같은 장에서 명확히 구분하세요.
+- '물 → 제독제 → 물'을 보편 절차로 단정하지 마세요. 해당 순서를 쓸 때는 물질 식별, SDS·제조사·SOP, 수반응성 및 제독제 적합 조건을 같은 장에 함께 밝히세요.
 - 과거 저장본 호환 필드 layout도 함께 지정하세요: objectives, concept, process, equipment, case, safety, summary.
 - visual은 모든 장에 지정하되, 원문 사진·표·도해가 교육에 직접 필요한 visual-explanation 장만 source-page를 사용하세요.
   이때 sourceRef와 altText를 함께 적고 fit은 contain을 사용합니다. 절차·시간흐름·판단흐름은 native-diagram,
@@ -713,7 +720,7 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
 - ${buildSopPromptContract(sopEvidence).replace(/\n/g, "\n  ")}
 - ${condition.rule}
 - 대상 수준(${req.audience})에 맞는 난이도로, 현장에서 바로 쓸 수 있게 구체적으로 작성하세요.
-- 근거가 있는 핵심 절차·수치·장비·안전 기준 뒤에는 참고 자료의 출처 라벨을 그대로 붙이세요.
+- 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 마세요. 검증된 출처는 완성 문서 맨 뒤의 '근거 자료 및 출처' 목록에 서버가 자동으로 모읍니다.
 - 자료에 없는 수량·중단 기준·평가기준은 임의로 만들지 말고 "참고 자료에서 확인되지 않습니다"라고 밝히세요.
 - 한국어로 작성하세요.`;
   }
@@ -741,7 +748,7 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
 - 각 섹션을 교관이 별도 내용을 보충하지 않아도 진행할 수 있을 만큼 구체적으로 작성하세요.
 - 대상 수준(${req.audience})에 맞춰 용어 설명·현장 적용·판단 조건의 깊이를 조절하세요.
 - 대괄호로 표시한 여섯 단계의 시간 배분 합이 교육 시간(${req.duration})과 정확히 일치해야 합니다.
-- 근거가 있는 핵심 주장 뒤에는 참고 자료의 출처 라벨을 그대로 붙이세요.
+- 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 마세요. 검증된 출처는 완성 문서 맨 뒤의 '근거 자료 및 출처' 목록에 서버가 자동으로 모읍니다.
 - 참고 자료가 다루지 않는 사례·수치·절차는 지어내지 말고 "참고 자료에서 확인되지 않습니다"라고 밝히세요.
 - 한국어로, 현장에서 바로 쓸 수 있게 구체적으로 작성하세요.`;
 }
@@ -776,6 +783,14 @@ export type GenerationQualityIssueCode =
   | "missing_slide_visual"
   | "invalid_slide_visual"
   | "generic_slide_title"
+  | "mixed_chemical_protection_levels"
+  | "conflicting_pressure_values"
+  | "unqualified_decontamination_sequence"
+  | "repetitive_slide_role"
+  | "repetitive_slide_composition"
+  | "missing_slide_scenario"
+  | "missing_slide_practice"
+  | "invalid_slide_learning_flow"
   | "missing_source_citation"
   | "missing_source_refs"
   | "invalid_source_ref"
@@ -816,6 +831,14 @@ export const GENERATION_QUALITY_LABELS = {
   missing_slide_visual: "슬라이드 시각자료 계획",
   invalid_slide_visual: "슬라이드 시각자료 근거",
   generic_slide_title: "슬라이드 결론형 제목",
+  mixed_chemical_protection_levels: "화학보호복 보호등급 정합성",
+  conflicting_pressure_values: "장비 압력 수치 정합성",
+  unqualified_decontamination_sequence: "제독 절차 적용 조건",
+  repetitive_slide_role: "슬라이드 교육 역할 다양성",
+  repetitive_slide_composition: "슬라이드 화면 구성 다양성",
+  missing_slide_scenario: "현장 판단 시나리오",
+  missing_slide_practice: "대원 참여 실습",
+  invalid_slide_learning_flow: "시나리오·실습·평가 흐름",
   missing_source_citation: "핵심 내용의 근거 출처",
   missing_source_refs: "슬라이드별 근거 출처",
   invalid_source_ref: "근거 출처 표기",
@@ -846,6 +869,9 @@ export const BLOCKING_GENERATION_QUALITY_CODES: ReadonlySet<GenerationQualityIss
     "invalid_source_ref",
     "source_validation_unavailable",
     "invalid_slide_visual",
+    "mixed_chemical_protection_levels",
+    "conflicting_pressure_values",
+    "unqualified_decontamination_sequence",
     "missing_sop_application",
     "missing_sop_reference",
     "missing_sop_disclosure",
@@ -957,6 +983,299 @@ const GENERIC_SLIDE_TITLES = new Set([
   "정리",
   "마무리",
 ]);
+const CHEMICAL_PROTECTIVE_SUIT_CUE =
+  /화학\s*(?:보호복|보호의)|화생방\s*(?:보호복|보호의)|내화학\s*(?:보호복|보호의)|유해화학(?:물질)?\s*(?:보호복|보호의)/i;
+const PROTECTION_LEVEL_COMPARISON_CUE =
+  /등급별|보호\s*등급|보호\s*수준|적용\s*조건|차이|구분|비교|선정\s*기준/;
+const DECONTAMINATION_SEQUENCE_CUE =
+  /물(?:\s*(?:세척|헹굼))?\s*(?:→|⇒|->|후|다음)\s*제독제(?:\s*(?:처리|도포|세척))?\s*(?:→|⇒|->|후|다음)\s*(?:다시\s*)?물/;
+const DECONTAMINATION_CONDITION_CUE =
+  /물질\s*(?:식별|확인|종류|특성)|오염물질\s*(?:식별|확인|종류|특성)|SDS|MSDS|제조사\s*(?:지침|기준)|SOP|수반응성|금수성|물과\s*반응|물\s*사용\s*(?:가능|금지|여부)|제독제\s*(?:적합|호환|선정)|전문가\s*(?:확인|자문)/i;
+const SCENARIO_CONTEXT_CUE =
+  /현장\s*상황|상황\s*(?:제시|가정|부여)|출동\s*(?:상황|현장)|사례|시나리오|요구조자|오염\s*구역/;
+const SCENARIO_DECISION_CUE = /판단|결정|선택|조치|우선|무엇|어떻게|분기|대응/;
+const PRACTICE_ACTION_CUE =
+  /2인\s*1조|역할\s*(?:교대|분담|을\s*바꾸)|반복\s*(?:수행|훈련|연습)|직접\s*(?:수행|시연|착용|탈의|조작|점검)|대원\s*실습/;
+const PERFORMANCE_EVALUATION_CUE =
+  /평가|통과|수행\s*기준|판단\s*기준|모범답안|체크리스트.{0,30}(?:기준|충족)/;
+
+const PRESSURE_EQUIPMENT_FAMILIES = [
+  {
+    key: "breathing-air",
+    cue: /공기\s*호흡기|SCBA|호흡용\s*공기|등지게|면체|공기\s*용기/i,
+  },
+  {
+    key: "pump-water",
+    cue: /소방\s*펌프|펌프차|방수압|토출압|송수압|방수포/i,
+  },
+  {
+    key: "hydraulic-rescue",
+    cue: /유압|스프레더|유압\s*커터/i,
+  },
+  {
+    key: "gas-cylinder",
+    cue: /가스\s*용기|산소\s*용기|압축\s*가스|실린더/i,
+  },
+] as const;
+type PressureEquipmentFamily = (typeof PRESSURE_EQUIPMENT_FAMILIES)[number]["key"];
+type PressureSemanticKind = "alarm" | "test" | "rated" | "entry" | "operating";
+
+const PRESSURE_DISTINCTION_CUE =
+  /비교|구분|기종|모델|장비별|용기별|정격별|범위|[~∼]|부터|까지|이상.{0,20}(?:이하|미만)/;
+
+function slideNarrativeText(slide: GeneratedSlide): string {
+  return compactText(
+    [slide.title, ...slide.bullets, ...(slide.steps ?? []), slide.notes]
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
+function slideEvidenceText(slide: GeneratedSlide): string {
+  return compactText(
+    [
+      slideNarrativeText(slide),
+      ...(slide.sourceRefs ?? []),
+      slide.visual?.sourceRef,
+      slide.visual?.altText,
+      slide.visual?.caption,
+    ]
+      .filter(Boolean)
+      .join(" ")
+  );
+}
+
+function chemicalProtectionLevels(text: string): Set<string> {
+  const levels = new Set<string>();
+  const namedLevelPattern = /\b(?:level|레벨)\s*[-:：]?\s*([abc])\b/gi;
+  let match: RegExpExecArray | null;
+  while ((match = namedLevelPattern.exec(text)) !== null) {
+    levels.add(match[1].toUpperCase());
+  }
+  const koreanGradePattern = /(?:^|[^A-Za-z0-9])([ABC])\s*(?:급|등급)/g;
+  while ((match = koreanGradePattern.exec(text)) !== null) {
+    levels.add(match[1]);
+  }
+  return levels;
+}
+
+function pressureEquipmentFamily(
+  text: string,
+  deckFamilies: ReadonlySet<PressureEquipmentFamily>
+): PressureEquipmentFamily | null {
+  const local = PRESSURE_EQUIPMENT_FAMILIES.find(({ cue }) => cue.test(text));
+  if (local) return local.key;
+  return deckFamilies.size === 1 ? Array.from(deckFamilies)[0] : null;
+}
+
+function pressureSemanticKind(text: string, pressureIndex: number): PressureSemanticKind {
+  const cues: Array<{ kind: PressureSemanticKind; pattern: RegExp }> = [
+    { kind: "alarm", pattern: /경보|잔압|퇴각|철수|비상/g },
+    { kind: "test", pattern: /시험|검사|기밀|누설/g },
+    { kind: "rated", pattern: /정격|최대|완충|충전\s*(?:기준|압력)/g },
+    {
+      kind: "entry",
+      pattern: /최소|이상|미만|진입|착용\s*전|사용\s*전|출동\s*전|시작|초기|준비/g,
+    },
+  ];
+  let closestKind: PressureSemanticKind = "operating";
+  let closestDistance = Number.POSITIVE_INFINITY;
+  for (const { kind, pattern } of cues) {
+    let cue: RegExpExecArray | null;
+    while ((cue = pattern.exec(text)) !== null) {
+      const cueCenter = cue.index + cue[0].length / 2;
+      const distance = Math.abs(cueCenter - pressureIndex);
+      if (distance < closestDistance) {
+        closestKind = kind;
+        closestDistance = distance;
+      }
+    }
+  }
+  return closestKind;
+}
+
+function inspectSlideSafetyConsistency(
+  draft: GeneratedSlideDeckDraft
+): GenerationQualityIssue[] {
+  const issues: GenerationQualityIssue[] = [];
+  const evidenceTexts = draft.slides.map(slideEvidenceText);
+  const deckEvidence = compactText([draft.title, ...evidenceTexts].join(" "));
+
+  if (CHEMICAL_PROTECTIVE_SUIT_CUE.test(deckEvidence)) {
+    const levelOccurrences: Array<{
+      levels: Set<string>;
+      comparison: boolean;
+    }> = [];
+    const titleLevels = chemicalProtectionLevels(draft.title);
+    if (titleLevels.size > 0) {
+      levelOccurrences.push({
+        levels: titleLevels,
+        comparison:
+          titleLevels.size >= 2 && PROTECTION_LEVEL_COMPARISON_CUE.test(draft.title),
+      });
+    }
+    draft.slides.forEach((slide, index) => {
+      const levels = chemicalProtectionLevels(evidenceTexts[index]);
+      if (levels.size === 0) return;
+      levelOccurrences.push({
+        levels,
+        comparison:
+          levels.size >= 2 &&
+          (slide.composition === "comparison" ||
+            PROTECTION_LEVEL_COMPARISON_CUE.test(slideNarrativeText(slide))),
+      });
+    });
+    const distinctLevels = new Set(
+      levelOccurrences.flatMap(({ levels }) => Array.from(levels))
+    );
+    const deliberateComparison =
+      levelOccurrences.length > 0 &&
+      levelOccurrences.every(({ comparison }) => comparison);
+    if (distinctLevels.size > 1 && !deliberateComparison) {
+      issues.push({
+        code: "mixed_chemical_protection_levels",
+        path: "slides",
+        message: `화학보호복 보호등급 ${Array.from(distinctLevels).sort().join("/")}가 비교 장 밖에서 함께 사용되었습니다. 같은 등급으로 임의 통일하지 말고 각 절차의 적용 등급과 근거 출처를 분리해 확인하세요.`,
+      });
+    }
+  }
+
+  const deckFamilies = new Set<PressureEquipmentFamily>();
+  PRESSURE_EQUIPMENT_FAMILIES.forEach(({ key, cue }) => {
+    if (cue.test(deckEvidence)) deckFamilies.add(key);
+  });
+  const pressureGroups = new Map<
+    string,
+    Array<{ valueBar: number; raw: string; slideIndex: number; comparison: boolean }>
+  >();
+  evidenceTexts.forEach((text, slideIndex) => {
+    const pattern = /(\d{1,4}(?:\.\d+)?)\s*(bar|바|mpa)/gi;
+    let match: RegExpExecArray | null;
+    while ((match = pattern.exec(text)) !== null) {
+      const start = Math.max(0, match.index - 55);
+      const end = Math.min(text.length, match.index + match[0].length + 55);
+      const context = text.slice(start, end);
+      const equipment = pressureEquipmentFamily(context, deckFamilies);
+      if (!equipment) continue;
+      const kind = pressureSemanticKind(context, match.index - start);
+      const numericValue = Number(match[1]);
+      if (!Number.isFinite(numericValue)) continue;
+      const valueBar = match[2].toLocaleLowerCase() === "mpa" ? numericValue * 10 : numericValue;
+      const key = `${equipment}:${kind}`;
+      const mentions = pressureGroups.get(key) ?? [];
+      mentions.push({
+        valueBar,
+        raw: match[0],
+        slideIndex,
+        comparison:
+          draft.slides[slideIndex].composition === "comparison" ||
+          PRESSURE_DISTINCTION_CUE.test(text),
+      });
+      pressureGroups.set(key, mentions);
+    }
+  });
+  pressureGroups.forEach((mentions) => {
+    const values = new Set(mentions.map(({ valueBar }) => valueBar));
+    if (values.size <= 1) return;
+    const slideIndices = new Set(mentions.map(({ slideIndex }) => slideIndex));
+    const deliberateComparison =
+      slideIndices.size === 1 && mentions.every(({ comparison }) => comparison);
+    if (deliberateComparison) return;
+    issues.push({
+      code: "conflicting_pressure_values",
+      path: "slides",
+      message: `같은 장비·압력 기준에 ${Array.from(new Set(mentions.map(({ raw }) => raw))).join(" / ")}가 함께 사용되었습니다. 수치를 임의로 선택하지 말고 장비 모델·측정 조건·근거 출처를 구분해 확인하세요.`,
+    });
+  });
+
+  draft.slides.forEach((slide, index) => {
+    const text = slideNarrativeText(slide);
+    if (
+      DECONTAMINATION_SEQUENCE_CUE.test(text) &&
+      !DECONTAMINATION_CONDITION_CUE.test(text)
+    ) {
+      issues.push({
+        code: "unqualified_decontamination_sequence",
+        path: `slides.${index}`,
+        message:
+          "'물 → 제독제 → 물' 순서를 공통 절차로 단정하기 전에 물질 식별, SDS·제조사·SOP, 수반응성 및 제독제 적합 조건을 같은 장에서 밝혀야 합니다.",
+      });
+    }
+  });
+
+  return issues;
+}
+
+function repeatedSlideDimension<T extends string>(
+  values: readonly (T | undefined)[]
+): { dominant: T; count: number; unique: number } | null {
+  if (values.length < 6 || values.some((value) => !value)) return null;
+  const counts = new Map<T, number>();
+  values.forEach((value) => counts.set(value as T, (counts.get(value as T) ?? 0) + 1));
+  const [dominant, count] = Array.from(counts.entries()).sort((a, b) => b[1] - a[1])[0];
+  const minimumKinds = values.length >= 8 ? 4 : 3;
+  if (counts.size >= minimumKinds && count / values.length <= 0.6) return null;
+  return { dominant, count, unique: counts.size };
+}
+
+function inspectSlideLearningFlow(
+  draft: GeneratedSlideDeckDraft
+): GenerationQualityIssue[] {
+  const issues: GenerationQualityIssue[] = [];
+  const texts = draft.slides.map(slideNarrativeText);
+  const scenarioIndex = texts.findIndex(
+    (text) => SCENARIO_CONTEXT_CUE.test(text) && SCENARIO_DECISION_CUE.test(text)
+  );
+  const practiceIndex = texts.findIndex((text) => PRACTICE_ACTION_CUE.test(text));
+  const evaluationIndex = texts.findIndex((text) => PERFORMANCE_EVALUATION_CUE.test(text));
+
+  if (scenarioIndex < 0) {
+    issues.push({
+      code: "missing_slide_scenario",
+      path: "slides",
+      message: "대원이 조건을 읽고 우선 조치를 판단하는 구체적인 현장 상황 장이 필요합니다.",
+    });
+  }
+  if (practiceIndex < 0) {
+    issues.push({
+      code: "missing_slide_practice",
+      path: "slides",
+      message: "대원이 직접 수행하고 동료·교관의 피드백을 받는 참여형 실습 장이 필요합니다.",
+    });
+  }
+  if (
+    scenarioIndex >= 0 &&
+    practiceIndex >= 0 &&
+    evaluationIndex >= 0 &&
+    !(scenarioIndex < practiceIndex && practiceIndex < evaluationIndex)
+  ) {
+    issues.push({
+      code: "invalid_slide_learning_flow",
+      path: "slides",
+      message: "현장 상황에서 판단한 뒤 직접 실습하고 마지막에 수행 기준으로 평가하는 순서로 구성하세요.",
+    });
+  }
+
+  const repeatedRole = repeatedSlideDimension(draft.slides.map(({ role }) => role));
+  if (repeatedRole) {
+    issues.push({
+      code: "repetitive_slide_role",
+      path: "slides",
+      message: `role '${repeatedRole.dominant}'이 ${draft.slides.length}장 중 ${repeatedRole.count}장에 반복되고 전체 role이 ${repeatedRole.unique}종뿐입니다. 학습 흐름에 맞게 역할을 나누세요.`,
+    });
+  }
+  const repeatedComposition = repeatedSlideDimension(
+    draft.slides.map(({ composition }) => composition)
+  );
+  if (repeatedComposition) {
+    issues.push({
+      code: "repetitive_slide_composition",
+      path: "slides",
+      message: `composition '${repeatedComposition.dominant}'이 ${draft.slides.length}장 중 ${repeatedComposition.count}장에 반복되고 전체 구도가 ${repeatedComposition.unique}종뿐입니다. 메시지에 맞는 화면 구도를 분산하세요.`,
+    });
+  }
+  return issues;
+}
 
 function compactText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
@@ -1133,17 +1452,83 @@ function isDocumentControlMarker(reference: string): boolean {
   );
 }
 
-function inspectRequiredSourceCitations(
+const DOCUMENT_SOURCE_LABEL_CUE =
+  /(?:p\.\s*\d+|출처|교범|교재|지침|매뉴얼|참고\s*자료|근거\s*자료|표준\s*(?:작전)?\s*절차|\bSOP\b)/i;
+
+function isDocumentSourceLabel(
+  reference: string,
+  allowedSourceRefs: ReadonlySet<string>
+): boolean {
+  const normalized = reference.trim();
+  if (isDocumentControlMarker(normalized)) return false;
+  return allowedSourceRefs.has(normalized) || DOCUMENT_SOURCE_LABEL_CUE.test(normalized);
+}
+
+/**
+ * 훈련계획·교안 본문의 인라인 출처를 제거한다.
+ *
+ * LLM이 프롬프트를 따르지 않더라도 검증된 출처는 `GeneratedDoc.sources`로
+ * 문서 맨 뒤에만 남긴다. 시간 배분과 `[관련 SOP 적용]` 같은 문서 제어 표식은
+ * 출처가 아니므로 그대로 보존한다.
+ */
+export function stripDocumentInlineSourceRefsFromText(
+  content: string,
+  allowedSourceRefs: readonly string[] = []
+): string {
+  const allowed = new Set(allowedSourceRefs.map((reference) => reference.trim()).filter(Boolean));
+  const stripped = content.replace(INLINE_SOURCE_REF, (reference) =>
+    isDocumentSourceLabel(reference, allowed) ? "" : reference
+  );
+
+  return stripped
+    .split("\n")
+    .map((line) =>
+      line
+        .replace(/[ \t]+([,.;:!?])/g, "$1")
+        .replace(/[,;]\s*([.!?])/g, "$1")
+        .replace(/([.!?])\s*[.!?]+/g, "$1")
+        .replace(/[ \t]{2,}/g, " ")
+        .trimEnd()
+    )
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/** 전체 훈련계획·교안 초안을 표시용 본문과 맨 뒤 근거 목록으로 분리한다. */
+export function stripDocumentInlineSourceRefs<T extends GeneratedDocDraft>(
+  draft: T,
+  allowedSourceRefs: readonly string[] = []
+): T {
+  return {
+    ...draft,
+    sections: draft.sections.map((section) => ({
+      ...section,
+      content: stripDocumentInlineSourceRefsFromText(section.content, allowedSourceRefs),
+    })),
+  };
+}
+
+/** 섹션 하나만 재생성할 때도 전체 문서와 같은 출처 표시 규칙을 적용한다. */
+export function stripSectionInlineSourceRefs<T extends GeneratedSection>(
+  section: T,
+  allowedSourceRefs: readonly string[] = []
+): T {
+  return {
+    ...section,
+    content: stripDocumentInlineSourceRefsFromText(section.content, allowedSourceRefs),
+  };
+}
+
+function inspectDocumentSourceReferences(
   sections: readonly GeneratedSection[],
   documentHeadings: readonly string[],
-  citationRequiredHeadings: readonly string[],
   allowedSourceRefs?: readonly string[]
 ): GenerationQualityIssue[] {
   if (!allowedSourceRefs || allowedSourceRefs.length === 0) return [];
 
   const issues: GenerationQualityIssue[] = [];
   const allowed = new Set(allowedSourceRefs.map((sourceRef) => sourceRef.trim()));
-  const citationRequired = new Set(citationRequiredHeadings);
   for (const heading of documentHeadings) {
     const found = findSection(sections, heading);
     if (!found) continue;
@@ -1154,14 +1539,6 @@ function inspectRequiredSourceCitations(
           .filter((ref) => !isDocumentControlMarker(ref))
       )
     );
-    const matched = refs.filter((ref) => allowed.has(ref));
-    if (citationRequired.has(heading) && matched.length === 0) {
-      issues.push({
-        code: "missing_source_citation",
-        path: `sections.${found.index}.content`,
-        message: `'${heading}'의 핵심 내용에 실제 참고 자료의 출처 라벨을 연결해야 합니다.`,
-      });
-    }
     refs
       .filter((ref) => !allowed.has(ref))
       .forEach((ref) => {
@@ -1206,10 +1583,9 @@ export function inspectGeneratedPlan(
     );
   }
   issues.push(
-    ...inspectRequiredSourceCitations(
+    ...inspectDocumentSourceReferences(
       draft.sections,
       TRAINING_PLAN_SECTIONS,
-      ["훈련내용", "필요장비", "안전관리"],
       allowedSourceRefs
     )
   );
@@ -1250,10 +1626,9 @@ export function inspectGeneratedLesson(
     );
   }
   issues.push(
-    ...inspectRequiredSourceCitations(
+    ...inspectDocumentSourceReferences(
       draft.sections,
       LESSON_SECTIONS,
-      ["핵심이론", "교관시범", "안전유의사항"],
       allowedSourceRefs
     )
   );
@@ -1476,6 +1851,9 @@ export function inspectGeneratedSlides(
     }
   });
 
+  issues.push(...inspectSlideSafetyConsistency(draft));
+  issues.push(...inspectSlideLearningFlow(draft));
+
   if (!hasSafety) {
     issues.push({
       code: "missing_safety",
@@ -1584,6 +1962,16 @@ export function buildGenerationRepairPrompt(args: {
         ? `sections는 ${LESSON_SECTIONS.join(" → ")}의 정확히 7개를 같은 순서로 유지하세요.`
         : `본문 슬라이드는 ${slideCountFor(args.request.duration)}장으로 맞추고, 최상위 mode는 ${repairSlideMode}로 유지하세요. 모든 장에 role·composition·legacy layout·visual·sourceRefs를 넣으세요. 제목은 ${MAX_SLIDE_TITLE_CHARS}자, 각 핵심 문장은 ${MAX_SLIDE_BULLET_CHARS}자, 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 다듬으세요.`;
   const condition = conditionPromptParts(args.request.conditions);
+  const slideRepairRules =
+    args.type === "slides"
+      ? `
+- 보호등급·압력 수치·제독 순서의 정합성 문제는 값을 임의로 하나로 통일하거나 새 절차를 만들지 마세요. 적용 조건과 근거 출처를 분리해 명시하고, 참고 자료로 구분할 수 없으면 "참고 자료에서 확인되지 않습니다"라고 밝히세요.
+- 현장 상황 판단 → 대원 참여 실습 → 수행평가 순서를 만들고, 같은 role·composition의 과도한 반복은 각 장의 실제 교육 목적에 맞게 분산하세요.`
+      : "";
+  const citationRepairRule =
+    args.type === "slides"
+      ? "출처 라벨은 [참고 자료]에 표시된 문자열만 각 장의 sourceRefs에 그대로 적으세요."
+      : "훈련계획·교안 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 넣지 마세요. 검증된 출처는 서버가 문서 맨 뒤의 '근거 자료 및 출처' 목록으로 자동 구성합니다.";
 
   return `아래 ${args.type === "plan" ? "훈련계획" : args.type === "lesson" ? "교안" : "슬라이드"} 초안을 품질 검사 결과에 따라 전체 수정하세요.
 
@@ -1602,9 +1990,10 @@ ${issueLines}
 - ${structure}
 - ${condition.rule}
 - ${buildSopPromptContract(args.sopEvidence).replace(/\n/g, "\n  ")}
+${slideRepairRules}
 - 시스템 프롬프트의 [참고 자료]에 있는 내용만 사용하세요. 분량을 채우려고 일반 상식·수치·절차·사례를 만들지 마세요.
 - 초안에 이미 있는 근거 있는 내용은 보존하되, 중복을 제거하고 교관·대원의 실제 행동과 평가 기준을 구체화하세요.
-- 출처 라벨은 [참고 자료]에 표시된 문자열만 그대로 사용하세요. 확인할 수 없는 내용은 "참고 자료에서 확인되지 않습니다"라고 쓰세요.
+- ${citationRepairRule} 확인할 수 없는 내용은 "참고 자료에서 확인되지 않습니다"라고 쓰세요.
 - 검사에서 지적하지 않은 항목도 앞뒤 흐름과 대상 수준이 자연스럽도록 함께 다듬으세요.
 - 설명이나 코드블록 없이, 요청 유형의 전체 JSON 객체만 반환하세요.
 
@@ -1633,7 +2022,9 @@ export type SavedMaterial = {
 // ── 부분 재생성 (섹션/슬라이드 1개) ──
 export const regeneratedSectionSchema = z.object({
   heading: z.string().describe("섹션 제목 (번호 포함, 예: '3. 단계별 진행')"),
-  content: z.string().describe("섹션 본문. 줄바꿈(\\n)으로 항목 구분"),
+  content: z
+    .string()
+    .describe("섹션 본문. 줄바꿈(\\n)으로 항목을 구분하고 출처 라벨은 본문에 적지 않음"),
 });
 
 export const regeneratedSlideSchema = generatedSlideSchema;
@@ -1691,6 +2082,7 @@ ${args.currentContent}${instr}
 - ${condition.rule}
 - 다른 섹션과 중복되지 않게, 이 섹션의 역할에 충실하게 작성하세요.
 - 선택된 세부 훈련 방향이 있으면 그 범위에 집중하고 다른 방향을 새로 섞지 마세요.${sopRule}
+- 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 마세요. 출처는 서버가 전체 문서 맨 뒤의 '근거 자료 및 출처'에 자동으로 모읍니다.
 - 대상 수준(${args.audience})·교육 시간(${args.duration})에 맞춰 한국어로 작성하세요.
 - heading은 반드시 현재 제목 "${args.currentHeading}"을 글자 그대로 유지하세요.
 - 이 섹션 하나만 JSON으로 반환하세요(heading, content).`;

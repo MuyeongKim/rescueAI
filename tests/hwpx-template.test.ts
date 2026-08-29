@@ -106,4 +106,34 @@ describe("훈련계획 HWPX 정렬 정규화", () => {
       '<hh:align horizontal="LEFT" vertical="BASELINE"/>'
     );
   });
+
+  it("로컬 HWPX 본문 인라인 출처는 제거하고 마지막 근거 자료 및 출처에만 기록한다", () => {
+    const inlineRef = "[로프구조 — 경사면 구조 p.44]";
+    const files = buildHwpxFiles({
+      title: "훈련계획",
+      sections: [
+        {
+          heading: "훈련내용",
+          content: `경사면 구조시스템을 결정한다 ${inlineRef}.\n[실습 · 20분] [관련 SOP 적용]`,
+        },
+      ],
+      sources: [
+        {
+          document_id: 1,
+          doc: "로프구조 — 경사면 구조",
+          page: 44,
+        },
+      ],
+      sourceLabels: [inlineRef],
+    });
+    const section = files["Contents/section0.xml"];
+    const preview = files["Preview/PrvText.txt"];
+
+    expect(section).toContain("경사면 구조시스템을 결정한다.");
+    expect(section).toContain("[실습 · 20분] [관련 SOP 적용]");
+    expect(section).not.toContain(inlineRef);
+    expect(section.match(/로프구조 — 경사면 구조 p\.44/g)).toHaveLength(1);
+    expect(preview).not.toContain(inlineRef);
+    expect(preview).toMatch(/근거 자료 및 출처\n- 로프구조 — 경사면 구조 p\.44$/);
+  });
 });

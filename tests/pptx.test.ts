@@ -17,6 +17,10 @@ import {
   MIN_BODY_FONT_SIZE,
   resolveSlideLayout,
 } from "@/lib/pptx";
+import {
+  generatedPptxSlideCount,
+  pptxSourceAppendixSlideCount,
+} from "@/lib/pptx-plan";
 
 function slide(
   title: string,
@@ -34,6 +38,15 @@ const deckSources: GeneratedDocSource[] = [
   { document_id: 1, doc: "구조대원 교육교범", page: 3 },
   { document_id: 2, doc: "현장 안전관리 지침", page: null },
 ];
+
+describe("PPTX 장수 계산", () => {
+  it("표지·본문·7개 단위 근거 부록을 실제 파일 장수와 같은 규칙으로 계산한다", () => {
+    expect(pptxSourceAppendixSlideCount(0)).toBe(0);
+    expect(pptxSourceAppendixSlideCount(7)).toBe(1);
+    expect(pptxSourceAppendixSlideCount(8)).toBe(2);
+    expect(generatedPptxSlideCount(10, 8)).toBe(13);
+  });
+});
 
 describe("resolveSlideLayout", () => {
   it("생성 스키마의 의미 레이아웃을 실제 렌더 구도로 매핑한다", () => {

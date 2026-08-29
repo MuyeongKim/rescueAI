@@ -3,6 +3,12 @@
 // 최소 골격(mimetype/version/container/content.hpf/header/section0/settings)을 직접 조립한다.
 import JSZip from "jszip";
 import type { GeneratedDoc } from "@/lib/generate";
+import {
+  DOCUMENT_SOURCE_SECTION_TITLE,
+  appendDocumentSources,
+  documentSourceLines,
+  prepareGeneratedDocForExport,
+} from "@/lib/document-export";
 
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>';
 
@@ -157,12 +163,15 @@ function buildSectionXml(doc: GeneratedDoc): string {
     paras.push(paragraph({ text: "", charPrId: 0, paraPrId: 0 }));
   }
 
-  if (doc.sources.length > 0) {
-    paras.push(paragraph({ text: "근거 자료", charPrId: 2, paraPrId: 0 }));
-    for (const s of doc.sources) {
+  const sourceLines = documentSourceLines(doc.sources);
+  if (sourceLines.length > 0) {
+    paras.push(
+      paragraph({ text: DOCUMENT_SOURCE_SECTION_TITLE, charPrId: 2, paraPrId: 0 })
+    );
+    for (const source of sourceLines) {
       paras.push(
         paragraph({
-          text: `- ${s.doc}${s.page != null ? ` p.${s.page}` : ""}`,
+          text: `- ${source}`,
           charPrId: 0,
           paraPrId: 0,
         })
@@ -225,11 +234,12 @@ const SETTINGS_XML =
 
 function buildPreviewText(doc: GeneratedDoc): string {
   const body = doc.sections.map((s) => `${s.heading}\n${s.content}`).join("\n\n");
-  return `${doc.title}\n\n${body}`;
+  return `${doc.title}\n\n${appendDocumentSources(body, doc.sources)}`;
 }
 
 // HWPX 패키지 파일 맵 (테스트에서도 재사용)
 export function buildHwpxFiles(doc: GeneratedDoc): Record<string, string> {
+  const exportDoc = prepareGeneratedDocForExport(doc);
   return {
     mimetype: "application/hwp+zip",
     "version.xml": VERSION_XML,
@@ -237,10 +247,10 @@ export function buildHwpxFiles(doc: GeneratedDoc): Record<string, string> {
     "META-INF/container.xml": CONTAINER_XML,
     "META-INF/container.rdf": CONTAINER_RDF,
     "META-INF/manifest.xml": MANIFEST_XML,
-    "Contents/content.hpf": buildContentHpf(doc.title),
+    "Contents/content.hpf": buildContentHpf(exportDoc.title),
     "Contents/header.xml": buildHeaderXml(),
-    "Contents/section0.xml": buildSectionXml(doc),
-    "Preview/PrvText.txt": buildPreviewText(doc),
+    "Contents/section0.xml": buildSectionXml(exportDoc),
+    "Preview/PrvText.txt": buildPreviewText(exportDoc),
   };
 }
 

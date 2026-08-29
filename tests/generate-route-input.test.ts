@@ -188,8 +188,80 @@ describe("POST /api/generate 입력 경계", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.generateObject).toHaveBeenCalledOnce();
+    expect(mocks.generateObject.mock.calls[0]?.[0]?.abortSignal).toBeInstanceOf(AbortSignal);
     expect(payload.sources).toEqual(bindingSources);
     expect(payload.sourceLabels).toHaveLength(7);
+    expect(
+      payload.sections.every((section: { content: string }) =>
+        !section.content.includes("[공기호흡기 교육자료 1 p.1]")
+      )
+    ).toBe(true);
     expect(payload.quality.errors).toEqual([]);
+  });
+
+  it("정밀 모델 호출이 시간 초과되면 시간 예산 안에서 빠른 모델로 재시도한다", async () => {
+    const source = { document_id: 1, doc: "공기호흡기 교육자료", page: 1 };
+    const sourceRef = "[공기호흡기 교육자료 p.1]";
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: `${sourceRef}\n공기호흡기 점검과 착용 절차 근거`,
+      sources: [source],
+      bindingSources: [source],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.getChatModel.mockImplementation((key) => key);
+    mocks.generateObject
+      .mockRejectedValueOnce(new DOMException("timed out", "TimeoutError"))
+      .mockResolvedValueOnce({ object: validGeneratedPlan(sourceRef) });
+
+    const response = await POST(requestWith(validBody({ model: "gemini-pro" })));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(mocks.getChatModel).toHaveBeenNthCalledWith(1, "gemini-pro");
+    expect(mocks.getChatModel).toHaveBeenNthCalledWith(2, "gemini-flash");
+    expect(mocks.generateObject).toHaveBeenCalledTimes(2);
+    expect(mocks.generateObject.mock.calls[1]?.[0]?.abortSignal).toBeInstanceOf(AbortSignal);
+    expect(payload.quality.warnings).toContain(
+      "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"
+    );
+  });
+
+  it("자동 보완 시 남은 시간이 적으면 느린 정밀 모델을 다시 기다리지 않는다", async () => {
+    let now = 1_000;
+    const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const source = { document_id: 1, doc: "공기호흡기 교육자료", page: 1 };
+    const sourceRef = "[공기호흡기 교육자료 p.1]";
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: `${sourceRef}\n공기호흡기 점검과 착용 절차 근거`,
+      sources: [source],
+      bindingSources: [source],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.getChatModel.mockImplementation((key) => key);
+    const invalidDraft = validGeneratedPlan(sourceRef);
+    invalidDraft.sections[0].content = "짧은 목표";
+    mocks.generateObject
+      .mockImplementationOnce(async () => {
+        now += 60_000;
+        return { object: invalidDraft };
+      })
+      .mockResolvedValueOnce({ object: validGeneratedPlan(sourceRef) });
+
+    try {
+      const response = await POST(requestWith(validBody({ model: "gemini-pro" })));
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(mocks.getChatModel).toHaveBeenNthCalledWith(1, "gemini-pro");
+      expect(mocks.getChatModel).toHaveBeenNthCalledWith(2, "gemini-flash");
+      expect(payload.quality.repaired).toBe(true);
+      expect(payload.quality.warnings).toContain(
+        "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"
+      );
+    } finally {
+      nowSpy.mockRestore();
+    }
   });
 });

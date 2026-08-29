@@ -1,11 +1,14 @@
 import {
   fallbackSlideVisualMode,
+  generatedSourceLabel,
+  type GeneratedDocSource,
   type GeneratedSlide,
   type GeneratedSlideDeck,
 } from "@/lib/generate";
 
 const PDF_WORKER_PATH = "/pdf.worker.min.mjs";
 const MAX_SOURCE_VISUALS_PER_DECK = 8;
+const MAX_AUTOMATIC_SOURCE_VISUALS = 3;
 const MAX_RENDER_WIDTH = 1440;
 const MAX_RENDER_HEIGHT = 1080;
 const JPEG_QUALITY = 0.84;
@@ -49,6 +52,179 @@ export type SourceVisualRequestPlan = {
   rejected: RejectedVisualRequest[];
   requested: number;
 };
+
+type VerifiedSource = {
+  source: GeneratedDocSource;
+  label: string;
+  pageKey: string;
+};
+
+type AutomaticSourceVisualCandidate = {
+  slideIndex: number;
+  priority: number;
+  sources: VerifiedSource[];
+};
+
+function verifiedSourcesByLabel(
+  sources: readonly GeneratedDocSource[]
+): Map<string, VerifiedSource> {
+  const candidates = new Map<string, Map<string, VerifiedSource>>();
+
+  for (const source of sources) {
+    if (
+      !Number.isSafeInteger(source.document_id) ||
+      source.document_id <= 0 ||
+      typeof source.doc !== "string" ||
+      !source.doc.trim() ||
+      source.page == null ||
+      !Number.isSafeInteger(source.page) ||
+      source.page <= 0
+    ) {
+      continue;
+    }
+
+    const normalized: GeneratedDocSource = {
+      document_id: source.document_id,
+      doc: source.doc.trim(),
+      page: source.page,
+    };
+    const label = generatedSourceLabel(normalized);
+    const pageKey = `${normalized.document_id}:${normalized.page}`;
+    const byIdentity = candidates.get(label) ?? new Map<string, VerifiedSource>();
+    if (!byIdentity.has(pageKey)) {
+      byIdentity.set(pageKey, { source: normalized, label, pageKey });
+    }
+    candidates.set(label, byIdentity);
+  }
+
+  const verified = new Map<string, VerifiedSource>();
+  candidates.forEach((byIdentity, label) => {
+    // 같은 표시 라벨이 서로 다른 실제 문서·페이지를 가리키면 어느 쪽도 추정하지 않는다.
+    if (byIdentity.size !== 1) return;
+    const source = byIdentity.values().next().value;
+    if (source) verified.set(label, source);
+  });
+  return verified;
+}
+
+function automaticVisualPriority(slide: GeneratedSlide): number | null {
+  if (slide.composition === "visual-explanation") return 0;
+  if (slide.role === "evidence") return 1;
+  if (slide.role === "equipment") return 2;
+  return null;
+}
+
+/**
+ * LLM이 원문 페이지를 한 장도 선택하지 않았을 때만, 각 장의 정확한 sourceRefs와
+ * 서버가 검증해 덱에 보관한 sources를 교차 확인해 최대 3장의 전체 원문 페이지를 연결한다.
+ * 이미 선택된 원문·기본 다이어그램은 유지하고, 같은 원문 페이지는 반복하지 않는다.
+ */
+export function autoAssignDeckSourceVisuals(
+  deck: GeneratedSlideDeck,
+  maxVisuals = MAX_AUTOMATIC_SOURCE_VISUALS
+): GeneratedSlideDeck {
+  const alreadyHasSourceVisual = deck.slides.some(
+    (slide) => slide.visual?.mode === "source-page" || slide.visual?.mode === "source-crop"
+  );
+  if (alreadyHasSourceVisual) return deck;
+
+  const limit = Math.min(
+    MAX_AUTOMATIC_SOURCE_VISUALS,
+    Math.max(0, Number.isFinite(maxVisuals) ? Math.floor(maxVisuals) : 0)
+  );
+  if (limit === 0) return deck;
+
+  const sourceByLabel = verifiedSourcesByLabel(deck.sources);
+  if (sourceByLabel.size === 0) return deck;
+
+  const candidates: AutomaticSourceVisualCandidate[] = [];
+  deck.slides.forEach((slide, slideIndex) => {
+    const priority = automaticVisualPriority(slide);
+    if (priority === null || slide.visual?.mode === "native-diagram") return;
+
+    const slideSources = new Map<string, VerifiedSource>();
+    for (const rawRef of slide.sourceRefs ?? []) {
+      if (typeof rawRef !== "string") continue;
+      const source = sourceByLabel.get(rawRef.trim());
+      if (source && !slideSources.has(source.pageKey)) {
+        slideSources.set(source.pageKey, source);
+      }
+    }
+    if (slideSources.size > 0) {
+      candidates.push({ slideIndex, priority, sources: Array.from(slideSources.values()) });
+    }
+  });
+  if (candidates.length === 0) return deck;
+
+  candidates.sort((left, right) => left.priority - right.priority || left.slideIndex - right.slideIndex);
+
+  // 선택지가 적은 문서를 먼저 배정하면 뒤의 장에서도 서로 다른 문서를 쓸 가능성이 높아진다.
+  const documentCandidateFrequency = new Map<number, number>();
+  for (const candidate of candidates) {
+    const documentIds = new Set(candidate.sources.map(({ source }) => source.document_id));
+    documentIds.forEach((documentId) => {
+      documentCandidateFrequency.set(
+        documentId,
+        (documentCandidateFrequency.get(documentId) ?? 0) + 1
+      );
+    });
+  }
+  for (const candidate of candidates) {
+    candidate.sources.sort((left, right) => {
+      const frequencyDifference =
+        (documentCandidateFrequency.get(left.source.document_id) ?? 0) -
+        (documentCandidateFrequency.get(right.source.document_id) ?? 0);
+      return frequencyDifference;
+    });
+  }
+
+  const selected = new Map<number, VerifiedSource>();
+  const usedDocumentIds = new Set<number>();
+  const usedPages = new Set<string>();
+
+  // 먼저 서로 다른 문서를 배정하고, 자리가 남을 때만 같은 문서의 다른 페이지를 사용한다.
+  for (const candidate of candidates) {
+    if (selected.size >= limit) break;
+    const source = candidate.sources.find(
+      (item) => !usedDocumentIds.has(item.source.document_id) && !usedPages.has(item.pageKey)
+    );
+    if (!source) continue;
+    selected.set(candidate.slideIndex, source);
+    usedDocumentIds.add(source.source.document_id);
+    usedPages.add(source.pageKey);
+  }
+  for (const candidate of candidates) {
+    if (selected.size >= limit) break;
+    if (selected.has(candidate.slideIndex)) continue;
+    const source = candidate.sources.find((item) => !usedPages.has(item.pageKey));
+    if (!source) continue;
+    selected.set(candidate.slideIndex, source);
+    usedPages.add(source.pageKey);
+  }
+  if (selected.size === 0) return deck;
+
+  return {
+    ...deck,
+    slides: deck.slides.map((slide, slideIndex) => {
+      const selectedSource = selected.get(slideIndex);
+      if (!selectedSource) return slide;
+      const { source, label } = selectedSource;
+      return {
+        ...slide,
+        composition: "visual-explanation",
+        visual: {
+          mode: "source-page",
+          documentId: source.document_id,
+          page: source.page ?? undefined,
+          sourceRef: label,
+          altText: `${source.doc} ${source.page}쪽 원문 페이지`,
+          caption: label,
+          fit: "contain",
+        },
+      };
+    }),
+  };
+}
 
 async function signedDocumentUrl(documentId: number): Promise<{ url: string; title: string }> {
   const response = await fetch(`/api/documents/${documentId}/source`, {

@@ -1,5 +1,6 @@
 import type { GeneratedDoc } from "@/lib/generate";
 import { sanitizeFilename } from "@/lib/utils";
+import { prepareGeneratedDocForExport } from "@/lib/document-export";
 
 // 훈련계획 양식(training_plan.hwpx)에 채울 폼 입력 메타(AI 생성 섹션과 별개).
 export type HwpxPlanMeta = {
@@ -23,15 +24,17 @@ export async function downloadHwpx(
   doc: GeneratedDoc,
   opts?: { template?: "training_plan"; plan?: HwpxPlanMeta }
 ): Promise<"server" | "local"> {
-  const filename = `${sanitizeFilename(doc.title)}.hwpx`;
+  const exportDoc = prepareGeneratedDocForExport(doc);
+  const filename = `${sanitizeFilename(exportDoc.title)}.hwpx`;
 
   try {
     const res = await fetch("/api/hwp", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        title: doc.title,
-        sections: doc.sections,
+        title: exportDoc.title,
+        sections: exportDoc.sections,
+        sources: exportDoc.sources,
         template: opts?.template,
         plan: opts?.plan,
       }),
@@ -53,7 +56,7 @@ export async function downloadHwpx(
 
   // 로컬 생성 폴백 (빌더는 무거워서 이 시점에만 로드)
   const { buildHwpxBlob } = await import("@/lib/hwpx");
-  saveBlob(await buildHwpxBlob(doc), filename);
+  saveBlob(await buildHwpxBlob(exportDoc), filename);
   return "local";
 }
 

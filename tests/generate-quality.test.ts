@@ -25,6 +25,9 @@ import {
   inspectGeneratedPlan,
   inspectGeneratedSlides,
   splitGeneratedSourcesForDisplay,
+  stripDocumentInlineSourceRefs,
+  stripDocumentInlineSourceRefsFromText,
+  stripSectionInlineSourceRefs,
   type GenerateRequest,
   type GeneratedDocDraft,
   type GeneratedSlide,
@@ -169,19 +172,41 @@ function citeSections(
 function validSlide(index: number): GeneratedSlide {
   const isSafety = index === 8;
   const isSummary = index === 9;
-  const role = isSafety ? "safety" : isSummary ? "summary" : index === 0 ? "objectives" : "concept";
-  const composition = isSafety
-    ? "checklist"
-    : isSummary
-      ? "summary"
-      : index === 0
-        ? "list"
-        : "statement";
+  const roles: NonNullable<GeneratedSlide["role"]>[] = [
+    "objectives",
+    "concept",
+    "equipment",
+    "procedure",
+    "timeline",
+    "decision",
+    "case",
+    "procedure",
+    "safety",
+    "summary",
+  ];
+  const compositions: NonNullable<GeneratedSlide["composition"]>[] = [
+    "list",
+    "statement",
+    "checklist",
+    "process",
+    "timeline",
+    "decision-flow",
+    "scenario",
+    "process",
+    "checklist",
+    "summary",
+  ];
+  const stepCompositions = new Set(["process", "timeline", "decision-flow"]);
+  const composition = compositions[index];
   return {
     title: isSafety
       ? "이상이 보이면 즉시 훈련을 멈춥니다"
       : isSummary
         ? "마지막 확인 질문으로 수행 기준을 점검합니다"
+        : index === 6
+          ? "현장 상황에서 첫 조치를 판단합니다"
+          : index === 7
+            ? "직접 수행하고 동료 피드백을 받습니다"
         : `${index + 1}단계 확인이 다음 행동의 안전을 결정합니다`,
     bullets: isSafety
       ? [
@@ -193,6 +218,16 @@ function validSlide(index: number): GeneratedSlide {
             "확인 질문으로 단계별 목적과 순서를 다시 설명하게 합니다",
             "체크리스트 수행 기준을 모두 충족하면 최종 통과로 평가합니다",
           ]
+        : index === 6
+          ? [
+              "출동 현장 상황과 장비 상태를 읽고 가장 먼저 할 조치를 선택합니다",
+              "선택한 판단 근거를 동료에게 설명하고 다음 대응을 결정합니다",
+            ]
+          : index === 7
+            ? [
+                "대원은 2인 1조로 점검 순서를 직접 수행하고 역할을 교대합니다",
+                "동료는 수행 과정을 관찰하며 놓친 행동을 즉시 알려 줍니다",
+              ]
         : [
             `${index + 1}단계에서는 정상 표시와 결합 상태를 눈으로 직접 확인합니다`,
             `확인 결과를 동료에게 말하고 다음 ${index + 2}단계로 이동합니다`,
@@ -202,8 +237,11 @@ function validSlide(index: number): GeneratedSlide {
       165
     ),
     layout: isSafety ? "safety" : isSummary ? "summary" : index === 0 ? "objectives" : "concept",
-    role,
+    role: roles[index],
     composition,
+    steps: stepCompositions.has(composition)
+      ? [`${index + 1}단계`, `${index + 2}단계`, `${index + 3}단계`]
+      : undefined,
     visual: { mode: "none" },
     sourceRefs: ["[공기호흡기 교육교범 p.3]"],
   };
@@ -374,6 +412,9 @@ describe("생성 프롬프트 품질 계약", () => {
     expect(prompt).toContain("출처 라벨");
     expect(prompt).toContain("분량을 늘리기 위해 추측하지 않습니다");
     expect(prompt).toContain("신임 대원은 용어를 처음 등장할 때");
+    expect(prompt).toContain("훈련계획·교안은 본문 문장 뒤에");
+    expect(prompt).toContain("문서 맨 뒤의 '근거 자료 및 출처'");
+    expect(prompt).toContain("슬라이드는 각 장의 sourceRefs에만");
   });
 
   it("훈련계획은 고정 제목·시간표·행동형 평가를 요구한다", () => {
@@ -382,6 +423,7 @@ describe("생성 프롬프트 품질 계약", () => {
     expect(prompt).toContain("[이론교육 · 20분]");
     expect(prompt).toContain("교관 행동, 대원 행동, 피드백 방법");
     expect(prompt).toContain("관찰 가능한 수행 기준");
+    expect(prompt).toContain("본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 마세요");
   });
 
   it("교안은 도입→이론→시범→실습→안전→평가와 모범답안을 요구한다", () => {
@@ -390,6 +432,7 @@ describe("생성 프롬프트 품질 계약", () => {
     expect(prompt).toContain("[시간: 00분]");
     expect(prompt).toContain("확인 질문과 모범답안");
     expect(prompt).toContain("교관이 별도 내용을 보충하지 않아도");
+    expect(prompt).toContain("근거 자료 및 출처");
   });
 
   it("슬라이드는 서술형 제목·충분한 노트·의미 레이아웃·장별 출처를 요구한다", () => {
@@ -642,6 +685,45 @@ describe("생성 출처 표시와 시각자료 바인딩 분리", () => {
   });
 });
 
+describe("훈련계획·교안 본문과 출처 목록 분리", () => {
+  const sourceA = "[로프구조 — 유형별 로프구조시스템 p.44]";
+  const sourceB = "[로프구조 — 경사면 구조 p.47]";
+
+  it("문장 뒤 출처는 제거하고 시간·SOP 제어 표식은 보존한다", () => {
+    const content =
+      `[이론교육 · 10분] 시스템을 선정한다 ${sourceA}, ${sourceB}.\n` +
+      `${SOP_APPLICATION_MARKER} 역할을 확인한다. [임의로 만든 교범 p.999]`;
+
+    const stripped = stripDocumentInlineSourceRefsFromText(content, [sourceA, sourceB]);
+
+    expect(stripped).toContain("[이론교육 · 10분]");
+    expect(stripped).toContain(SOP_APPLICATION_MARKER);
+    expect(stripped).toContain("시스템을 선정한다.");
+    expect(stripped).not.toContain(sourceA);
+    expect(stripped).not.toContain(sourceB);
+    expect(stripped).not.toContain("임의로 만든 교범");
+    expect(stripped).not.toMatch(/\s+[,.]/);
+  });
+
+  it("전체 문서와 부분 재생성 섹션에 같은 결정론적 후처리를 적용한다", () => {
+    const plan = validPlan();
+    plan.sections[0].content += ` ${sourceA}`;
+    plan.sections[1].content += ` ${sourceB}`;
+
+    const strippedDoc = stripDocumentInlineSourceRefs(plan, [sourceA, sourceB]);
+    const strippedSection = stripSectionInlineSourceRefs(
+      { heading: "훈련목표", content: `수행할 수 있다 ${sourceA}` },
+      [sourceA]
+    );
+
+    expect(strippedDoc.sections.every((section) => !section.content.includes("로프구조"))).toBe(
+      true
+    );
+    expect(strippedSection).toEqual({ heading: "훈련목표", content: "수행할 수 있다" });
+    expect(plan.sections[0].content).toContain(sourceA);
+  });
+});
+
 describe("결정론적 생성 품질 검사", () => {
   it("충분한 훈련계획은 통과한다", () => {
     expect(inspectGeneratedPlan(validPlan(), "1시간")).toEqual({ ok: true, issues: [] });
@@ -723,6 +805,153 @@ describe("결정론적 생성 품질 검사", () => {
 
   it("충분한 1시간 슬라이드 덱은 통과한다", () => {
     expect(inspectGeneratedSlides(validSlides(), "1시간")).toEqual({ ok: true, issues: [] });
+  });
+
+  it("화학보호복 보호등급을 비교 장 밖에서 섞으면 차단하고 명시적 비교는 허용한다", () => {
+    const mixed = validSlides();
+    mixed.title = "화학보호복 착용과 탈의";
+    mixed.slides[1].bullets[0] = "Level A 화학보호복의 착용 전 점검 항목을 확인합니다";
+    mixed.slides[2].bullets[0] = "C급 보호복의 탈의 순서를 동료와 함께 점검합니다";
+
+    expect(inspectGeneratedSlides(mixed, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "mixed_chemical_protection_levels",
+          path: "slides",
+        }),
+      ])
+    );
+
+    const comparison = validSlides();
+    comparison.title = "화학보호복 보호등급 구분";
+    comparison.slides[1] = {
+      ...comparison.slides[1],
+      title: "보호등급별 적용 조건을 구분합니다",
+      role: "comparison",
+      composition: "comparison",
+      steps: ["Level A", "C급"],
+      bullets: [
+        "Level A와 C급 보호복의 적용 조건 차이를 근거로 비교합니다",
+        "현장 위험성 평가에 따라 필요한 보호 수준을 구분합니다",
+      ],
+    };
+
+    expect(
+      inspectGeneratedSlides(comparison, "1시간").issues.map((issue) => issue.code)
+    ).not.toContain("mixed_chemical_protection_levels");
+  });
+
+  it("같은 공기호흡기 진입 압력의 상충 수치는 잡고 단위만 다른 동등값은 허용한다", () => {
+    const conflicting = validSlides();
+    conflicting.title = "공기호흡기 착용 전 점검";
+    conflicting.slides[1].bullets[0] = "진입 전 공기호흡기 용기 압력은 250bar 이상인지 확인합니다";
+    conflicting.slides[2].bullets[0] = "진입 전 공기호흡기 용기 압력은 280bar 이상인지 확인합니다";
+
+    expect(inspectGeneratedSlides(conflicting, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "conflicting_pressure_values", path: "slides" }),
+      ])
+    );
+
+    const equivalent = validSlides();
+    equivalent.title = "공기호흡기 착용 전 점검";
+    equivalent.slides[1].bullets[0] = "진입 전 공기호흡기 용기 압력은 250bar 이상인지 확인합니다";
+    equivalent.slides[2].bullets[0] = "진입 전 공기호흡기 용기 압력은 25MPa 이상인지 확인합니다";
+    expect(
+      inspectGeneratedSlides(equivalent, "1시간").issues.map((issue) => issue.code)
+    ).not.toContain("conflicting_pressure_values");
+
+    const differentCriteria = validSlides();
+    differentCriteria.title = "공기호흡기 압력 기준";
+    differentCriteria.slides[1].bullets[0] =
+      "공기호흡기 용기의 정격 압력은 300bar이고 잔압 경보는 55bar입니다";
+    expect(
+      inspectGeneratedSlides(differentCriteria, "1시간").issues.map((issue) => issue.code)
+    ).not.toContain("conflicting_pressure_values");
+  });
+
+  it("제독 순서를 보편 절차처럼 쓰면 적용 조건을 요구한다", () => {
+    const unqualified = validSlides();
+    unqualified.title = "화학보호복 제독과 탈의";
+    unqualified.slides[3].bullets[0] = "제독은 물 → 제독제 → 물 순서로 진행합니다";
+
+    expect(inspectGeneratedSlides(unqualified, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "unqualified_decontamination_sequence",
+          path: "slides.3",
+        }),
+      ])
+    );
+
+    unqualified.slides[3].bullets[1] =
+      "오염물질을 식별하고 SDS로 물 사용 가능 여부와 제독제 적합성을 확인합니다";
+    expect(
+      inspectGeneratedSlides(unqualified, "1시간").issues.map((issue) => issue.code)
+    ).not.toContain("unqualified_decontamination_sequence");
+  });
+
+  it("role·composition 과다 반복과 시나리오·실습 누락을 별도로 보고한다", () => {
+    const repeated = validSlides();
+    repeated.slides.forEach((slide) => {
+      slide.role = "concept";
+      slide.composition = "statement";
+    });
+    expect(inspectGeneratedSlides(repeated, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "repetitive_slide_role" }),
+        expect.objectContaining({ code: "repetitive_slide_composition" }),
+      ])
+    );
+
+    const missingFlow = validSlides();
+    [6, 7].forEach((index) => {
+      missingFlow.slides[index] = {
+        ...missingFlow.slides[index],
+        title: `${index + 1}번째 핵심 개념을 구분합니다`,
+        bullets: [
+          "장비의 구성 요소와 명칭을 자료에서 찾아 정확히 설명합니다",
+          "각 구성 요소의 기능과 연결 관계를 순서대로 정리합니다",
+        ],
+        notes: fill(
+          "교관은 장비 구성 요소의 명칭과 기능을 설명합니다. 대원은 자료에서 같은 용어를 찾아 읽습니다. 각 부위의 위치를 확인하고 연결 관계를 정리합니다. 교관은 핵심 용어의 뜻을 다시 질문합니다. 마지막에는 구성 요소별 기능을 함께 되짚습니다.",
+          165
+        ),
+      };
+    });
+    expect(inspectGeneratedSlides(missingFlow, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_slide_scenario" }),
+        expect.objectContaining({ code: "missing_slide_practice" }),
+      ])
+    );
+
+    const instructorOnly = validSlides();
+    instructorOnly.slides[7] = {
+      ...instructorOnly.slides[7],
+      title: "교관이 전체 절차를 먼저 시범합니다",
+      bullets: [
+        "교관은 장비 점검 절차를 처음부터 끝까지 천천히 시범합니다",
+        "대원은 시범을 관찰하고 단계별 주의사항을 기록합니다",
+      ],
+      notes: fill(
+        "교관은 전체 절차를 순서대로 보여 줍니다. 대원은 손의 위치와 확인 지점을 관찰합니다. 교관은 단계마다 동작의 목적을 설명합니다. 대원은 궁금한 내용을 질문하고 답을 기록합니다. 마지막에는 시범의 핵심 동작을 말로 정리합니다.",
+        165
+      ),
+    };
+    expect(
+      inspectGeneratedSlides(instructorOnly, "1시간").issues.map((issue) => issue.code)
+    ).toContain("missing_slide_practice");
+  });
+
+  it("현장 판단보다 실습이 먼저 나오면 학습 흐름 문제로 보고한다", () => {
+    const deck = validSlides();
+    [deck.slides[6], deck.slides[7]] = [deck.slides[7], deck.slides[6]];
+    expect(inspectGeneratedSlides(deck, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "invalid_slide_learning_flow", path: "slides" }),
+      ])
+    );
   });
 
   it("안전·요약 role과 layout만 지정한 슬라이드는 실제 안전·평가 내용으로 인정하지 않는다", () => {
@@ -902,17 +1131,12 @@ describe("결정론적 생성 품질 검사", () => {
     ]);
   });
 
-  it("실제 참고 자료에 없는 문서 출처를 품질 문제로 잡는다", () => {
+  it("슬라이드의 실제 참고 자료에 없는 출처를 품질 문제로 잡는다", () => {
     const allowed = ["[공기호흡기 교육교범 p.3]"];
     const deck = validSlides();
     deck.slides[0].sourceRefs = ["[만들어낸 교범 p.99]"];
     expect(inspectGeneratedSlides(deck, "1시간", allowed).issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "invalid_source_ref" })])
-    );
-
-    const plan = validPlan();
-    expect(inspectGeneratedPlan(plan, "1시간", allowed).issues).toEqual(
-      expect.arrayContaining([expect.objectContaining({ code: "missing_source_citation" })])
     );
   });
 
@@ -1044,6 +1268,30 @@ describe("자동 보완 프롬프트", () => {
     expect(prompt).toContain("일반 상식·수치·절차·사례를 만들지 마세요");
     expect(prompt).toContain("전체 JSON 객체만 반환");
     expect(prompt).toContain("현장 조건(사용자 입력): 대원 8명 / 장비 4세트");
+  });
+
+  it("슬라이드 안전 정합성 보완은 수치·절차를 임의로 통일하지 않도록 제한한다", () => {
+    const draft = validSlides();
+    draft.title = "공기호흡기 착용 전 점검";
+    draft.slides[1].bullets[0] = "진입 전 공기호흡기 용기 압력은 250bar 이상인지 확인합니다";
+    draft.slides[2].bullets[0] = "진입 전 공기호흡기 용기 압력은 280bar 이상인지 확인합니다";
+    const quality = inspectGeneratedSlides(draft, "1시간");
+    const prompt = buildGenerationRepairPrompt({
+      type: "slides",
+      request: {
+        category: "화재",
+        audience: "일반 대원",
+        duration: "1시간",
+        topic: "공기호흡기 착용 전 점검",
+      },
+      draft,
+      report: quality,
+    });
+
+    expect(prompt).toContain("[conflicting_pressure_values]");
+    expect(prompt).toContain("값을 임의로 하나로 통일하거나 새 절차를 만들지 마세요");
+    expect(prompt).toContain("참고 자료에서 확인되지 않습니다");
+    expect(prompt).toContain("현장 상황 판단 → 대원 참여 실습 → 수행평가");
   });
 
   it("통과한 결과에는 불필요한 보완 호출을 만들지 않는다", () => {

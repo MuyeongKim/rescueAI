@@ -55,17 +55,24 @@ describe("inspectSopContract", () => {
       evidence("found", [SOP_LABEL])
     );
 
-    expect(report.issues.map((issue) => issue.code)).toEqual([
-      "missing_sop_application",
-      "missing_sop_reference",
-    ]);
+    expect(report.issues.map((issue) => issue.code)).toEqual(["missing_sop_application"]);
   });
 
-  it("표식만 있거나 일반 자료 라벨만 있으면 SOP 근거로 인정하지 않는다", () => {
+  it("문서는 지정 섹션의 표식과 신뢰된 최종 SOP 출처 목록을 연결한다", () => {
+    const report = inspectSopContract(
+      "plan",
+      plan(`${SOP_APPLICATION_MARKER}\n이 절차를 따른다.`),
+      evidence("found", [SOP_LABEL])
+    );
+
+    expect(report).toEqual({ ok: true, issues: [] });
+  });
+
+  it("문서의 확인 상태에 SOP 출처 목록이 비어 있으면 연결 누락으로 보고한다", () => {
     const report = inspectSopContract(
       "plan",
       plan(`${SOP_APPLICATION_MARKER}\n이 절차를 따른다. ${GENERAL_LABEL}`),
-      evidence("found", [SOP_LABEL])
+      evidence("found", [])
     );
 
     expect(report.issues.map((issue) => issue.code)).toEqual(["missing_sop_reference"]);
@@ -108,11 +115,8 @@ describe("inspectSopContract", () => {
       evidence("found", [SOP_LABEL])
     );
 
-    expect(report.issues.map((issue) => issue.code)).toEqual([
-      "missing_sop_reference",
-      "invalid_sop_reference",
-    ]);
-    expect(report.issues[1]?.message).toContain(unknownLabel);
+    expect(report.issues.map((issue) => issue.code)).toEqual(["invalid_sop_reference"]);
+    expect(report.issues[0]?.message).toContain(unknownLabel);
   });
 
   it("실제 라벨을 붙여도 라벨에 없는 SOP 번호를 단정하면 거절한다", () => {

@@ -2,6 +2,11 @@ import { requireApiUser } from "@/lib/auth";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { DEMO } from "@/lib/demo";
 import { normalizeTrainingPlanHwpx } from "@/lib/hwpx-template";
+import {
+  appendDocumentSources,
+  prepareGeneratedDocForExport,
+} from "@/lib/document-export";
+import { claimedGeneratedSources } from "@/lib/source-provenance";
 
 // 한글(hwpx) 파일 생성 — 미니서버(hwp-writer-api)에 서버 대 서버로 중계한다.
 // API 키는 서버 env 에만 두고, 생성→다운로드 2단계를 여기서 처리해 파일을 그대로 스트리밍.
@@ -49,6 +54,7 @@ export async function POST(req: Request) {
   let body: {
     title?: string;
     sections?: Section[];
+    sources?: unknown;
     template?: string;
     plan?: PlanMeta;
   };
@@ -59,10 +65,30 @@ export async function POST(req: Request) {
   }
 
   const title = body.title?.trim().slice(0, 200);
-  const sections = Array.isArray(body.sections) ? body.sections.slice(0, 50) : [];
-  if (!title || sections.length === 0) {
+  const rawSections = Array.isArray(body.sections) ? body.sections.slice(0, 50) : [];
+  if (!title || rawSections.length === 0) {
     return new Response("title과 sections가 필요합니다.", { status: 400 });
   }
+  const claimedSources = claimedGeneratedSources({ sources: body.sources });
+  if (!claimedSources.ok || claimedSources.sources.length === 0) {
+    return Response.json(
+      {
+        code: "source_provenance_invalid",
+        error:
+          "한글 파일에는 검증된 근거 자료 출처가 필요합니다. 자료를 다시 생성·저장한 뒤 내려받아 주세요.",
+      },
+      { status: 422 }
+    );
+  }
+  const sources = claimedSources.sources;
+  const sections = prepareGeneratedDocForExport({
+    title,
+    sections: rawSections.map((section) => ({
+      heading: section.heading ?? "",
+      content: section.content ?? "",
+    })),
+    sources,
+  }).sections;
 
   const auth = { Authorization: `Bearer ${key}` };
 
@@ -113,13 +139,18 @@ export async function POST(req: Request) {
         place: m.place ?? "",
         // AI 생성 5개 섹션 → 고정 제목으로 확정 매핑
         ...planSections,
+        // 표준 양식에는 별도 출처 셀이 없으므로 마지막 평가 셀의 끝에 한 번만 모은다.
+        evaluation: appendDocumentSources(planSections.evaluation, sources),
       },
     };
   } else {
-    const text = sections
-      .map((s) => [s.heading?.trim(), s.content?.trim()].filter(Boolean).join("\n"))
-      .filter(Boolean)
-      .join("\n\n");
+    const text = appendDocumentSources(
+      sections
+        .map((s) => [s.heading?.trim(), s.content?.trim()].filter(Boolean).join("\n"))
+        .filter(Boolean)
+        .join("\n\n"),
+      sources
+    );
     endpoint = `${base}/generate/plain`;
     payload = { title, body: text, output_name: "generated.hwpx" };
   }

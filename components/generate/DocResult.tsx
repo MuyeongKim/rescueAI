@@ -5,12 +5,12 @@ import { Check, Copy, Download, FileText, Loader2 } from "lucide-react";
 
 import type { GeneratedDoc, GeneratedSection } from "@/lib/generate";
 import { docToText } from "@/lib/generate-material";
+import { prepareGeneratedDocForExport } from "@/lib/document-export";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
   Card,
   CardContent,
-  CardDescription,
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
@@ -22,7 +22,6 @@ import {
   QualityBanner,
   RegenControls,
   SaveButton,
-  SourceBadges,
   type RegenState,
   type GenerationQuality,
   type ResultChrome,
@@ -54,6 +53,8 @@ export function DocResult({
   quality?: GenerationQuality | null;
 }) {
   const { accent, editing } = chrome;
+  // 이전 저장본에 남은 인라인 인용도 화면에서는 숨기고, 마지막 출처 목록으로만 보여 준다.
+  const displayDoc = prepareGeneratedDocForExport(doc);
   const editorLocked =
     chrome.saving || Boolean(chrome.locked) || regen.loadingIndex !== null || exporting !== null;
   const outputBlocked = Boolean(chrome.outputBlocked);
@@ -77,7 +78,7 @@ export function DocResult({
         <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
           {editing ? (
             <Input
-              value={doc.title}
+              value={displayDoc.title}
               onChange={(e) => onTitleChange(e.target.value)}
               disabled={editorLocked}
               className="h-9 text-base font-semibold"
@@ -85,7 +86,7 @@ export function DocResult({
             />
           ) : (
             <CardTitle className="flex items-center gap-2 text-base">
-              <FileText className="h-4 w-4" style={{ color: accent }} /> {doc.title}
+              <FileText className="h-4 w-4" style={{ color: accent }} /> {displayDoc.title}
             </CardTitle>
           )}
           <div className="flex shrink-0 items-center gap-1.5 self-end sm:self-auto">
@@ -93,10 +94,6 @@ export function DocResult({
             <EditToggleButton chrome={chrome} />
           </div>
         </div>
-        <CardDescription className="flex flex-wrap items-center gap-1.5">
-          근거:
-          <SourceBadges sources={doc.sources} />
-        </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
         <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
@@ -110,7 +107,7 @@ export function DocResult({
             className="space-y-4 border-0 p-0"
           >
             <legend className="sr-only">문서 섹션 편집</legend>
-            {doc.sections.map((s, i) => (
+            {displayDoc.sections.map((s, i) => (
               <section key={i} className="space-y-1">
                 <Input
                   value={s.heading}
@@ -129,7 +126,7 @@ export function DocResult({
             ))}
           </fieldset>
         ) : (
-          doc.sections.map((s, i) => (
+          displayDoc.sections.map((s, i) => (
             <section key={i} className="space-y-1">
               <h3 className="mb-1 font-semibold">{s.heading}</h3>
               <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
@@ -137,6 +134,24 @@ export function DocResult({
               </p>
             </section>
           ))
+        )}
+        {displayDoc.sources.length > 0 && (
+          <section
+            className="rounded-xl border border-border/60 bg-muted/30 p-4"
+            aria-labelledby="document-sources-heading"
+          >
+            <h3 id="document-sources-heading" className="font-semibold">
+              근거 자료 및 출처
+            </h3>
+            <ul className="mt-2 space-y-1 text-sm leading-relaxed text-muted-foreground">
+              {displayDoc.sources.map((source) => (
+                <li key={`${source.document_id}:${source.page ?? "-"}`}>
+                  {source.doc}
+                  {source.page != null ? ` p.${source.page}` : ""}
+                </li>
+              ))}
+            </ul>
+          </section>
         )}
         <div className="flex flex-col gap-2 pt-2 sm:flex-row">
           <Button
@@ -169,7 +184,7 @@ export function DocResult({
           <Button
             variant="outline"
             className="h-12 flex-1 gap-2 text-base"
-            onClick={() => onCopy(docToText(doc))}
+            onClick={() => onCopy(docToText(displayDoc))}
             disabled={editorLocked || outputBlocked}
             title={outputBlocked ? "핵심 품질 오류를 수정한 뒤 복사할 수 있습니다." : undefined}
           >
