@@ -1,12 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { useChat } from "ai/react";
 import type { Message } from "ai";
 import {
   ArrowRight,
-  Home,
   Loader2,
   Send,
   ShieldCheck,
@@ -33,8 +31,9 @@ import {
 } from "@/components/ui/sheet";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationList } from "@/components/chat/ConversationList";
+import { COURSE_CATEGORIES } from "@/lib/courses";
 
-const DEFAULT_CATEGORIES = ["산악", "수난", "화재", "구급"];
+const DEFAULT_CATEGORIES = [...COURSE_CATEGORIES];
 
 // 인기 질문이 없을 때(집계 부족) 폴백으로 보여줄 기본 예시
 const FALLBACK_EXAMPLES = [
@@ -42,6 +41,17 @@ const FALLBACK_EXAMPLES = [
   "수난 구조 시 요구조자 접근 방법은?",
   "유압전개기 안전 사용 수칙",
 ];
+
+const RESPONSE_LABELS: Record<string, string> = {
+  "빠른 처리": "빠른 답변",
+  "정밀 처리": "자세한 답변",
+  "심층 처리": "심층 답변",
+  "대체 처리": "대체 답변",
+};
+
+function responseLabel(label: string): string {
+  return RESPONSE_LABELS[label] ?? label;
+}
 
 export function ChatInterface({
   conversationId,
@@ -67,6 +77,8 @@ export function ChatInterface({
   const convIdRef = useRef<string | undefined>(conversationId);
   const bottomRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const hasSubmittedRef = useRef(false);
+  const stoppedRef = useRef(false);
 
   const {
     messages,
@@ -103,7 +115,14 @@ export function ChatInterface({
     const el = scrollRef.current;
     if (!el) return;
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
-    if (nearBottom) bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (nearBottom) {
+      const reduceMotion = window.matchMedia(
+        "(prefers-reduced-motion: reduce)"
+      ).matches;
+      bottomRef.current?.scrollIntoView({
+        behavior: reduceMotion ? "auto" : "smooth",
+      });
+    }
   }, [messages]);
 
   const requestBody = () => ({
@@ -115,42 +134,45 @@ export function ChatInterface({
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!input.trim() || isLoading) return;
+    hasSubmittedRef.current = true;
+    stoppedRef.current = false;
     handleSubmit(e, { body: requestBody() });
   }
 
   function askExample(q: string) {
     if (isLoading) return;
+    hasSubmittedRef.current = true;
+    stoppedRef.current = false;
     append({ role: "user", content: q }, { body: requestBody() });
   }
 
   const empty = messages.length === 0;
   const examples = popular.length > 0 ? popular : FALLBACK_EXAMPLES;
   const examplesTitle = popular.length > 0 ? "대원들이 자주 묻는 질문" : "이렇게 물어보세요";
+  const assistantStatus = hasSubmittedRef.current
+    ? isLoading
+      ? "AI가 교육자료를 검색하고 답변을 작성하는 중입니다."
+      : stoppedRef.current
+        ? "AI 답변 생성을 중지했습니다."
+        : messages[messages.length - 1]?.role === "assistant"
+        ? "AI 답변 작성이 완료되었습니다."
+        : ""
+    : "";
 
   return (
     <div className="flex h-full flex-col">
       {/* 상단 바: 대화목록 + 카테고리 필터 */}
-      <div className="border-b-2 border-[#d63f18] bg-[#111d31] px-3 py-2 text-white sm:px-4">
+      <div className="border-b-2 border-ops-signal bg-ops-sidebar px-3 py-2 text-white sm:px-4">
         <div className="mx-auto flex max-w-3xl items-center gap-2">
-          <Button
-            asChild
-            variant="ghost"
-            size="icon"
-            className="h-12 w-12 sm:h-10 sm:w-10 md:hidden"
-          >
-            <Link href="/home" aria-label="홈으로">
-              <Home className="h-5 w-5" />
-            </Link>
-          </Button>
           <ConversationList activeId={conversationId} />
-          <span className="mr-auto flex items-center gap-2 text-sm font-bold">
-            <span className="h-4 w-0.5 bg-[#f0542d]" aria-hidden /> AI 튜터
-          </span>
+          <h1 className="mr-auto flex items-center gap-2 text-sm font-bold">
+            <span className="h-4 w-0.5 bg-ops-signal-bright" aria-hidden /> AI 튜터
+          </h1>
           <div className="hidden items-center gap-2 sm:flex">
             <span className="ml-1 text-xs text-slate-400">분야</span>
             <Select value={category} onValueChange={setCategory}>
               <SelectTrigger
-                className="h-10 w-28 border-slate-600 bg-[#0d192b] text-white"
+                className="h-10 w-28 border-slate-600 bg-ops-navy-deep text-white"
                 aria-label="분야 선택"
               >
                 <SelectValue placeholder="전체" />
@@ -168,18 +190,18 @@ export function ChatInterface({
 
             {models.length > 1 && (
               <>
-                <span className="ml-1 text-xs text-slate-400">응답</span>
+                <span className="ml-1 text-xs text-slate-400">답변 유형</span>
                 <Select value={model} onValueChange={setModel}>
                   <SelectTrigger
-                    className="h-10 w-36 border-slate-600 bg-[#0d192b] text-white"
-                    aria-label="응답 방식 선택"
+                    className="h-10 w-36 border-slate-600 bg-ops-navy-deep text-white"
+                    aria-label="답변 유형 선택"
                   >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     {models.map((m) => (
                       <SelectItem key={m.key} value={m.key}>
-                        {m.label}
+                        {responseLabel(m.label)}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -205,14 +227,19 @@ export function ChatInterface({
                 <p className="text-xs font-bold text-primary">AI 튜터</p>
                 <SheetTitle className="text-xl font-extrabold">질문 설정</SheetTitle>
                 <SheetDescription>
-                  질문 분야와 응답 방식을 선택합니다.
+                  질문 분야와 답변의 속도·상세도를 선택합니다.
                 </SheetDescription>
               </SheetHeader>
               <div className="mt-5 space-y-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-semibold">분야</label>
+                  <span id="mobile-chat-category-label" className="text-sm font-semibold">
+                    분야
+                  </span>
                   <Select value={category} onValueChange={setCategory}>
-                    <SelectTrigger className="h-12 w-full" aria-label="분야 선택">
+                    <SelectTrigger
+                      className="h-12 w-full"
+                      aria-labelledby="mobile-chat-category-label"
+                    >
                       <SelectValue placeholder="전체" />
                     </SelectTrigger>
                     <SelectContent>
@@ -229,15 +256,20 @@ export function ChatInterface({
 
                 {models.length > 1 && (
                   <div className="space-y-2">
-                    <label className="text-sm font-semibold">응답 방식</label>
+                    <span id="mobile-chat-model-label" className="text-sm font-semibold">
+                      답변 유형
+                    </span>
                     <Select value={model} onValueChange={setModel}>
-                      <SelectTrigger className="h-12 w-full" aria-label="응답 방식 선택">
+                      <SelectTrigger
+                        className="h-12 w-full"
+                        aria-labelledby="mobile-chat-model-label"
+                      >
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent>
                         {models.map((m) => (
                           <SelectItem key={m.key} value={m.key}>
-                            {m.label}
+                          {responseLabel(m.label)}
                           </SelectItem>
                         ))}
                       </SelectContent>
@@ -251,7 +283,14 @@ export function ChatInterface({
       </div>
 
       {/* 메시지 목록 */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto">
+      <div
+        ref={scrollRef}
+        id="chat-messages"
+        role="region"
+        aria-label="대화 내용"
+        aria-busy={isLoading}
+        className="flex-1 overflow-y-auto"
+      >
         <div className="mx-auto max-w-3xl px-3 py-4 sm:px-4">
           {empty ? (
             <div className="mx-auto max-w-2xl py-8 sm:py-12">
@@ -260,14 +299,14 @@ export function ChatInterface({
                   <p className="flex items-center gap-2 text-[11px] font-bold text-primary">
                     <span className="h-0.5 w-7 bg-primary" aria-hidden /> 근거 검색 대기
                   </p>
-                  <h1 className="mt-2 text-2xl font-extrabold">무엇을 도와드릴까요?</h1>
-                  <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  교육자료에 근거해 출처와 함께 답합니다. 근거가 없으면 추측하지
-                  않습니다.
+                  <h2 className="mt-2 text-2xl font-extrabold">무엇을 도와드릴까요?</h2>
+                  <p className="mt-2 text-base leading-6 text-muted-foreground sm:text-sm">
+                    교육자료에 근거해 출처와 함께 답합니다. 근거가 없으면 추측하지
+                    않습니다.
                   </p>
                 </div>
                 <span className="flex min-h-10 shrink-0 items-center gap-2 self-start border border-slate-300 bg-white px-3 text-xs font-semibold text-emerald-700 dark:border-slate-700 dark:bg-slate-900 dark:text-emerald-400">
-                  <ShieldCheck className="h-4 w-4" /> 출처 확인 모드
+                  <ShieldCheck className="h-4 w-4" aria-hidden /> 출처 확인 모드
                 </span>
               </div>
               <div className="mt-6 flex w-full flex-col gap-2">
@@ -279,10 +318,13 @@ export function ChatInterface({
                     key={q}
                     type="button"
                     onClick={() => askExample(q)}
-                    className="group flex min-h-[52px] items-center gap-3 border border-slate-300 bg-card px-4 text-left text-[15px] font-medium transition-colors hover:border-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-700"
+                    className="group flex min-h-[52px] touch-manipulation items-center gap-3 border border-slate-300 bg-card px-4 text-left text-base font-medium transition-colors motion-reduce:transition-none hover:border-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-700"
                   >
                     <span className="min-w-0 flex-1">{q}</span>
-                    <ArrowRight className="h-4 w-4 shrink-0 text-slate-400 transition-transform group-hover:translate-x-1 group-hover:text-primary" />
+                    <ArrowRight
+                      className="h-4 w-4 shrink-0 text-slate-400 transition-transform motion-reduce:transition-none motion-reduce:group-hover:translate-x-0 group-hover:translate-x-1 group-hover:text-primary"
+                      aria-hidden
+                    />
                   </button>
                 ))}
               </div>
@@ -295,8 +337,11 @@ export function ChatInterface({
               {isLoading &&
                 messages[messages.length - 1]?.role === "user" && (
                   <div className="flex items-center gap-2 pl-11 text-sm text-muted-foreground">
-                    <Loader2 className="h-4 w-4 animate-spin" /> 자료를 찾고
-                    있습니다…
+                    <Loader2
+                      className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                      aria-hidden
+                    />
+                    자료를 찾고 있습니다…
                   </div>
                 )}
             </div>
@@ -304,11 +349,22 @@ export function ChatInterface({
           <div ref={bottomRef} />
         </div>
       </div>
+      <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {assistantStatus}
+      </p>
 
       {/* 입력창 (하단 고정) */}
       <div className="border-t-2 border-slate-300 bg-background px-3 py-3 sm:px-4 dark:border-slate-700">
-        <form onSubmit={onSubmit} className="mx-auto flex max-w-3xl items-center gap-2">
+        <form
+          onSubmit={onSubmit}
+          className="mx-auto flex max-w-3xl items-center gap-2"
+          aria-label="AI 튜터에게 질문하기"
+        >
+          <label htmlFor="chat-question" className="sr-only">
+            질문
+          </label>
           <Input
+            id="chat-question"
             value={input}
             onChange={handleInputChange}
             placeholder="질문을 입력하세요"
@@ -316,29 +372,37 @@ export function ChatInterface({
             disabled={isLoading}
             autoComplete="off"
             enterKeyHint="send"
+            aria-controls="chat-messages"
+            aria-describedby="chat-safety-notice"
           />
           {isLoading ? (
             <Button
               type="button"
               variant="secondary"
               className="h-12 w-12 shrink-0 p-0"
-              onClick={() => stop()}
-              aria-label="중지"
+              onClick={() => {
+                stoppedRef.current = true;
+                stop();
+              }}
+              aria-label="답변 생성 중지"
             >
-              <Square className="h-5 w-5" />
+              <Square className="h-5 w-5" aria-hidden />
             </Button>
           ) : (
             <Button
               type="submit"
               className="h-12 w-12 shrink-0 p-0"
               disabled={!input.trim()}
-              aria-label="전송"
+              aria-label="질문 전송"
             >
-              <Send className="h-5 w-5" />
+              <Send className="h-5 w-5" aria-hidden />
             </Button>
           )}
         </form>
-        <p className="mx-auto mt-2 max-w-3xl text-center text-xs text-muted-foreground">
+        <p
+          id="chat-safety-notice"
+          className="mx-auto mt-2 max-w-3xl text-center text-base leading-5 text-muted-foreground sm:text-sm"
+        >
           AI 답변은 참고용입니다. 긴급 상황은 현장 지휘관·119 의료지도를
           따르세요.
         </p>

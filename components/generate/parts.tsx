@@ -68,7 +68,7 @@ export function StepHeader({ n, title, hint }: { n: string; title: string; hint?
   return (
     <div className="flex items-baseline gap-2.5">
       <span className="font-mono text-xs font-semibold tabular-nums text-primary">{n}</span>
-      <h2 className="text-sm font-semibold">{title}</h2>
+      <h2 className="text-base font-semibold">{title}</h2>
       {hint && <span className="text-xs font-normal text-muted-foreground">{hint}</span>}
     </div>
   );
@@ -80,6 +80,10 @@ export type ResultChrome = {
   editing: boolean;
   onToggleEdit: () => void;
   saving: boolean;
+  /** 부분 재생성처럼 결과 스냅샷과 경합할 수 있는 작업 중 상단 동작을 잠근다. */
+  locked?: boolean;
+  /** 핵심 품질 오류가 남아 공식 저장·내보내기를 허용하지 않는 상태. */
+  outputBlocked?: boolean;
   saved: boolean;
   loadedId: number | null;
   onSave: () => void;
@@ -89,20 +93,26 @@ export type ResultChrome = {
 export type GenerationQuality = {
   checked: boolean;
   repaired: boolean;
+  /** 저장·공식 파일 내보내기 전에 반드시 해결해야 하는 핵심 오류. */
+  errors?: string[];
   warnings: string[];
 };
 
 export function QualityBanner({ quality }: { quality?: GenerationQuality | null }) {
   if (!quality?.checked) return null;
 
+  const errors = quality.errors ?? [];
+  const blocked = errors.length > 0;
   const needsReview = quality.warnings.length > 0;
-  const Icon = needsReview ? TriangleAlert : CircleCheck;
+  const Icon = blocked || needsReview ? TriangleAlert : CircleCheck;
   return (
     <div
-      role="status"
+      role={blocked ? "alert" : "status"}
       className={cn(
         "flex gap-2.5 border-l-4 px-3 py-2.5 text-sm",
-        needsReview
+        blocked
+          ? "border-l-red-600 bg-red-50 text-red-950 dark:bg-red-950/30 dark:text-red-100"
+          : needsReview
           ? "border-l-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"
           : "border-l-emerald-600 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-100"
       )}
@@ -110,35 +120,48 @@ export function QualityBanner({ quality }: { quality?: GenerationQuality | null 
       <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
       <div className="min-w-0">
         <p className="font-semibold">
-          {quality.repaired ? "초안을 한 번 보완하고 자동 점검했습니다" : "초안 구성을 자동 점검했습니다"}
+          {blocked
+            ? "핵심 품질 오류가 있어 저장·내보내기가 잠겼습니다"
+            : quality.repaired
+              ? "초안을 한 번 보완하고 자동 점검했습니다"
+              : "초안 구성을 자동 점검했습니다"}
         </p>
-        <p className="mt-0.5 text-xs leading-relaxed opacity-80">
-          {needsReview
+        <p className="mt-0.5 text-sm leading-relaxed opacity-80">
+          {blocked
+            ? `먼저 수정할 항목: ${errors.join(" · ")}. 편집하거나 해당 부분을 AI로 다시 생성해 주세요.`
+            : needsReview
             ? `최종 확인이 필요한 항목: ${quality.warnings.join(" · ")}`
             : "필수 구성과 교육 흐름을 확인했습니다. 현장 적용 전 내용과 수치는 최종 검토해 주세요."}
         </p>
+        {blocked && needsReview && (
+          <p className="mt-1 text-xs leading-relaxed opacity-75">
+            차단하지 않는 추가 검토 항목: {quality.warnings.join(" · ")}
+          </p>
+        )}
       </div>
     </div>
   );
 }
 
 export function SaveButton({ chrome }: { chrome: ResultChrome }) {
-  const { saving, saved, loadedId, onSave } = chrome;
+  const { saving, locked, outputBlocked, saved, loadedId, onSave } = chrome;
   return (
     <Button
       type="button"
       variant="outline"
       size="sm"
-      className="gap-1.5"
-      disabled={saving || saved}
+      className="min-h-12 gap-1.5"
+      disabled={saving || locked || outputBlocked || saved}
       onClick={onSave}
+      aria-busy={saving}
+      title={outputBlocked ? "핵심 품질 오류를 수정한 뒤 저장할 수 있습니다." : undefined}
     >
       {saved ? (
-        <Check className="h-4 w-4" />
+        <Check className="h-4 w-4" aria-hidden="true" />
       ) : saving ? (
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
       ) : (
-        <Save className="h-4 w-4" />
+        <Save className="h-4 w-4" aria-hidden="true" />
       )}
       {saved ? "저장됨" : loadedId ? "수정 저장" : "저장"}
     </Button>
@@ -148,26 +171,38 @@ export function SaveButton({ chrome }: { chrome: ResultChrome }) {
 export function EditToggleButton({ chrome }: { chrome: ResultChrome }) {
   return (
     <Button
+      type="button"
       variant={chrome.editing ? "default" : "outline"}
       size="sm"
-      className="gap-1.5"
+      className="min-h-12 gap-1.5"
       onClick={chrome.onToggleEdit}
+      disabled={chrome.saving || chrome.locked}
     >
-      {chrome.editing ? <Check className="h-4 w-4" /> : <Pencil className="h-4 w-4" />}
+      {chrome.editing ? (
+        <Check className="h-4 w-4" aria-hidden="true" />
+      ) : (
+        <Pencil className="h-4 w-4" aria-hidden="true" />
+      )}
       {chrome.editing ? "완료" : "편집"}
     </Button>
   );
 }
 
 export function SourceBadges({ sources }: { sources: GeneratedDocSource[] }) {
+  const visible = sources.slice(0, 5);
   return (
     <>
-      {sources.map((s, i) => (
+      {visible.map((s, i) => (
         <Badge key={i} variant="secondary" className="font-normal">
           {s.doc}
           {s.page != null && ` p.${s.page}`}
         </Badge>
       ))}
+      {sources.length > visible.length && (
+        <Badge variant="outline" className="font-normal">
+          외 {sources.length - visible.length}개
+        </Badge>
+      )}
     </>
   );
 }
@@ -199,11 +234,11 @@ export function RegenControls({ index, regen }: { index: number; regen: RegenSta
         type="button"
         variant="ghost"
         size="sm"
-        className="h-8 gap-1.5 text-xs text-muted-foreground"
+        className="min-h-12 gap-1.5 text-sm text-muted-foreground"
         disabled={regen.loadingIndex !== null}
         onClick={() => regen.onOpen(index)}
       >
-        <RefreshCw className="h-3.5 w-3.5" /> AI로 다시 생성
+        <RefreshCw className="h-4 w-4" aria-hidden="true" /> AI로 다시 생성
       </Button>
     );
   }
@@ -218,25 +253,25 @@ export function RegenControls({ index, regen }: { index: number; regen: RegenSta
             type="button"
             variant="outline"
             size="sm"
-            className="h-8 gap-1 text-xs"
+            className="min-h-12 gap-1.5 text-sm"
             disabled={isLoading}
             onClick={() => regen.onApply(index, ins.text)}
           >
             {isLoading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
             ) : (
-              <RefreshCw className="h-3.5 w-3.5" />
+              <RefreshCw className="h-4 w-4" aria-hidden="true" />
             )}
             {ins.label}
           </Button>
         ))}
       </div>
-      <div className="flex gap-1.5">
+      <div className="flex flex-col gap-2 sm:flex-row">
         <Input
           value={regen.text}
           onChange={(e) => regen.onTextChange(e.target.value)}
           placeholder="직접 지시 (예: 표로 정리)"
-          className="h-8 text-xs"
+          className="h-12 text-base sm:flex-1 md:h-10"
           disabled={isLoading}
           onKeyDown={(e) => {
             if (e.key === "Enter" && trimmed) regen.onApply(index, trimmed);
@@ -245,7 +280,7 @@ export function RegenControls({ index, regen }: { index: number; regen: RegenSta
         <Button
           type="button"
           size="sm"
-          className="h-8 text-xs"
+          className="h-12 text-sm md:h-10"
           disabled={isLoading || !trimmed}
           onClick={() => regen.onApply(index, trimmed)}
         >
@@ -255,7 +290,7 @@ export function RegenControls({ index, regen }: { index: number; regen: RegenSta
           type="button"
           variant="ghost"
           size="sm"
-          className="h-8 text-xs"
+          className="h-12 text-sm md:h-10"
           disabled={isLoading}
           onClick={regen.onClose}
         >

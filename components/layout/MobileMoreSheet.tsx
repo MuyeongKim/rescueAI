@@ -36,9 +36,11 @@ const ADMIN_MORE_ITEMS = ADMIN_NAV_ITEMS;
 export function MobileMoreSheet({
   isAdmin,
   active,
+  hasNewNotice = false,
 }: {
   isAdmin?: boolean;
   active?: string;
+  hasNewNotice?: boolean;
 }) {
   // 더보기에 속한 메뉴가 활성일 때 더보기 탭도 강조
   const moreActive = [...MORE_ITEMS, ...ADMIN_MORE_ITEMS].some(
@@ -49,14 +51,22 @@ export function MobileMoreSheet({
     <Sheet>
       <SheetTrigger
         className={cn(
-          "relative flex min-h-[56px] min-w-[56px] flex-1 flex-col items-center justify-center gap-1 px-1 text-slate-400 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[#f0542d]",
-          moreActive && "bg-[#1a2a43] font-semibold text-white"
+          "relative flex min-h-[56px] min-w-[56px] flex-1 flex-col items-center justify-center gap-1 px-1 text-slate-400 transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ops-signal-bright",
+          moreActive && "bg-ops-panel font-semibold text-white"
         )}
-        aria-label="더보기 메뉴"
+        aria-label={hasNewNotice ? "더보기 메뉴, 새 공지 있음" : "더보기 메뉴"}
       >
-        {moreActive && <span className="absolute inset-x-3 top-0 h-0.5 bg-[#ff7752]" aria-hidden />}
-        <Menu className="h-5 w-5" />
-        <span className="whitespace-nowrap text-[11px]">
+        {moreActive && <span className="absolute inset-x-3 top-0 h-0.5 bg-ops-signal-soft" aria-hidden />}
+        <span className="relative">
+          <Menu className="h-5 w-5" aria-hidden="true" />
+          {hasNewNotice && (
+            <span
+              className="absolute -right-1.5 -top-1.5 h-2 w-2 rounded-full bg-ops-signal-soft shadow-[0_0_0_2px_rgba(17,29,49,0.9)]"
+              aria-hidden="true"
+            />
+          )}
+        </span>
+        <span className="whitespace-nowrap text-xs">
           더보기
         </span>
       </SheetTrigger>
@@ -79,14 +89,25 @@ export function MobileMoreSheet({
                   href={item.href}
                   aria-current={isActive ? "page" : undefined}
                   className={cn(
-                    "flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-sm border p-3 text-center transition-colors",
+                    "relative flex min-h-[76px] flex-col items-center justify-center gap-1.5 rounded-sm border p-3 text-center transition-colors motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                     isActive
                       ? "border-primary bg-primary/5 text-primary"
                       : "text-foreground hover:bg-accent/40"
                   )}
                 >
-                  <Icon className="h-5 w-5" />
-                  <span className="text-xs">{item.label}</span>
+                  <Icon className="h-5 w-5" aria-hidden="true" />
+                  <span className="text-xs">
+                    {item.label}
+                    {item.key === "notices" && hasNewNotice && (
+                      <span className="sr-only">, 새 공지 있음</span>
+                    )}
+                  </span>
+                  {item.key === "notices" && hasNewNotice && (
+                    <span
+                      className="absolute right-2 top-2 h-2.5 w-2.5 rounded-full bg-primary"
+                      aria-hidden="true"
+                    />
+                  )}
                 </Link>
               </SheetClose>
             );
@@ -114,7 +135,7 @@ export function MobileMoreSheet({
                           : "text-foreground hover:bg-accent/40"
                       )}
                     >
-                      <Icon className="h-5 w-5" />
+                      <Icon className="h-5 w-5" aria-hidden="true" />
                       <span className="text-xs">{item.label}</span>
                     </Link>
                   </SheetClose>

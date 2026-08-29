@@ -153,6 +153,19 @@ Docling 변환에서 누락된 페이지는 유효한 PDF 텍스트층이 있을
   (산악 / 수난 / 화재 / 구급)
 - **manifest**: `docs/manifest.json` 으로 파일별 제목·장비·난이도·발행일 지정/덮어쓰기
   (`docs/manifest.example.json` 참고)
+- **자료 유형**: 운영 GUI `rag7.py`에서 아래 유형을 선택하며 각 청크의
+  `metadata.document_type`에 기록됩니다.
+  - `일반 교육자료` → `training_material`
+  - `현장활동 지침·매뉴얼` → `operational_guidance`
+  - `표준작전절차(SOP)` → `sop`
+
+AI 자료제작은 요청한 교육 분야와 같은 `edu_category` 안에서 `sop`와
+`operational_guidance`만 별도의 SOP 근거 검색에 사용합니다. 공통 적용 문서도 현재는 사용할
+분야로 분류해 적재해야 하며, 다른 분야의 지침을 키워드 일치만으로 근거로 승격하지 않습니다.
+문서 제목에 SOP라는 단어가 있다는 이유만으로 자동 분류하지 말고, 발행기관과 문서 성격을
+확인한 관리자가 유형을 지정해야 합니다. 기존 운영 자료는
+`20260829140500_classify_rag_procedure_sources.sql` 적용 후 분류되며, 새로 적재하거나 재적재할
+때는 GUI에서 올바른 유형을 선택합니다.
 
 ## 포맷 지원
 | 포맷 | 처리 |

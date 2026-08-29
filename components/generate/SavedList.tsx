@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -12,17 +12,28 @@ import {
   Loader2,
   Pencil,
   Presentation,
+  ShieldAlert,
   Share2,
   Sparkles,
   Trash2,
 } from "lucide-react";
 
 import {
+  DURATIONS,
   GEN_TYPES,
+  blockingGenerationQualityIssues,
+  inspectCurrentGenerationQuality,
+  type Duration,
   type GeneratedDoc,
-  type GeneratedSlideDeck,
+  type GenerationQualityIssue,
+  type GenerationQualityReport,
   type SavedMaterial,
 } from "@/lib/generate";
+import { hydrateMaterial } from "@/lib/generate-material";
+import {
+  inspectSopContract,
+  type SopContractReport,
+} from "@/lib/sop-evidence";
 import { categoryStyle } from "@/lib/category";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -47,9 +58,129 @@ function formatDate(iso: string): string {
   }
 }
 
-type DocContent = { sections?: GeneratedDoc["sections"]; sources?: GeneratedDoc["sources"] };
-type DeckContent = { slides?: GeneratedSlideDeck["slides"]; sources?: GeneratedSlideDeck["sources"] };
+type DocContent = {
+  sections?: GeneratedDoc["sections"];
+  sources?: GeneratedDoc["sources"];
+  date?: unknown;
+  place?: unknown;
+};
 type NlmContent = { prompt?: string };
+
+/** 저장한 훈련계획도 생성 직후와 같은 전북소방 표준 HWPX 메타데이터를 사용한다. */
+export function savedMaterialHwpxOptions(material: SavedMaterial):
+  | {
+      template: "training_plan";
+      plan: {
+        topic: string;
+        datetime: string;
+        formType: string;
+        method: string;
+        duration?: string;
+        target?: string;
+        place: string;
+      };
+    }
+  | undefined {
+  if (material.kind !== "plan") return undefined;
+  const content = material.content as DocContent;
+  return {
+    template: "training_plan",
+    plan: {
+      topic: material.topic?.trim() || `${material.category ?? "구조"} 훈련`,
+      datetime: typeof content.date === "string" ? content.date : "",
+      formType: "이론 + 현장실습",
+      method: "자체훈련",
+      duration: material.duration ?? undefined,
+      target: material.audience ?? undefined,
+      place: typeof content.place === "string" ? content.place : "",
+    },
+  };
+}
+
+const MISSING_SAVED_SOP_REPORT: SopContractReport = {
+  ok: false,
+  issues: [
+    {
+      code: "missing_sop_disclosure",
+      path: "content.sopEvidence",
+      message: "저장본에 검증된 SOP 근거 상태가 없습니다.",
+    },
+  ],
+};
+
+const MISSING_SAVED_RESULT_REPORT: GenerationQualityReport = {
+  ok: false,
+  issues: [
+    {
+      code: "missing_section",
+      path: "content",
+      message: "저장된 결과 본문을 불러올 수 없습니다.",
+    },
+  ],
+};
+
+const MISSING_SAVED_DURATION_ISSUE: GenerationQualityIssue = {
+  code: "missing_time_allocation",
+  path: "duration",
+  message: "교육 시간이 없는 이전 자료라 시간 배분을 확인할 수 없습니다.",
+};
+
+/** 저장 목록의 내보내기·공유·복제 전에 과거 저장본까지 같은 SOP 계약으로 검사한다. */
+export function inspectSavedMaterialSop(material: SavedMaterial): SopContractReport {
+  if (material.kind === "notebooklm") return { ok: true, issues: [] };
+
+  const hydrated = hydrateMaterial(material);
+  const result = material.kind === "slides" ? hydrated.deck : hydrated.doc;
+  const evidence = result?.sopEvidence;
+  if (!result || !evidence) return MISSING_SAVED_SOP_REPORT;
+
+  return inspectSopContract(material.kind, result, evidence);
+}
+
+/**
+ * 저장본도 생성 직후 화면과 같은 중앙 품질검사를 통과해야 공식 파일·복사·공유에 쓸 수 있다.
+ * 과거 저장본의 누락된 시간·SOP 상태만 저장 형식 경계에서 보완해 검사한다.
+ */
+export function inspectSavedMaterialQuality(
+  material: SavedMaterial
+): GenerationQualityReport {
+  if (material.kind === "notebooklm") return { ok: true, issues: [] };
+
+  const hydrated = hydrateMaterial(material);
+  const result = material.kind === "slides" ? hydrated.deck : hydrated.doc;
+  if (!result) return MISSING_SAVED_RESULT_REPORT;
+
+  const duration = DURATIONS.includes(material.duration as Duration)
+    ? (material.duration as Duration)
+    : null;
+  const checked = inspectCurrentGenerationQuality(
+    material.kind,
+    result,
+    duration ?? "2시간"
+  );
+  const extraIssues: GenerationQualityIssue[] = [];
+  if (!duration) extraIssues.push(MISSING_SAVED_DURATION_ISSUE);
+  if (!result.sopEvidence) extraIssues.push(...MISSING_SAVED_SOP_REPORT.issues);
+
+  const issues = [...checked.issues, ...extraIssues];
+  return { ok: issues.length === 0, issues };
+}
+
+/** 저장 목록에서 실제 내보내기·복사·공유를 막는 핵심 오류만 반환한다. */
+export function savedMaterialBlockingQualityIssues(
+  material: SavedMaterial
+): GenerationQualityIssue[] {
+  return blockingGenerationQualityIssues(inspectSavedMaterialQuality(material));
+}
+
+/** 검색장애 상태는 개인 보관·내보내기는 가능하지만 동료 공유 근거로는 사용할 수 없다. */
+export function savedMaterialSopStatus(
+  material: SavedMaterial
+): "found" | "not_found" | "degraded" | undefined {
+  if (material.kind === "notebooklm") return undefined;
+  const hydrated = hydrateMaterial(material);
+  return (material.kind === "slides" ? hydrated.deck : hydrated.doc)?.sopEvidence?.status;
+}
 
 export function SavedList({
   initial,
@@ -64,19 +195,80 @@ export function SavedList({
   const [openId, setOpenId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
+  // 목록이 다시 그려질 때마다 여러 차례 전체 품질검사를 반복하지 않는다.
+  const diagnostics = useMemo(
+    () =>
+      new Map(
+        items.map((item) => {
+          const blockingIssues = savedMaterialBlockingQualityIssues(item);
+          return [
+            item.id,
+            {
+              blockingIssues,
+              sopStatus: savedMaterialSopStatus(item),
+            },
+          ] as const;
+        })
+      ),
+    [items]
+  );
+
+  function ensureQualityReady(it: SavedMaterial, action: string): boolean {
+    const blockingIssues = savedMaterialBlockingQualityIssues(it);
+    if (blockingIssues.length === 0) return true;
+
+    const detail = blockingIssues
+      .slice(0, 2)
+      .map((issue) => issue.message)
+      .join(" · ");
+    const remaining =
+      blockingIssues.length > 2
+        ? ` · 그 밖의 핵심 오류 ${blockingIssues.length - 2}개`
+        : "";
+    toast.error(`${action} 전 핵심 품질을 보완해 주세요`, {
+      description: `${detail}${remaining} ${
+        mode === "own"
+          ? "편집에서 다시 생성하거나 내용을 수정해 주세요."
+          : "작성자가 품질을 보완해 다시 공유해야 합니다."
+      }`,
+    });
+    return false;
+  }
+
   async function handleDownload(it: SavedMaterial) {
+    if (!ensureQualityReady(it, it.kind === "notebooklm" ? "복사" : "내보내기")) {
+      return;
+    }
     setBusyId(it.id);
+    let visualToastId: string | number | undefined;
     try {
       if (it.kind === "slides") {
-        const c = it.content as DeckContent;
-        const deck: GeneratedSlideDeck = {
-          title: it.title,
-          slides: c.slides ?? [],
-          sources: c.sources ?? [],
-        };
-        const { downloadPptx } = await import("@/lib/pptx");
+        const deck = hydrateMaterial(it).deck;
+        if (!deck) throw new Error("저장한 슬라이드를 불러오지 못했습니다.");
+        visualToastId = toast.loading("원문 시각자료를 준비하고 있습니다…");
+        const [{ downloadPptx }, { prepareDeckSourceVisuals }] = await Promise.all([
+          import("@/lib/pptx"),
+          import("@/lib/source-visuals"),
+        ]);
+        const prepared = await prepareDeckSourceVisuals(deck);
+        if (prepared.requested === 0) {
+          toast.dismiss(visualToastId);
+          visualToastId = undefined;
+        } else if (prepared.failed > 0) {
+          toast.warning("일부 원문 이미지는 기본 도형으로 대신했습니다", {
+            id: visualToastId,
+            description: `${prepared.resolved}개 반영 · ${prepared.failed}개 대체`,
+          });
+          visualToastId = undefined;
+        } else {
+          toast.success("원문 시각자료를 반영했습니다", {
+            id: visualToastId,
+            description: `${prepared.resolved}개 페이지를 슬라이드에 넣었습니다.`,
+          });
+          visualToastId = undefined;
+        }
         await downloadPptx(
-          deck,
+          prepared.deck,
           it.category ?? "",
           `대상: ${it.audience ?? "-"} · 교육 시간: ${it.duration ?? "-"}`
         );
@@ -92,11 +284,12 @@ export function SavedList({
         };
         // 미니서버(hwp-writer-api) 우선, 실패 시 로컬 생성 폴백
         const { downloadHwpx } = await import("@/lib/hwpx-download");
-        if ((await downloadHwpx(doc)) === "local") {
+        if ((await downloadHwpx(doc, savedMaterialHwpxOptions(it))) === "local") {
           toast.info("한글 작성 서버 미연결 — 기본 양식으로 생성했습니다");
         }
       }
     } catch {
+      if (visualToastId !== undefined) toast.dismiss(visualToastId);
       toast.error("다운로드에 실패했습니다");
     } finally {
       setBusyId(null);
@@ -124,8 +317,17 @@ export function SavedList({
 
   // 내 자료 공유/해제 토글
   async function toggleShare(it: SavedMaterial) {
-    setBusyId(it.id);
     const next = !it.shared;
+    // 오래된 비준수 자료도 공유 해제는 즉시 가능해야 한다.
+    if (next && !ensureQualityReady(it, "공유")) return;
+    if (next && savedMaterialSopStatus(it) === "degraded") {
+      toast.error("SOP 검색 상태를 다시 확인한 뒤 공유해 주세요", {
+        description:
+          "검색장애 상태의 자료는 개인 보관·내보내기만 가능합니다. 검색이 정상화되면 다시 생성·저장해 주세요.",
+      });
+      return;
+    }
+    setBusyId(it.id);
     try {
       const res = await fetch("/api/generate/save", {
         method: "PATCH",
@@ -133,7 +335,10 @@ export function SavedList({
         body: JSON.stringify({ id: it.id, shared: next }),
       });
       if (!res.ok) {
-        toast.error(await res.text());
+        const payload = (await res.json().catch(() => null)) as { error?: unknown } | null;
+        toast.error(
+          typeof payload?.error === "string" ? payload.error : "공유 설정을 변경하지 못했습니다."
+        );
         return;
       }
       setItems((prev) => prev.map((x) => (x.id === it.id ? { ...x, shared: next } : x)));
@@ -147,6 +352,7 @@ export function SavedList({
 
   // 공유 자료를 내 자료로 복제(편집 가능하게)
   async function cloneToMine(it: SavedMaterial) {
+    if (!ensureQualityReady(it, "복제")) return;
     setBusyId(it.id);
     try {
       const res = await fetch("/api/generate/save", {
@@ -163,7 +369,8 @@ export function SavedList({
         }),
       });
       if (!res.ok) {
-        toast.error("복제에 실패했습니다");
+        const payload = (await res.json().catch(() => null)) as { error?: unknown } | null;
+        toast.error(typeof payload?.error === "string" ? payload.error : "복제에 실패했습니다");
         return;
       }
       toast.success("내 자료로 복제했습니다. ‘저장한 자료’에서 편집할 수 있어요.");
@@ -181,6 +388,10 @@ export function SavedList({
         const st = categoryStyle(it.category);
         const open = openId === it.id;
         const busy = busyId === it.id;
+        const diagnostic = diagnostics.get(it.id);
+        const blockingIssues = diagnostic?.blockingIssues ?? [];
+        const qualityReady = blockingIssues.length === 0;
+        const sopSearchUnavailable = diagnostic?.sopStatus === "degraded";
         return (
           <Card
             key={it.id}
@@ -219,9 +430,53 @@ export function SavedList({
                         <Share2 className="h-3 w-3" /> 공유 중
                       </Badge>
                     )}
+                    {!qualityReady && it.kind !== "notebooklm" && (
+                      <Badge
+                        variant="secondary"
+                        className="gap-1 font-normal text-destructive"
+                        title="핵심 품질 오류를 보완한 뒤 내보내거나 공유할 수 있습니다."
+                      >
+                        <ShieldAlert className="h-3 w-3" /> 품질 보완 필요
+                      </Badge>
+                    )}
+                    {qualityReady && sopSearchUnavailable && (
+                      <Badge
+                        variant="secondary"
+                        className="gap-1 font-normal text-amber-700 dark:text-amber-300"
+                        title="SOP 검색이 정상화된 뒤 다시 생성·저장해야 공유할 수 있습니다."
+                      >
+                        <ShieldAlert className="h-3 w-3" /> SOP 검색 재확인 필요
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </div>
+
+              {!qualityReady && it.kind !== "notebooklm" && (
+                <div
+                  role="alert"
+                  className="flex gap-2 rounded-lg border border-destructive/25 bg-destructive/5 p-3 text-sm"
+                >
+                  <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                  <div className="min-w-0">
+                    <p className="font-medium text-destructive">
+                      내보내기·복사·공유 전에 품질 보완이 필요합니다.
+                    </p>
+                    <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
+                      {blockingIssues
+                        .slice(0, 2)
+                        .map((issue) => issue.message)
+                        .join(" · ")}
+                      {blockingIssues.length > 2
+                        ? ` · 그 밖의 핵심 오류 ${blockingIssues.length - 2}개`
+                        : ""}
+                      {mode === "own"
+                        ? " 편집에서 다시 생성하거나 내용을 수정해 주세요."
+                        : " 작성자가 보완해 다시 공유해야 합니다."}
+                    </p>
+                  </div>
+                </div>
+              )}
 
               <div className="flex flex-wrap gap-2">
                 <Button
@@ -290,6 +545,11 @@ export function SavedList({
                       className="gap-1.5"
                       disabled={busy}
                       onClick={() => toggleShare(it)}
+                      title={
+                        !it.shared && sopSearchUnavailable
+                          ? "SOP 검색이 정상화된 뒤 다시 생성·저장해야 공유할 수 있습니다."
+                          : undefined
+                      }
                     >
                       <Share2 className="h-4 w-4" /> {it.shared ? "공유 해제" : "공유"}
                     </Button>
@@ -310,7 +570,7 @@ export function SavedList({
               {open && (
                 <div className="animate-in fade-in slide-in-from-top-1 space-y-3 border-t pt-3 text-sm duration-200">
                   {it.kind === "slides" ? (
-                    ((it.content as DeckContent).slides ?? []).map((s, i) => (
+                    (hydrateMaterial(it).deck?.slides ?? []).map((s, i) => (
                       <div key={i}>
                         <p className="flex items-baseline gap-2 font-semibold">
                           <span className="text-xs text-muted-foreground">{i + 1}</span>

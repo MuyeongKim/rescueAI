@@ -223,6 +223,10 @@ def build_source_manifest(
             for row in rows
             if str(row.get("ingestion_id") or "").strip()
         }
+        document_types = {
+            str(meta.get("document_type") or "training_material").strip()
+            for meta in metadata_rows
+        }
         if len(document_ids) != 1:
             raise RuntimeError(
                 f"원본 {source!r}의 document_id가 하나가 아닙니다: {sorted(document_ids)}"
@@ -230,6 +234,10 @@ def build_source_manifest(
         if len(file_hashes) != 1:
             raise RuntimeError(
                 f"원본 {source!r}의 file_hash가 하나가 아닙니다: {sorted(file_hashes)}"
+            )
+        if len(document_types) != 1:
+            raise RuntimeError(
+                f"원본 {source!r}의 document_type이 하나가 아닙니다: {sorted(document_types)}"
             )
         document_id = next(iter(document_ids))
         document = docs_by_id.get(document_id)
@@ -246,6 +254,7 @@ def build_source_manifest(
                 "source": source,
                 "category": category,
                 "year": year,
+                "document_type": next(iter(document_types)),
                 "document_id": document_id,
                 "file_hash": next(iter(file_hashes)),
                 "storage_bucket": STORAGE_BUCKET,
@@ -584,6 +593,7 @@ def new_release_state(sources: list[dict[str, Any]]) -> dict[str, Any]:
                 "source": source["source"],
                 "category": source["category"],
                 "year": source["year"],
+                "document_type": source.get("document_type", "training_material"),
                 "document_id": source["document_id"],
                 "file_hash": source["file_hash"],
                 "local_path": source["local_path"],
@@ -615,6 +625,20 @@ def load_or_create_release_state(
         write_json(state_path, state)
     if len(state.get("entries") or []) != len(sources):
         raise RuntimeError("Gemini 릴리스 상태 파일의 원본 수가 백업과 다릅니다.")
+    source_type_by_id = {
+        int(source["document_id"]): source.get("document_type", "training_material")
+        for source in sources
+    }
+    state_changed = False
+    for entry in state.get("entries") or []:
+        if entry.get("document_type"):
+            continue
+        entry["document_type"] = source_type_by_id.get(
+            int(entry["document_id"]), "training_material"
+        )
+        state_changed = True
+    if state_changed:
+        write_json(state_path, state)
     expected = (GEMINI_PROVIDER, GEMINI_MODEL, GEMINI_DIMENSIONS, GEMINI_VERSION)
     actual = (
         state.get("provider"),
@@ -669,11 +693,12 @@ def stage_command(
         if entry.get("status") == "completed":
             try:
                 rag7.validate_staged_ingestion(
-                    entry["ingestion_id"],
-                    entry["category"],
-                    entry["year"],
-                    entry["source"],
-                    int(entry["chunk_count"]),
+                    ingestion_id=entry["ingestion_id"],
+                    category_name=entry["category"],
+                    year_name=entry["year"],
+                    source_name=entry["source"],
+                    expected_count=int(entry["chunk_count"]),
+                    document_type=entry.get("document_type", "training_material"),
                 )
                 print(f"[건너뜀] 이미 검증된 스테이징: {entry['source']}")
                 continue
@@ -696,6 +721,7 @@ def stage_command(
                 pdf_file=local_path,
                 category_name=entry["category"],
                 year_name=entry["year"],
+                document_type=entry.get("document_type", "training_material"),
                 should_delete=False,
                 register_source=False,
                 preview_cb=lambda _preview: True,

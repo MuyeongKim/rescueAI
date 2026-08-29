@@ -14,16 +14,22 @@ import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
 
-// 저장본 재편집(?m=<id>) — RLS 로 본인 행만 반환된다.
+// 저장본 재편집(?m=<id>) — RLS에 더해 인증 user_id를 명시해 본인 행만 조회한다.
 async function loadMaterial(id?: string): Promise<SavedMaterial | undefined> {
   if (DEMO || !id) return undefined;
   const n = Number(id);
   if (!Number.isInteger(n) || n <= 0) return undefined;
   const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return undefined;
+
   const { data } = await supabase
     .from("generated_materials")
-    .select("id, kind, category, audience, duration, topic, title, content, created_at")
+    .select("id, kind, category, audience, duration, topic, title, content, revision, created_at")
     .eq("id", n)
+    .eq("user_id", user.id)
     .maybeSingle();
   return (data as unknown as SavedMaterial) ?? undefined;
 }

@@ -49,6 +49,7 @@ supabase/migrations/    0001 테이블 · 0002 RPC · 0003 트리거+RLS · 0004
                         · 0011 인기질문 RPC · 0012 생성물 공유
                         · 20260726… 외부 RAG(rag_rescue) 보안·버전 적재
                         · 20260808… hybrid_search 코사인 수정+정리 · 관리자 통계 RPC
+                        · 20260829… 생성물 공유 SOP DB 보호 · SOP/현장지침 문서 유형 분류
 indexing/       Python 파이프라인          docs/  원본 자료 투입 위치
 eval/           평가셋 러너(vitest 통합)
 ```

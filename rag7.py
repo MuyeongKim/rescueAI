@@ -947,6 +947,15 @@ EDU_CATEGORIES = [
     "드론 운용", "장비 관리", "현장지휘·공통", "복무·행정",
 ]
 
+# 공식 SOP·현장지침 근거와 일반 교재를 생성 단계에서 구분한다.
+# 파일명 추정이 아니라 적재 시 관리자가 확인한 값을 metadata.document_type에 보존한다.
+DOCUMENT_TYPE_OPTIONS = {
+    "일반 교육자료": "training_material",
+    "현장활동 지침·매뉴얼": "operational_guidance",
+    "표준작전절차(SOP)": "sop",
+}
+DEFAULT_DOCUMENT_TYPE = "training_material"
+
 # Ollama BGE-M3 임베딩 모델 (1024차원) — 기본은 웹앱과 동일한 EMBEDDING_API_URL 공유
 OLLAMA_MODEL = os.getenv("EMBEDDING_MODEL", "bge-m3:latest")
 OLLAMA_FALLBACK_BASE_URL = os.getenv("EMBEDDING_API_URL", "http://localhost:11434")
@@ -1501,6 +1510,7 @@ def validate_staged_ingestion(
     year_name,
     source_name,
     expected_count,
+    document_type=DEFAULT_DOCUMENT_TYPE,
 ):
     """릴리스 전환 전 비활성 스테이징 행의 개수와 계약 메타데이터를 확인한다."""
     contract_metadata = {
@@ -1511,6 +1521,7 @@ def validate_staged_ingestion(
         "edu_category": category_name,
         "year": year_name,
         "source": source_name,
+        "document_type": document_type,
     }
 
     total_result = (
@@ -1680,6 +1691,7 @@ def run_ingestion_pipeline(
     document_id_override=None,
     file_hash_expected=None,
     ingestion_id_override=None,
+    document_type=DEFAULT_DOCUMENT_TYPE,
 ):
     """품질 확인 후 자료실 연결, 스테이징 적재와 원자적 활성화를 수행한다.
 
@@ -1704,6 +1716,8 @@ def run_ingestion_pipeline(
         print(text)
 
     pipeline_start = time.perf_counter()
+    if document_type not in DOCUMENT_TYPE_OPTIONS.values():
+        raise ValueError("자료 유형은 일반 교육자료, 현장활동 지침·매뉴얼, SOP 중 하나여야 합니다.")
     set_progress(0)
     source_name = str(source_name_override or Path(pdf_file).name).strip()
     if not source_name:
@@ -1806,6 +1820,7 @@ def run_ingestion_pipeline(
                         "source": source_name,
                         "category": category_name,
                         "edu_category": category_name,
+                        "document_type": document_type,
                         "year": year_name,
                         "upload_date": upload_date,
                         "parser": parser_name,
@@ -1963,6 +1978,7 @@ def run_ingestion_pipeline(
                     year_name=year_name,
                     source_name=source_name,
                     expected_count=len(final_docs),
+                    document_type=document_type,
                 )
             else:
                 set_status("스테이징 검증 및 활성화 중...")
@@ -2157,6 +2173,7 @@ class RAGIngestionGUI:
         self.root.configure(bg=self.BG)
         self.file_path = ""
         self.category = ""
+        self.document_type = DEFAULT_DOCUMENT_TYPE
         self.year = ""
         self.should_delete = False
         self.register_source = True
@@ -2291,6 +2308,7 @@ class RAGIngestionGUI:
         classify_content = tk.Frame(classify_section, bg=self.CARD)
         classify_content.pack(side="left", fill="x", expand=True)
         classify_content.grid_columnconfigure(0, weight=1)
+        classify_content.grid_columnconfigure(1, weight=1)
         tk.Label(
             classify_content,
             text="분야",
@@ -2300,11 +2318,18 @@ class RAGIngestionGUI:
         ).grid(row=0, column=0, sticky="w", pady=(0, 5))
         tk.Label(
             classify_content,
-            text="연도",
+            text="자료 유형",
             bg=self.CARD,
             fg=self.MUTED,
             font=(self.FONT, 8, "bold"),
         ).grid(row=0, column=1, sticky="w", padx=(12, 0), pady=(0, 5))
+        tk.Label(
+            classify_content,
+            text="연도",
+            bg=self.CARD,
+            fg=self.MUTED,
+            font=(self.FONT, 8, "bold"),
+        ).grid(row=0, column=2, sticky="w", padx=(12, 0), pady=(0, 5))
         # 표준 분야만 선택하게 해 메타데이터 오타로 필터에서 자료가 사라지는 일을 막는다.
         self.cat_entry = ttk.Combobox(
             classify_content,
@@ -2315,6 +2340,15 @@ class RAGIngestionGUI:
         )
         self.cat_entry.set("현장지휘·공통")
         self.cat_entry.grid(row=1, column=0, sticky="ew")
+        self.document_type_entry = ttk.Combobox(
+            classify_content,
+            values=list(DOCUMENT_TYPE_OPTIONS.keys()),
+            font=(self.FONT, 9),
+            state="readonly",
+            style="Field.TCombobox",
+        )
+        self.document_type_entry.set("일반 교육자료")
+        self.document_type_entry.grid(row=1, column=1, sticky="ew", padx=(12, 0))
         self.year_entry = ttk.Entry(
             classify_content,
             width=10,
@@ -2323,7 +2357,7 @@ class RAGIngestionGUI:
             style="Field.TEntry",
         )
         self.year_entry.insert(0, str(datetime.now().year))
-        self.year_entry.grid(row=1, column=1, sticky="ew", padx=(12, 0))
+        self.year_entry.grid(row=1, column=2, sticky="ew", padx=(12, 0))
         self._add_divider(settings_panel)
 
         # 03. 반영 방식
@@ -2679,13 +2713,15 @@ class RAGIngestionGUI:
             return
 
         self.category = self.cat_entry.get().strip()
+        document_type_label = self.document_type_entry.get().strip()
+        self.document_type = DOCUMENT_TYPE_OPTIONS.get(document_type_label, "")
         self.year = self.year_entry.get().strip()
         self.should_delete = self.delete_var.get()
         self.register_source = self.register_source_var.get()
-        if not self.category or not self.year or not self.file_path:
+        if not self.category or not self.document_type or not self.year or not self.file_path:
             messagebox.showwarning(
                 "입력 확인",
-                "원본 파일, 분야, 연도를 모두 지정하세요.",
+                "원본 파일, 분야, 자료 유형, 연도를 모두 지정하세요.",
                 parent=self.root,
             )
             return
@@ -2711,7 +2747,8 @@ class RAGIngestionGUI:
         self._set_progress(0.0)
         self._append_log("=" * 60)
         self._append_log(
-            f"[시작] 파일={os.path.basename(self.file_path)}, category={self.category}, year={self.year}"
+            f"[시작] 파일={os.path.basename(self.file_path)}, category={self.category}, "
+            f"document_type={self.document_type}, year={self.year}"
         )
 
         worker = threading.Thread(
@@ -2719,6 +2756,7 @@ class RAGIngestionGUI:
             args=(
                 self.file_path,
                 self.category,
+                self.document_type,
                 self.year,
                 self.should_delete,
                 self.register_source,
@@ -2997,6 +3035,7 @@ class RAGIngestionGUI:
     def _set_controls_enabled(self, enabled):
         state = "normal" if enabled else "disabled"
         self.cat_entry.config(state="readonly" if enabled else "disabled")
+        self.document_type_entry.config(state="readonly" if enabled else "disabled")
         self.year_entry.config(state=state)
         self.file_btn.config(state=state)
         self.start_btn.config(state=state)
@@ -3077,6 +3116,7 @@ class RAGIngestionGUI:
         self,
         pdf_file,
         category_name,
+        document_type,
         year_name,
         should_delete,
         register_source,
@@ -3085,6 +3125,7 @@ class RAGIngestionGUI:
             result = run_ingestion_pipeline(
                 pdf_file=pdf_file,
                 category_name=category_name,
+                document_type=document_type,
                 year_name=year_name,
                 should_delete=should_delete,
                 register_source=register_source,

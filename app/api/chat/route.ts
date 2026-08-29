@@ -21,7 +21,7 @@ export async function POST(req: Request) {
   if (DEMO) {
     return createDataStreamResponse({
       execute: async (dataStream) => {
-        dataStream.writeData({ type: "conversationId", value: "demo-conv" });
+        dataStream.writeData({ type: "conversationId", value: "demo-conv-1" });
         const parts = demoChatAnswer.match(/[\s\S]{1,6}/g) ?? [demoChatAnswer];
         for (const p of parts) {
           dataStream.write(formatDataStreamPart("text", p));
@@ -29,7 +29,7 @@ export async function POST(req: Request) {
         }
         dataStream.writeMessageAnnotation({
           messageId: 1,
-          conversationId: "demo-conv",
+          conversationId: "demo-conv-1",
           sources: demoChatSources,
         });
       },

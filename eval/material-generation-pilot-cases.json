@@ -1,0 +1,101 @@
+{
+  "version": 1,
+  "observedAt": "2026-08-29",
+  "ragTable": "rag_rescue",
+  "ragSnapshot": [
+    { "category": "화학사고", "activeChunks": 1577, "sourceDocuments": 2 },
+    { "category": "현장지휘·공통", "activeChunks": 1274, "sourceDocuments": 2 },
+    { "category": "화재", "activeChunks": 1198, "sourceDocuments": 3 },
+    { "category": "일반구조", "activeChunks": 994, "sourceDocuments": 7 },
+    { "category": "수난", "activeChunks": 473, "sourceDocuments": 1 },
+    { "category": "산악", "activeChunks": 74, "sourceDocuments": 1 }
+  ],
+  "cases": [
+    {
+      "id": "mountain-broad-rope-rescue",
+      "label": "산악 넓은 주제에서 로프구조 방향 선택",
+      "type": "plan",
+      "category": "산악",
+      "topic": "산악사고 대비 훈련",
+      "focus": "로프 시스템 구축과 들것 인양",
+      "audience": "일반 대원",
+      "duration": "1시간",
+      "expectedEvidence": [
+        { "label": "로프구조", "anyOf": ["로프"] },
+        { "label": "확보지점", "anyOf": ["앵커", "확보"] },
+        { "label": "요구조자 운반", "anyOf": ["들것", "요구조자"] },
+        { "label": "인양 절차", "anyOf": ["인양", "도르래"] }
+      ],
+      "minimumRagExpectationGroups": 3,
+      "minimumOutputExpectationGroups": 2
+    },
+    {
+      "id": "fire-scba-check-and-donning",
+      "label": "공기호흡기 점검과 착용 교안",
+      "type": "lesson",
+      "category": "화재",
+      "topic": "공기호흡기 착용 전 점검과 착용 방법",
+      "audience": "일반 대원",
+      "duration": "1시간",
+      "expectedEvidence": [
+        { "label": "공기호흡기", "anyOf": ["공기호흡기", "SCBA"] },
+        { "label": "호흡보호 면체", "anyOf": ["면체", "안면부"] },
+        { "label": "압력 확인", "anyOf": ["압력", "잔압"] },
+        { "label": "경보와 점검", "anyOf": ["경보", "점검"] }
+      ],
+      "minimumRagExpectationGroups": 3,
+      "minimumOutputExpectationGroups": 2
+    },
+    {
+      "id": "chemical-suit-don-doff-decon",
+      "label": "화학보호복 착의·탈의·제독 슬라이드",
+      "type": "slides",
+      "category": "화학사고",
+      "topic": "화학보호복 착의·탈의와 제독",
+      "audience": "일반 대원",
+      "duration": "1시간",
+      "expectedEvidence": [
+        { "label": "보호복 등급", "anyOf": ["Level A", "A급"] },
+        { "label": "착용 전 기밀 확인", "anyOf": ["기밀", "압력", "점검"] },
+        { "label": "착의와 탈의", "anyOf": ["착의", "착용", "탈의"] },
+        { "label": "제독과 오염통제", "anyOf": ["제독", "오염"] }
+      ],
+      "minimumRagExpectationGroups": 4,
+      "minimumOutputExpectationGroups": 3
+    },
+    {
+      "id": "water-swiftwater-approach",
+      "label": "급류 요구조자 접근과 구조 훈련계획",
+      "type": "plan",
+      "category": "수난",
+      "topic": "급류 수난사고 요구조자 접근과 구조",
+      "audience": "일반 대원",
+      "duration": "1시간",
+      "expectedEvidence": [
+        { "label": "급류 위험", "anyOf": ["급류", "유속"] },
+        { "label": "요구조자", "anyOf": ["요구조자", "익수자"] },
+        { "label": "안전 접근", "anyOf": ["접근", "후방"] },
+        { "label": "부력 장비", "anyOf": ["구명조끼", "부력", "레스큐튜브"] }
+      ],
+      "minimumRagExpectationGroups": 3,
+      "minimumOutputExpectationGroups": 2
+    },
+    {
+      "id": "general-vehicle-stabilization-extrication",
+      "label": "교통사고 차량 안정화와 유압구조 교안",
+      "type": "lesson",
+      "category": "일반구조",
+      "topic": "교통사고 차량 안정화와 유압구조장비 인명구조",
+      "audience": "일반 대원",
+      "duration": "1시간",
+      "expectedEvidence": [
+        { "label": "차량 안정화", "anyOf": ["안정화", "고정", "쐐기"] },
+        { "label": "유압구조장비", "anyOf": ["유압", "전개기", "절단기"] },
+        { "label": "차량 위험요소", "anyOf": ["에어백", "배터리", "전기차"] },
+        { "label": "인명구조", "anyOf": ["구출", "인명구조", "끼임"] }
+      ],
+      "minimumRagExpectationGroups": 3,
+      "minimumOutputExpectationGroups": 2
+    }
+  ]
+}

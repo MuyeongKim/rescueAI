@@ -1,6 +1,14 @@
 // 교육자료·훈련계획 생성 — 스키마·옵션·프롬프트의 단일 출처.
 // UI는 클릭·선택형(자유 입력 최소화): 유형 × 분야 × 대상 × 시간 조합으로 생성한다.
 import { z } from "zod";
+import {
+  SOP_APPLICATION_MARKER,
+  SOP_DEGRADED_DISCLOSURE,
+  SOP_NOT_FOUND_DISCLOSURE,
+  inspectSopContract,
+  type SopEvidence,
+  type SopQualityIssueCode,
+} from "@/lib/sop-evidence";
 
 // ── 생성 유형 ──
 export const GEN_TYPES = [
@@ -41,7 +49,11 @@ export type GenerateRequest = {
   category: string;
   audience: Audience;
   duration: Duration;
+  /** 슬라이드 화면 밀도. 과거 클라이언트는 생략하며 발표형으로 처리한다. */
+  slideMode?: SlideDeckMode;
   topic?: string; // 선택: 훈련 내용/주제(예: "공기호흡기 점검")
+  /** 넓은 상위 주제 안에서 이번 결과가 집중할 구체적인 훈련 방향. */
+  focus?: string;
   date?: string; // 선택: 훈련 일자 (YYYY-MM-DD)
   place?: string; // 선택: 훈련 장소(훈련계획 양식용)
   conditions?: string; // 선택: 인원·교관·보유 장비·훈련장 등 현장 조건(최대 500자)
@@ -141,15 +153,94 @@ export type GeneratedDocSource = {
   page: number | null;
 };
 
+/**
+ * 화면에는 출처가 지나치게 길게 보이지 않도록 일부만 노출하되, 원문 시각자료 바인딩에는
+ * 회수한 모든 문서·페이지 메타데이터를 사용한다.
+ */
+export function splitGeneratedSourcesForDisplay(
+  candidates: readonly GeneratedDocSource[],
+  displayLimit = 5
+): { sources: GeneratedDocSource[]; bindingSources: GeneratedDocSource[] } {
+  const unique = new Map<string, GeneratedDocSource>();
+  for (const source of candidates) {
+    if (
+      !Number.isInteger(source.document_id) ||
+      !source.doc.trim() ||
+      (source.page !== null && !Number.isInteger(source.page))
+    ) {
+      continue;
+    }
+    const normalized: GeneratedDocSource = {
+      document_id: source.document_id,
+      doc: source.doc.trim(),
+      page: source.page,
+    };
+    const key = `${normalized.document_id}::${normalized.page ?? "-"}::${normalized.doc}`;
+    if (!unique.has(key)) unique.set(key, normalized);
+  }
+  const bindingSources = Array.from(unique.values());
+  const limit = Math.max(0, Math.floor(displayLimit));
+  return { sources: bindingSources.slice(0, limit), bindingSources };
+}
+
 export type GeneratedDoc = {
   title: string;
   sections: GeneratedSection[];
   sources: GeneratedDocSource[];
   /** 생성 당시 RAG 컨텍스트에서 허용된 정확한 출처 라벨. 편집 후 재검사용. */
   sourceLabels?: string[];
+  /** 일반 교재와 분리해 검증한 SOP·현장지침 근거 상태. */
+  sopEvidence?: SopEvidence;
 };
 
 // ── 슬라이드(PPTX) 생성 결과 ──
+export const SLIDE_DECK_MODES = ["presenter", "detailed"] as const;
+export type SlideDeckMode = (typeof SLIDE_DECK_MODES)[number];
+export const DEFAULT_SLIDE_DECK_MODE: SlideDeckMode = "presenter";
+
+/**
+ * role은 이 장이 교육 흐름에서 맡는 역할이고, composition은 화면의 시각 구도다.
+ * 둘을 분리해야 같은 안전 장도 체크리스트·판단 흐름·원문 설명 등으로 다르게 표현할 수 있다.
+ */
+export const SLIDE_ROLE_TYPES = [
+  "objectives",
+  "concept",
+  "procedure",
+  "equipment",
+  "comparison",
+  "timeline",
+  "decision",
+  "case",
+  "safety",
+  "evidence",
+  "summary",
+] as const;
+export type SlideRoleType = (typeof SLIDE_ROLE_TYPES)[number];
+
+export const SLIDE_COMPOSITION_TYPES = [
+  "statement",
+  "list",
+  "process",
+  "comparison",
+  "timeline",
+  "decision-flow",
+  "checklist",
+  "scenario",
+  "visual-explanation",
+  "summary",
+] as const;
+export type SlideCompositionType = (typeof SLIDE_COMPOSITION_TYPES)[number];
+
+export const SLIDE_VISUAL_MODES = [
+  "source-page",
+  "source-crop",
+  "native-diagram",
+  "none",
+] as const;
+export type SlideVisualMode = (typeof SLIDE_VISUAL_MODES)[number];
+export const SLIDE_VISUAL_FITS = ["contain", "cover"] as const;
+export type SlideVisualFit = (typeof SLIDE_VISUAL_FITS)[number];
+
 export const SLIDE_LAYOUT_TYPES = [
   "objectives",
   "concept",
@@ -161,7 +252,46 @@ export const SLIDE_LAYOUT_TYPES = [
 ] as const;
 export type SlideLayoutType = (typeof SLIDE_LAYOUT_TYPES)[number];
 
-const generatedSlideSchema = z.object({
+const generatedSlideVisualMetadataSchema = z.object({
+  mode: z
+    .enum(SLIDE_VISUAL_MODES)
+    .describe("원문 시각자료, 기본 도형 다이어그램 또는 시각자료 없음"),
+  assetId: z
+    .string()
+    .max(200)
+    .optional()
+    .describe("서버가 연결한 시각자료 식별자. 모델이 임의로 만들지 않음"),
+  documentId: z
+    .number()
+    .int()
+    .positive()
+    .optional()
+    .describe("서버가 검증한 원문 자료 ID. 모델이 임의로 만들지 않음"),
+  page: z.number().int().positive().optional().describe("원문 자료의 1부터 시작하는 페이지"),
+  sourceRef: z
+    .string()
+    .max(300)
+    .optional()
+    .describe("참고 자료에 표시된 정확한 출처 라벨"),
+  altText: z
+    .string()
+    .max(300)
+    .optional()
+    .describe("시각자료가 전달하는 내용을 설명하는 대체 텍스트"),
+  caption: z.string().max(200).optional().describe("시각자료 아래 짧은 설명"),
+  fit: z.enum(SLIDE_VISUAL_FITS).optional().describe("이미지 맞춤: 전체 표시 또는 채우기"),
+});
+
+export type GeneratedSlideVisualMetadata = z.infer<
+  typeof generatedSlideVisualMetadataSchema
+>;
+
+/** 브라우저가 원문 페이지를 렌더한 뒤 PPTX 다운로드 직전에만 주입하는 런타임 값. */
+export type GeneratedSlideVisual = GeneratedSlideVisualMetadata & {
+  imageData?: string;
+};
+
+export const generatedSlideSchema = z.object({
   title: z
     .string()
     .describe("이 장에서 기억할 결론이 드러나는 서술형 제목 (25자 내외)"),
@@ -171,10 +301,12 @@ const generatedSlideSchema = z.object({
     .max(4),
   steps: z
     .array(z.string().describe("단계 핵심어 (짧게, 10자 내외)"))
-    .min(3)
+    .min(2)
     .max(5)
     .optional()
-    .describe("절차·흐름이 있는 슬라이드에만 순서대로 3~5개 단계어"),
+    .describe(
+      "비교는 두 기준명, 절차·시간흐름·판단흐름은 순서대로 3~5개 단계어"
+    ),
   notes: z
     .string()
     .describe("교관이 그대로 활용할 수 있는 설명 대본. 근거·시범 포인트·질문을 포함한 4~7문장"),
@@ -182,6 +314,17 @@ const generatedSlideSchema = z.object({
     .enum(SLIDE_LAYOUT_TYPES)
     .optional()
     .describe("내용 의미에 맞는 레이아웃 유형. 과거 저장본 호환을 위해 선택 필드"),
+  role: z
+    .enum(SLIDE_ROLE_TYPES)
+    .optional()
+    .describe("교육 흐름에서 이 장이 맡는 의미 역할. 과거 저장본 호환을 위해 선택 필드"),
+  composition: z
+    .enum(SLIDE_COMPOSITION_TYPES)
+    .optional()
+    .describe("PPTX 화면에 내용을 배치하는 시각 구도. role과 별도로 선택"),
+  visual: generatedSlideVisualMetadataSchema
+    .optional()
+    .describe("원문 시각자료 또는 기본 도형 다이어그램에 대한 안전한 메타데이터"),
   sourceRefs: z
     .array(
       z
@@ -196,24 +339,219 @@ const generatedSlideSchema = z.object({
 
 export const generatedSlidesSchema = z.object({
   title: z.string().describe("발표 제목 (분야·주제가 드러나게, 25자 이내)"),
+  mode: z
+    .enum(SLIDE_DECK_MODES)
+    .optional()
+    .describe("발표형(presenter) 또는 스스로 읽는 상세형(detailed)"),
   slides: z.array(generatedSlideSchema).min(6).max(20),
 });
 
-export type GeneratedSlide = z.infer<typeof generatedSlidesSchema>["slides"][number];
+type GeneratedSlideSchemaOutput = z.infer<typeof generatedSlideSchema>;
+export type GeneratedSlide = Omit<GeneratedSlideSchemaOutput, "visual"> & {
+  visual?: GeneratedSlideVisual;
+};
 
 export type GeneratedSlideDeck = {
   title: string;
+  /** 생략된 과거 저장본은 DEFAULT_SLIDE_DECK_MODE로 해석한다. */
+  mode?: SlideDeckMode;
   slides: GeneratedSlide[];
   sources: GeneratedDocSource[];
   /** 생성 당시 RAG 컨텍스트에서 허용된 정확한 출처 라벨. 편집 후 재검사용. */
   sourceLabels?: string[];
+  /** 일반 교재와 분리해 검증한 SOP·현장지침 근거 상태. */
+  sopEvidence?: SopEvidence;
 };
+
+export function resolveSlideDeckMode(value: unknown): SlideDeckMode {
+  return SLIDE_DECK_MODES.includes(value as SlideDeckMode)
+    ? (value as SlideDeckMode)
+    : DEFAULT_SLIDE_DECK_MODE;
+}
+
+/** 검증된 문서 메타데이터를 생성 프롬프트와 같은 정확한 인용 라벨로 바꾼다. */
+export function generatedSourceLabel(source: GeneratedDocSource): string {
+  return `[${source.doc.trim()}${source.page != null ? ` p.${source.page}` : ""}]`;
+}
+
+/** 서버가 확인한 출처만으로 저장·재검사용 허용 라벨 목록을 재구성한다. */
+export function generatedSourceLabels(
+  sources: readonly GeneratedDocSource[]
+): string[] {
+  const labels = new Set<string>();
+  for (const source of sources) {
+    if (
+      !Number.isSafeInteger(source.document_id) ||
+      source.document_id <= 0 ||
+      !source.doc.trim() ||
+      (source.page !== null &&
+        (!Number.isSafeInteger(source.page) || (source.page ?? 0) <= 0))
+    ) {
+      continue;
+    }
+    labels.add(generatedSourceLabel(source));
+    if (labels.size >= 80) break;
+  }
+  return Array.from(labels);
+}
+
+export function fallbackSlideVisualMode(slide: GeneratedSlide): SlideVisualMode {
+  return slide.composition === "process" ||
+    slide.composition === "comparison" ||
+    slide.composition === "timeline" ||
+    slide.composition === "decision-flow" ||
+    slide.composition === "checklist"
+    ? "native-diagram"
+    : "none";
+}
+
+/**
+ * LLM이 적은 ID를 신뢰하지 않고 실제 검색 결과의 정확한 출처 라벨로만 원문 페이지를 연결한다.
+ * 원문 ID·페이지를 검증할 수 없으면 외부 이미지를 요청하지 않는 안전한 구도로 내린다.
+ */
+export function bindSlideVisualsToSources(
+  draft: GeneratedSlideDeckDraft,
+  sources: readonly GeneratedDocSource[],
+  options: { rejectMismatchedMetadata?: boolean } = {}
+): GeneratedSlideDeckDraft {
+  const sourceByLabel = new Map<string, GeneratedDocSource>();
+  const ambiguousLabels = new Set<string>();
+  const documentIdsByLabel = new Map<string, Set<number>>();
+  for (const source of sources) {
+    if (
+      !Number.isInteger(source.document_id) ||
+      !source.doc.trim() ||
+      source.page == null ||
+      !Number.isInteger(source.page) ||
+      source.page <= 0
+    ) {
+      continue;
+    }
+    const label = generatedSourceLabel(source);
+    const ids = documentIdsByLabel.get(label) ?? new Set<number>();
+    ids.add(source.document_id);
+    documentIdsByLabel.set(label, ids);
+    if (ids.size > 1) ambiguousLabels.add(label);
+  }
+  for (const source of sources) {
+    if (
+      !Number.isInteger(source.document_id) ||
+      source.document_id <= 0 ||
+      !source.doc.trim() ||
+      source.page == null ||
+      !Number.isInteger(source.page) ||
+      source.page <= 0
+    ) {
+      continue;
+    }
+    const label = generatedSourceLabel(source);
+    if (!ambiguousLabels.has(label) && !sourceByLabel.has(label)) {
+      sourceByLabel.set(label, source);
+    }
+  }
+
+  return {
+    ...draft,
+    slides: draft.slides.map((slide) => {
+      const visual = slide.visual;
+      if (!visual || (visual.mode !== "source-page" && visual.mode !== "source-crop")) {
+        if (!visual) return { ...slide };
+        return {
+          ...slide,
+          visual: {
+            mode: visual.mode,
+            sourceRef: visual.sourceRef,
+            altText: visual.altText,
+            caption: visual.caption,
+            fit: visual.fit,
+          },
+        };
+      }
+
+      const sourceRef = visual.sourceRef?.trim();
+      const source =
+        slide.composition === "visual-explanation" &&
+        sourceRef &&
+        !ambiguousLabels.has(sourceRef)
+          ? sourceByLabel.get(sourceRef)
+          : undefined;
+      const mismatchedMetadata =
+        source &&
+        ((visual.documentId !== undefined && visual.documentId !== source.document_id) ||
+          (visual.page !== undefined && visual.page !== source.page));
+      if (
+        !source ||
+        !sourceRef ||
+        (options.rejectMismatchedMetadata === true && mismatchedMetadata)
+      ) {
+        return {
+          ...slide,
+          visual: {
+            mode: fallbackSlideVisualMode(slide),
+            altText: visual.altText,
+            caption: visual.caption,
+          },
+        };
+      }
+
+      return {
+        ...slide,
+        visual: {
+          // 현재 브라우저 렌더러는 안전한 전체 페이지 삽입만 지원한다.
+          mode: "source-page",
+          documentId: source.document_id,
+          page: source.page ?? undefined,
+          sourceRef,
+          altText: visual.altText,
+          caption: visual.caption,
+          fit: visual.fit ?? "contain",
+        },
+      };
+    }),
+  };
+}
 
 // ── 시스템 프롬프트 (단일 출처) ──
 // route.ts(전체 생성)·section/route.ts(부분 재생성)가 공유한다.
 // 교관 페르소나 + 근거(RAG) 규칙 + 품질/표현 기준을 담아 결과물 수준을 높인다.
 // 인용 자료(contextText)는 항상 마지막에 붙여 "이 자료 = 유일한 근거"임을 명확히 한다.
-export function buildGenerateSystemPrompt(category: string, contextText: string): string {
+function normalizedSopEvidence(evidence?: SopEvidence): SopEvidence {
+  if (!evidence) return { status: "not_found", sourceLabels: [] };
+  return {
+    status: evidence.status,
+    sourceLabels: Array.from(
+      new Set(evidence.sourceLabels.map((label) => label.trim()).filter(Boolean))
+    ),
+  };
+}
+
+export function buildSopPromptContract(evidence?: SopEvidence): string {
+  const safe = normalizedSopEvidence(evidence);
+  if (safe.status === "found") {
+    return `[SOP·표준절차 적용 계약]
+- 생성 결과의 지정 위치에 소제목 ${SOP_APPLICATION_MARKER}을 정확히 넣습니다.
+- SOP·현장지침의 명칭·순서·역할·중단·보고 기준은 아래 허용 SOP 출처에서 직접 확인되는 범위만 씁니다.
+- ${SOP_APPLICATION_MARKER} 내용과 같은 위치에 다음 허용 SOP 출처 라벨 중 최소 하나를 정확히 인용합니다.
+${safe.sourceLabels.map((label) => `  · ${label}`).join("\n")}
+- 일반 교육자료의 출처는 SOP 근거로 대신하지 않습니다.`;
+  }
+  if (safe.status === "degraded") {
+    return `[SOP·표준절차 적용 계약]
+- 지정 위치에 다음 문장을 글자 하나 바꾸지 않고 넣습니다.
+  ${SOP_DEGRADED_DISCLOSURE}
+- SOP 번호·명칭·절차를 추정하거나 일반 교재의 내용을 SOP라고 단정하지 않습니다.`;
+  }
+  return `[SOP·표준절차 적용 계약]
+- 지정 위치에 다음 문장을 글자 하나 바꾸지 않고 넣습니다.
+  ${SOP_NOT_FOUND_DISCLOSURE}
+- SOP 번호·명칭·절차를 추정하거나 일반 교재의 내용을 SOP라고 단정하지 않습니다.`;
+}
+
+export function buildGenerateSystemPrompt(
+  category: string,
+  contextText: string,
+  sopEvidence?: SopEvidence
+): string {
   return `당신은 전북소방본부의 ${category} 분야 교육훈련을 20년간 맡아 온 베테랑 교관이자 교육기획 담당관입니다.
 현장 대원이 그대로 사용할 수 있는, 정확하고 실전적인 교육 문서를 작성합니다.
 
@@ -224,6 +562,8 @@ export function buildGenerateSystemPrompt(category: string, contextText: string)
 - 참고 자료에 없는 내용은 "참고 자료에서 확인되지 않습니다"라고 명시합니다. 분량을 늘리기 위해 추측하지 않습니다.
 - 출처는 참고 자료에 표시된 라벨을 글자 하나 바꾸지 않고 그대로 인용합니다(예: [문서명 p.3]).
 - 출처 라벨만으로 뒷받침되지 않는 새로운 주장·수치·절차를 추가하지 않습니다.
+
+${buildSopPromptContract(sopEvidence)}
 
 [품질 기준]
 - 추상적 서술("철저히 한다", "숙지한다")을 지양하고, 동작·수치·순서로 구체화합니다
@@ -253,6 +593,24 @@ export function slideCountRangeFor(duration: Duration): readonly [number, number
   return duration === "1시간" ? [10, 12] : duration === "2시간" ? [14, 18] : [18, 20];
 }
 
+function slideModePromptParts(value: unknown): { mode: SlideDeckMode; label: string; rules: string } {
+  const mode = resolveSlideDeckMode(value);
+  if (mode === "detailed") {
+    return {
+      mode,
+      label: "상세형 — 발표 없이 읽어도 이해되는 교육자료",
+      rules:
+        "화면 문장은 3~4개로 구성하고, 각 문장이 이유·판단 조건·행동을 독립적으로 이해할 수 있게 쓰세요. 발표자 노트는 화면을 반복하지 말고 시범과 보충 설명을 담으세요.",
+    };
+  }
+  return {
+    mode,
+    label: "발표형 — 핵심 메시지와 시각 구도 중심",
+    rules:
+      "화면 문장은 2~3개만 남겨 여백과 시각 구도를 확보하고, 상세 근거·교관 설명·질문은 발표자 노트에 담으세요.",
+  };
+}
+
 function normalizedConditions(value?: string): string {
   return (value ?? "")
     .replace(/\s+/g, " ")
@@ -276,22 +634,28 @@ function conditionPromptParts(value?: string): { line: string; rule: string } {
   };
 }
 
-export function buildGeneratePrompt(req: GenerateRequest): string {
+export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvidence): string {
   if (req.type === "notebooklm") {
     throw new Error("notebooklm 유형은 buildNotebookLmPrompt 를 사용하세요.");
   }
   const topicLine = req.topic?.trim()
-    ? `훈련 내용(주제): ${req.topic.trim()}`
+    ? `상위 훈련 주제: ${req.topic.trim()}`
     : "훈련 내용(주제): 분야 전반에서 가장 중요한 주제를 선정";
+  const focus = req.focus?.replace(/\s+/g, " ").trim().slice(0, 100);
+  const focusLine = focus
+    ? `\n- 이번 세부 훈련 방향: ${focus}\n- 위 세부 방향에 집중하고, 상위 주제의 다른 방향은 선수지식이나 안전상 꼭 필요한 경우 외에는 섞지 마세요.`
+    : "";
   const dateLine = req.date ? `\n- 훈련 일자: ${req.date} (문서 개요에 명시)` : "";
   const condition = conditionPromptParts(req.conditions);
 
   if (req.type === "slides") {
+    const slideMode = slideModePromptParts(req.slideMode);
     return `전북소방본부 ${req.category} 분야 교육용 슬라이드를 작성합니다.
 
 - 대상: ${req.audience}
 - 교육 시간: ${req.duration} (슬라이드 ${slideCountFor(req.duration)}장)
-- ${topicLine}${condition.line}
+- 제작 모드: ${slideMode.label} (mode=${slideMode.mode})
+- ${topicLine}${focusLine}${condition.line}
 
 [구성]
 ① 측정 가능한 학습 목표 1장 ② 핵심 개념·절차(단계별로 1장씩) ③ 장비·사전점검
@@ -299,15 +663,27 @@ export function buildGeneratePrompt(req: GenerateRequest): string {
 
 [작성 규칙]
 - 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
+- SOP 근거 상태는 시스템의 적용 계약을 따르세요. 기존 절차 또는 안전 장 중 최소 1장을 SOP 적용 근거 장으로 구성하고, 같은 장의 화면·노트에 ${SOP_APPLICATION_MARKER} 또는 상태별 고정 안내문을 넣으세요.
+- SOP 근거가 확인된 경우 그 장의 sourceRefs에 허용 SOP 출처 라벨을 반드시 포함하세요.
 - ${condition.rule}
+- 결과 최상위 mode는 반드시 "${slideMode.mode}"로 지정하세요. ${slideMode.rules}
 - 각 슬라이드 제목은 "안전 유의사항" 같은 분류명이 아니라, "압력이 부족하면 진입하지 않습니다"처럼
   그 장에서 기억할 결론이 드러나는 서술형 문장으로 쓰고 ${MAX_SLIDE_TITLE_CHARS}자 이내로 제한하세요.
 - 화면에는 구체적인 핵심 문장 2~4개만 두고, 각 문장은 ${MAX_SLIDE_BULLET_CHARS}자 이내로 제한하며 한 장에는 하나의 메시지만 담으세요.
 - 발표자 노트는 4~7문장으로 충분히 작성하세요. 근거가 되는 이유·교관이 보여줄 시범·대원에게 던질 질문·
   실수하기 쉬운 지점 중 해당되는 내용을 포함하여 교관이 그대로 설명할 수 있게 하세요.
-- **절차·단계·흐름을 다루는 슬라이드**(예: 대응 절차, 착용 순서)에는 steps 에 3~5개 단계 핵심어를
-  순서대로 넣되 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 제한하세요(예: ["초동대응","진압·구조","사후처리"]). 흐름이 아닌 슬라이드는 steps 를 넣지 마세요.
-- 각 슬라이드에 내용 의미와 맞는 layout을 지정하세요: objectives, concept, process, equipment, case, safety, summary.
+- **비교 장**은 steps에 양쪽 기준명 2개를, **절차·시간흐름·판단흐름 장**은 steps에 3~5개 단계 핵심어를
+  순서대로 넣고 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 제한하세요. 나머지 장은 steps를 생략하세요.
+- 각 장에 교육 역할 role과 화면 구도 composition을 서로 구분하여 지정하세요.
+  · role: objectives, concept, procedure, equipment, comparison, timeline, decision, case, safety, evidence, summary
+  · composition: statement, list, process, comparison, timeline, decision-flow, checklist, scenario, visual-explanation, summary
+  같은 role을 여러 장에서 써도 화면 목적이 다르면 composition을 달리하고, 전체 덱에 최소 4종류의 composition을 사용하세요.
+- 과거 저장본 호환 필드 layout도 함께 지정하세요: objectives, concept, process, equipment, case, safety, summary.
+- visual은 모든 장에 지정하되, 원문 사진·표·도해가 교육에 직접 필요한 visual-explanation 장만 source-page를 사용하세요.
+  이때 sourceRef와 altText를 함께 적고 fit은 contain을 사용합니다. 절차·시간흐름·판단흐름은 native-diagram,
+  시각자료가 필요 없는 장은 none을 사용하세요. assetId·documentId·imageData는 서버가 검증하여 연결하므로 만들지 마세요.
+- 원문에 확인되지 않은 화학보호복·장비 외형이나 착용 절차를 그림으로 상상하지 마세요. 원문 시각자료를 연결할 수 없으면
+  visual 메타데이터만 남겨 텍스트 대체 설명이 표시되게 하세요.
 - 각 슬라이드의 sourceRefs에 그 장의 근거가 된 참고 자료 라벨을 1~4개 넣으세요.
   라벨은 [참고 자료]에 표시된 형태(예: [문서명 p.3])를 그대로 복사하며, 없는 출처를 만들지 마세요.
 - 같은 제목이나 같은 핵심 문장을 다른 슬라이드에서 반복하지 마세요. 마지막 요약은 앞 내용을 더 짧게 종합하세요.
@@ -321,18 +697,20 @@ export function buildGeneratePrompt(req: GenerateRequest): string {
 
 - 대상: ${req.audience}
 - 교육 시간: ${req.duration}
-- ${topicLine}${dateLine}${placeLine}${condition.line}
+- ${topicLine}${focusLine}${dateLine}${placeLine}${condition.line}
 
 아래 5개 항목을 **정확히 이 제목으로, 이 순서대로** 각각 하나의 섹션(heading=제목, content=내용)으로만 작성하세요. 다른 섹션을 추가하지 마세요.
 1. 훈련목표 — 교육 후 대원이 실제로 수행하거나 설명할 수 있는 측정 가능한 목표 2~4개.
 2. 훈련내용 — 이론교육·교관시범·반복실습·종합수행의 순서, 교관 행동, 대원 행동, 피드백 방법을 구체적으로 작성.
    각 단계 소제목에 [이론교육 · 20분]처럼 대괄호 안에 시간을 넣고, 표시한 시간 합계를 정확히 ${req.duration}으로 맞추세요.
+   첫 부분에 ${SOP_APPLICATION_MARKER} 소단락 또는 상태별 고정 안내문을 넣고, 적용 단계·역할 분담·중단·보고 기준을 근거 범위에서 연결하세요.
 3. 필요장비 — 장비명만 나열하지 말고 용도·사용 전 점검사항을 함께 작성. 수량은 현장 조건이나 참고 자료에서 확인되는 경우에만 명시.
 4. 안전관리 — 위험요소별 예방조치, 안전담당 역할, 즉시 중단해야 할 상태와 보고 절차를 작성.
 5. 훈련평가 — "이해했다"가 아니라 체크리스트로 관찰 가능한 수행 기준·통과 기준·강평 항목을 작성.
 
 [작성 규칙]
 - 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치·장비명을 지어내지 마세요.
+- ${buildSopPromptContract(sopEvidence).replace(/\n/g, "\n  ")}
 - ${condition.rule}
 - 대상 수준(${req.audience})에 맞는 난이도로, 현장에서 바로 쓸 수 있게 구체적으로 작성하세요.
 - 근거가 있는 핵심 절차·수치·장비·안전 기준 뒤에는 참고 자료의 출처 라벨을 그대로 붙이세요.
@@ -344,12 +722,13 @@ export function buildGeneratePrompt(req: GenerateRequest): string {
 
 - 대상: ${req.audience}
 - 교육 시간: ${req.duration}
-- ${topicLine}${dateLine}${condition.line}
+- ${topicLine}${focusLine}${dateLine}${condition.line}
 
 [고정 구성 — 정확히 이 제목과 순서로 7개 섹션]
 1. 학습목표 — 교육 종료 후 대원이 설명하거나 수행할 수 있는 측정 가능한 목표 2~4개.
 2. 도입 — [시간: 00분]으로 시작. 실제 현장 상황 또는 확인 질문으로 필요성을 느끼게 하고 오늘 배울 내용을 연결.
 3. 핵심이론 — [시간: 00분]으로 시작. 단순 정의가 아니라 이유·적용 조건·절차·주의점을 소단원으로 풀어 설명.
+   시간 표기 다음에 ${SOP_APPLICATION_MARKER} 소단락 또는 상태별 고정 안내문을 넣고, 시범·실습에서 지킬 행동으로 연결.
 4. 교관시범 — [시간: 00분]으로 시작. 교관의 동작·말할 내용·대원이 관찰할 지점을 순서대로 작성.
 5. 대원실습 — [시간: 00분]으로 시작. 조 편성·역할·반복 방법·교관 피드백·실수 교정 방법을 작성.
 6. 안전유의사항 — [시간: 00분]으로 시작. 위험요소·예방조치·즉시 중단 및 보고 기준을 작성.
@@ -357,6 +736,7 @@ export function buildGeneratePrompt(req: GenerateRequest): string {
 
 [작성 규칙]
 - 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
+- ${buildSopPromptContract(sopEvidence).replace(/\n/g, "\n  ")}
 - ${condition.rule}
 - 각 섹션을 교관이 별도 내용을 보충하지 않아도 진행할 수 있을 만큼 구체적으로 작성하세요.
 - 대상 수준(${req.audience})에 맞춰 용어 설명·현장 적용·판단 조건의 깊이를 조절하세요.
@@ -390,11 +770,17 @@ export type GenerationQualityIssueCode =
   | "duplicate_slide_title"
   | "duplicate_slide_content"
   | "missing_slide_layout"
+  | "missing_slide_role"
+  | "missing_slide_composition"
+  | "invalid_slide_composition"
+  | "missing_slide_visual"
+  | "invalid_slide_visual"
   | "generic_slide_title"
   | "missing_source_citation"
   | "missing_source_refs"
   | "invalid_source_ref"
-  | "source_validation_unavailable";
+  | "source_validation_unavailable"
+  | SopQualityIssueCode;
 
 export type GenerationQualityIssue = {
   code: GenerationQualityIssueCode;
@@ -424,12 +810,99 @@ export const GENERATION_QUALITY_LABELS = {
   duplicate_slide_title: "중복 슬라이드 제목",
   duplicate_slide_content: "중복 슬라이드 내용",
   missing_slide_layout: "슬라이드 구성 방식",
+  missing_slide_role: "슬라이드 교육 역할",
+  missing_slide_composition: "슬라이드 화면 구성",
+  invalid_slide_composition: "슬라이드 화면 구성과 내용",
+  missing_slide_visual: "슬라이드 시각자료 계획",
+  invalid_slide_visual: "슬라이드 시각자료 근거",
   generic_slide_title: "슬라이드 결론형 제목",
   missing_source_citation: "핵심 내용의 근거 출처",
   missing_source_refs: "슬라이드별 근거 출처",
   invalid_source_ref: "근거 출처 표기",
   source_validation_unavailable: "근거 출처 재검증 정보",
+  missing_sop_application: "SOP·표준절차 적용 내용",
+  missing_sop_reference: "SOP·표준절차 근거 출처",
+  missing_sop_disclosure: "SOP 근거 상태 안내",
+  invalid_sop_reference: "SOP 출처 표기",
+  unverified_sop_claim: "확인되지 않은 SOP 단정",
 } as const satisfies Record<GenerationQualityIssueCode, string>;
+
+/**
+ * 저장·공식 파일 내보내기를 막아야 하는 핵심 품질 오류.
+ * 화면 밀도나 문장 길이처럼 교관 판단으로 수용 가능한 항목은 경고로 남기고,
+ * 교육 시간·안전·평가·필수 구성·근거 계약처럼 초안의 사용 가능성을 깨는 항목만 차단한다.
+ */
+export const BLOCKING_GENERATION_QUALITY_CODES: ReadonlySet<GenerationQualityIssueCode> =
+  new Set<GenerationQualityIssueCode>([
+    "missing_section",
+    "missing_safety",
+    "missing_evaluation",
+    "missing_time_allocation",
+    "time_total_mismatch",
+    "thin_content",
+    "slide_count",
+    "missing_source_citation",
+    "missing_source_refs",
+    "invalid_source_ref",
+    "source_validation_unavailable",
+    "invalid_slide_visual",
+    "missing_sop_application",
+    "missing_sop_reference",
+    "missing_sop_disclosure",
+    "invalid_sop_reference",
+    "unverified_sop_claim",
+  ]);
+
+export function blockingGenerationQualityIssues(
+  quality: GenerationQualityReport
+): GenerationQualityIssue[] {
+  return quality.issues.filter((issue) =>
+    BLOCKING_GENERATION_QUALITY_CODES.has(issue.code)
+  );
+}
+
+export function warningGenerationQualityIssues(
+  quality: GenerationQualityReport
+): GenerationQualityIssue[] {
+  return quality.issues.filter(
+    (issue) => !BLOCKING_GENERATION_QUALITY_CODES.has(issue.code)
+  );
+}
+
+function summarizedQualityLabels(labels: readonly string[], limit: number): string[] {
+  const unique = Array.from(new Set(labels));
+  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 4;
+  const summary = unique.slice(0, safeLimit);
+  if (unique.length > summary.length) {
+    summary.push(`그 밖의 점검 항목 ${unique.length - summary.length}개`);
+  }
+  return summary;
+}
+
+/** 핵심 오류와 검토 권고를 분리해 화면·API가 같은 기준으로 표시한다. */
+export function generationQualityMessages(
+  quality: GenerationQualityReport,
+  extraWarnings: readonly string[] = [],
+  limit = 4
+): { errors: string[]; warnings: string[] } {
+  return {
+    errors: summarizedQualityLabels(
+      blockingGenerationQualityIssues(quality).map(
+        (issue) => GENERATION_QUALITY_LABELS[issue.code]
+      ),
+      limit
+    ),
+    warnings: summarizedQualityLabels(
+      [
+        ...extraWarnings,
+        ...warningGenerationQualityIssues(quality).map(
+          (issue) => GENERATION_QUALITY_LABELS[issue.code]
+        ),
+      ],
+      limit
+    ),
+  };
+}
 
 /** API와 클라이언트가 동일한 사용자용 품질 경고 문구를 사용하도록 변환한다. */
 export function generationQualityWarnings(
@@ -437,22 +910,17 @@ export function generationQualityWarnings(
   extraLabels: readonly string[] = [],
   limit = 4
 ): string[] {
-  const labels = Array.from(
-    new Set([
+  return summarizedQualityLabels(
+    [
       ...extraLabels,
       ...quality.issues.map((issue) => GENERATION_QUALITY_LABELS[issue.code]),
-    ])
+    ],
+    limit
   );
-  const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.floor(limit)) : 4;
-  const warnings = labels.slice(0, safeLimit);
-  if (labels.length > warnings.length) {
-    warnings.push(`그 밖의 점검 항목 ${labels.length - warnings.length}개`);
-  }
-  return warnings;
 }
 
 export type GeneratedDocDraft = Pick<GeneratedDoc, "title" | "sections">;
-export type GeneratedSlideDeckDraft = Pick<GeneratedSlideDeck, "title" | "slides">;
+export type GeneratedSlideDeckDraft = Pick<GeneratedSlideDeck, "title" | "slides" | "mode">;
 
 const PLAN_MIN_CHARS: Record<(typeof TRAINING_PLAN_SECTIONS)[number], number> = {
   훈련목표: 50,
@@ -656,21 +1124,38 @@ function inspectEvaluationContent(
   ];
 }
 
+function isDocumentControlMarker(reference: string): boolean {
+  if (reference === SOP_APPLICATION_MARKER) return true;
+  const body = reference.slice(1, -1).trim();
+  if (/(?:p\.\s*\d+|출처|제한\s*시간)/i.test(body)) return false;
+  return /^(?:시간\s*[:：]\s*|[^\[\]\n]{1,50}?\s*[·•∙]\s*)\d+\s*(?:분|시간)(?:\s*(?:[\/|,;·•∙-].*)?)?$/.test(
+    body
+  );
+}
+
 function inspectRequiredSourceCitations(
   sections: readonly GeneratedSection[],
-  requiredHeadings: readonly string[],
+  documentHeadings: readonly string[],
+  citationRequiredHeadings: readonly string[],
   allowedSourceRefs?: readonly string[]
 ): GenerationQualityIssue[] {
   if (!allowedSourceRefs || allowedSourceRefs.length === 0) return [];
 
   const issues: GenerationQualityIssue[] = [];
   const allowed = new Set(allowedSourceRefs.map((sourceRef) => sourceRef.trim()));
-  for (const heading of requiredHeadings) {
+  const citationRequired = new Set(citationRequiredHeadings);
+  for (const heading of documentHeadings) {
     const found = findSection(sections, heading);
     if (!found) continue;
-    const refs = found.section.content.match(INLINE_SOURCE_REF)?.map((ref) => ref.trim()) ?? [];
+    const refs = Array.from(
+      new Set(
+        (found.section.content.match(INLINE_SOURCE_REF) ?? [])
+          .map((ref) => ref.trim())
+          .filter((ref) => !isDocumentControlMarker(ref))
+      )
+    );
     const matched = refs.filter((ref) => allowed.has(ref));
-    if (matched.length === 0) {
+    if (citationRequired.has(heading) && matched.length === 0) {
       issues.push({
         code: "missing_source_citation",
         path: `sections.${found.index}.content`,
@@ -678,7 +1163,7 @@ function inspectRequiredSourceCitations(
       });
     }
     refs
-      .filter((ref) => /\bp\.(?:\d+|-)\b/i.test(ref) && !allowed.has(ref))
+      .filter((ref) => !allowed.has(ref))
       .forEach((ref) => {
         issues.push({
           code: "invalid_source_ref",
@@ -694,7 +1179,8 @@ function inspectRequiredSourceCitations(
 export function inspectGeneratedPlan(
   draft: GeneratedDocDraft,
   duration: Duration,
-  allowedSourceRefs?: readonly string[]
+  allowedSourceRefs?: readonly string[],
+  sopEvidence?: SopEvidence
 ): GenerationQualityReport {
   const issues = inspectSectionContract(draft.sections, TRAINING_PLAN_SECTIONS, PLAN_MIN_CHARS);
   const training = findSection(draft.sections, "훈련내용");
@@ -722,10 +1208,14 @@ export function inspectGeneratedPlan(
   issues.push(
     ...inspectRequiredSourceCitations(
       draft.sections,
+      TRAINING_PLAN_SECTIONS,
       ["훈련내용", "필요장비", "안전관리"],
       allowedSourceRefs
     )
   );
+  if (sopEvidence) {
+    issues.push(...inspectSopContract("plan", draft, sopEvidence).issues);
+  }
   return report(issues);
 }
 
@@ -733,7 +1223,8 @@ export function inspectGeneratedPlan(
 export function inspectGeneratedLesson(
   draft: GeneratedDocDraft,
   duration: Duration,
-  allowedSourceRefs?: readonly string[]
+  allowedSourceRefs?: readonly string[],
+  sopEvidence?: SopEvidence
 ): GenerationQualityReport {
   const issues = inspectSectionContract(draft.sections, LESSON_SECTIONS, LESSON_MIN_CHARS);
   const timedSections = LESSON_SECTIONS.slice(1)
@@ -761,10 +1252,14 @@ export function inspectGeneratedLesson(
   issues.push(
     ...inspectRequiredSourceCitations(
       draft.sections,
+      LESSON_SECTIONS,
       ["핵심이론", "교관시범", "안전유의사항"],
       allowedSourceRefs
     )
   );
+  if (sopEvidence) {
+    issues.push(...inspectSopContract("lesson", draft, sopEvidence).issues);
+  }
   return report(issues);
 }
 
@@ -772,7 +1267,8 @@ export function inspectGeneratedLesson(
 export function inspectGeneratedSlides(
   draft: GeneratedSlideDeckDraft,
   duration: Duration,
-  allowedSourceRefs?: readonly string[]
+  allowedSourceRefs?: readonly string[],
+  sopEvidence?: SopEvidence
 ): GenerationQualityReport {
   const issues: GenerationQualityIssue[] = [];
   const [minimum, maximum] = slideCountRangeFor(duration);
@@ -859,12 +1355,92 @@ export function inspectGeneratedSlides(
         message: `발표자 노트가 ${noteChars}자로 짧습니다. 최소 ${MIN_SLIDE_NOTES_CHARS}자 수준의 설명 대본이 필요합니다.`,
       });
     }
-    if (!slide.layout) {
+    if (!slide.layout && !slide.composition) {
       issues.push({
         code: "missing_slide_layout",
         path: `slides.${index}.layout`,
-        message: "내용 의미에 맞는 layout을 지정해야 합니다.",
+        message: "내용 의미에 맞는 화면 구도(composition 또는 legacy layout)를 지정해야 합니다.",
       });
+    }
+    if (!slide.role) {
+      issues.push({
+        code: "missing_slide_role",
+        path: `slides.${index}.role`,
+        message: "이 장이 교육 흐름에서 맡는 role을 지정해야 합니다.",
+      });
+    }
+    if (!slide.composition) {
+      issues.push({
+        code: "missing_slide_composition",
+        path: `slides.${index}.composition`,
+        message: "교육 역할과 별도로 화면 composition을 지정해야 합니다.",
+      });
+    }
+    const stepCount = slide.steps?.filter((step) => step.trim()).length ?? 0;
+    if (slide.composition === "comparison" && stepCount !== 2) {
+      issues.push({
+        code: "invalid_slide_composition",
+        path: `slides.${index}.steps`,
+        message: "comparison 화면은 양쪽 기준명 2개를 steps에 넣어야 합니다.",
+      });
+    }
+    if (
+      (slide.composition === "process" ||
+        slide.composition === "timeline" ||
+        slide.composition === "decision-flow") &&
+      (stepCount < 3 || stepCount > 5)
+    ) {
+      issues.push({
+        code: "invalid_slide_composition",
+        path: `slides.${index}.steps`,
+        message: `${slide.composition} 화면은 순서대로 3~5개 단계어가 필요합니다.`,
+      });
+    }
+    if (!slide.visual) {
+      issues.push({
+        code: "missing_slide_visual",
+        path: `slides.${index}.visual`,
+        message: "원문 시각자료·기본 도형·사용 안 함 중 시각자료 계획을 지정해야 합니다.",
+      });
+    } else {
+      const visual = slide.visual;
+      const isSourceVisual = visual.mode === "source-page" || visual.mode === "source-crop";
+      const visualRef = visual.sourceRef?.trim();
+      if (isSourceVisual && (!visualRef || !visual.altText?.trim())) {
+        issues.push({
+          code: "invalid_slide_visual",
+          path: `slides.${index}.visual`,
+          message: "원문 시각자료에는 정확한 sourceRef와 대체 텍스트가 필요합니다.",
+        });
+      }
+      if (
+        visualRef &&
+        (!SOURCE_REF_FORMAT.test(visualRef) || (allowedSources && !allowedSources.has(visualRef)))
+      ) {
+        issues.push({
+          code: "invalid_slide_visual",
+          path: `slides.${index}.visual.sourceRef`,
+          message: `시각자료 출처 '${visual.sourceRef}'는 현재 참고 자료 라벨과 정확히 일치해야 합니다.`,
+        });
+      }
+      if (
+        slide.composition === "visual-explanation" &&
+        visual.mode !== "source-page" &&
+        visual.mode !== "source-crop"
+      ) {
+        issues.push({
+          code: "invalid_slide_visual",
+          path: `slides.${index}.visual.mode`,
+          message: "visual-explanation 화면은 검증된 원문 페이지를 연결해야 합니다.",
+        });
+      }
+      if (isSourceVisual && slide.composition !== "visual-explanation") {
+        issues.push({
+          code: "invalid_slide_visual",
+          path: `slides.${index}.composition`,
+          message: "원문 페이지 시각자료는 visual-explanation 화면에서만 사용할 수 있습니다.",
+        });
+      }
     }
     if (GENERIC_SLIDE_TITLES.has(titleKey)) {
       issues.push({
@@ -892,10 +1468,12 @@ export function inspectGeneratedSlides(
       });
     }
 
-    if (slide.layout === "safety" || (SAFETY_CUE.test(slideText) && STOP_OR_REPORT_CUE.test(slideText))) {
+    if (SAFETY_CUE.test(slideText) && STOP_OR_REPORT_CUE.test(slideText)) {
       hasSafety = true;
     }
-    if (slide.layout === "summary" && EVALUATION_CUE.test(slideText)) hasEvaluation = true;
+    if (EVALUATION_CUE.test(slideText) && EVALUATION_STANDARD_CUE.test(slideText)) {
+      hasEvaluation = true;
+    }
   });
 
   if (!hasSafety) {
@@ -912,6 +1490,9 @@ export function inspectGeneratedSlides(
       message: "핵심 확인 질문 또는 수행평가 기준을 담은 요약 슬라이드가 필요합니다.",
     });
   }
+  if (sopEvidence) {
+    issues.push(...inspectSopContract("slides", draft, sopEvidence).issues);
+  }
   return report(issues);
 }
 
@@ -919,15 +1500,31 @@ export function inspectGenerationQuality(
   type: "plan" | "lesson" | "slides",
   draft: GeneratedDocDraft | GeneratedSlideDeckDraft,
   duration: Duration,
-  allowedSourceRefs?: readonly string[]
+  allowedSourceRefs?: readonly string[],
+  sopEvidence?: SopEvidence
 ): GenerationQualityReport {
   if (type === "slides") {
-    return inspectGeneratedSlides(draft as GeneratedSlideDeckDraft, duration, allowedSourceRefs);
+    return inspectGeneratedSlides(
+      draft as GeneratedSlideDeckDraft,
+      duration,
+      allowedSourceRefs,
+      sopEvidence
+    );
   }
   if (type === "plan") {
-    return inspectGeneratedPlan(draft as GeneratedDocDraft, duration, allowedSourceRefs);
+    return inspectGeneratedPlan(
+      draft as GeneratedDocDraft,
+      duration,
+      allowedSourceRefs,
+      sopEvidence
+    );
   }
-  return inspectGeneratedLesson(draft as GeneratedDocDraft, duration, allowedSourceRefs);
+  return inspectGeneratedLesson(
+    draft as GeneratedDocDraft,
+    duration,
+    allowedSourceRefs,
+    sopEvidence
+  );
 }
 
 /** API 응답·저장본이 보관한 실제 출처 라벨을 사용해 사용자 편집본을 다시 검사한다. */
@@ -936,7 +1533,13 @@ export function inspectCurrentGenerationQuality(
   draft: GeneratedDoc | GeneratedSlideDeck,
   duration: Duration
 ): GenerationQualityReport {
-  const checked = inspectGenerationQuality(type, draft, duration, draft.sourceLabels);
+  const checked = inspectGenerationQuality(
+    type,
+    draft,
+    duration,
+    draft.sourceLabels,
+    draft.sopEvidence
+  );
   if (draft.sourceLabels && draft.sourceLabels.length > 0) return checked;
   return report([
     ...checked.issues,
@@ -953,10 +1556,17 @@ export function buildGenerationRepairPrompt(args: {
   type: "plan" | "lesson" | "slides";
   request: Pick<
     GenerateRequest,
-    "category" | "audience" | "duration" | "topic" | "conditions"
+    | "category"
+    | "audience"
+    | "duration"
+    | "topic"
+    | "focus"
+    | "conditions"
+    | "slideMode"
   >;
   draft: GeneratedDocDraft | GeneratedSlideDeckDraft;
   report: GenerationQualityReport;
+  sopEvidence?: SopEvidence;
 }): string {
   if (args.report.ok || args.report.issues.length === 0) {
     throw new Error("수정할 품질 문제가 없습니다.");
@@ -964,12 +1574,15 @@ export function buildGenerationRepairPrompt(args: {
   const issueLines = args.report.issues
     .map((issue, index) => `${index + 1}. [${issue.code}] ${issue.path}: ${issue.message}`)
     .join("\n");
+  const repairSlideMode = resolveSlideDeckMode(
+    args.request.slideMode ?? (args.draft as GeneratedSlideDeckDraft).mode
+  );
   const structure =
     args.type === "plan"
       ? `sections는 ${TRAINING_PLAN_SECTIONS.join(" → ")}의 정확히 5개를 같은 순서로 유지하세요.`
       : args.type === "lesson"
         ? `sections는 ${LESSON_SECTIONS.join(" → ")}의 정확히 7개를 같은 순서로 유지하세요.`
-        : `본문 슬라이드는 ${slideCountFor(args.request.duration)}장으로 맞추고, 모든 장에 layout과 sourceRefs를 넣으세요. 제목은 ${MAX_SLIDE_TITLE_CHARS}자, 각 핵심 문장은 ${MAX_SLIDE_BULLET_CHARS}자, 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 다듬으세요.`;
+        : `본문 슬라이드는 ${slideCountFor(args.request.duration)}장으로 맞추고, 최상위 mode는 ${repairSlideMode}로 유지하세요. 모든 장에 role·composition·legacy layout·visual·sourceRefs를 넣으세요. 제목은 ${MAX_SLIDE_TITLE_CHARS}자, 각 핵심 문장은 ${MAX_SLIDE_BULLET_CHARS}자, 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 다듬으세요.`;
   const condition = conditionPromptParts(args.request.conditions);
 
   return `아래 ${args.type === "plan" ? "훈련계획" : args.type === "lesson" ? "교안" : "슬라이드"} 초안을 품질 검사 결과에 따라 전체 수정하세요.
@@ -979,6 +1592,7 @@ export function buildGenerationRepairPrompt(args: {
 - 대상: ${args.request.audience}
 - 교육 시간: ${args.request.duration}
 - 주제: ${args.request.topic?.trim() || "분야 핵심 주제"}
+${args.request.focus?.trim() ? `- 세부 훈련 방향: ${args.request.focus.trim()} (다른 세부 방향을 섞지 않음)` : ""}
 ${condition.line.trimStart()}
 
 [반드시 고칠 문제]
@@ -987,6 +1601,7 @@ ${issueLines}
 [수정 원칙]
 - ${structure}
 - ${condition.rule}
+- ${buildSopPromptContract(args.sopEvidence).replace(/\n/g, "\n  ")}
 - 시스템 프롬프트의 [참고 자료]에 있는 내용만 사용하세요. 분량을 채우려고 일반 상식·수치·절차·사례를 만들지 마세요.
 - 초안에 이미 있는 근거 있는 내용은 보존하되, 중복을 제거하고 교관·대원의 실제 행동과 평가 기준을 구체화하세요.
 - 출처 라벨은 [참고 자료]에 표시된 문자열만 그대로 사용하세요. 확인할 수 없는 내용은 "참고 자료에서 확인되지 않습니다"라고 쓰세요.
@@ -1008,6 +1623,8 @@ export type SavedMaterial = {
   topic: string | null;
   title: string;
   content: unknown;
+  /** 같은 저장본을 여러 화면에서 편집할 때 덮어쓰기를 막는 DB 개정 번호. */
+  revision: number;
   shared?: boolean;
   author_name?: string | null;
   created_at: string;
@@ -1038,6 +1655,9 @@ export function buildSectionRegenPrompt(args: {
   index: number;
   currentHeading: string;
   currentContent: string;
+  topic?: string;
+  focus?: string;
+  sopEvidence?: SopEvidence;
   conditions?: string;
   instruction?: string;
 }): string {
@@ -1046,13 +1666,23 @@ export function buildSectionRegenPrompt(args: {
     ? `\n[수정 지시] ${args.instruction.trim()}`
     : "";
   const condition = conditionPromptParts(args.conditions);
+  const focusLine = args.focus?.trim()
+    ? `\n[세부 훈련 방향] ${args.focus.trim()} (상위 주제: ${args.topic?.trim() || args.category})`
+    : args.topic?.trim()
+      ? `\n[훈련 주제] ${args.topic.trim()}`
+      : "";
+  const isSopSection =
+    args.currentHeading.trim() === "훈련내용" || args.currentHeading.trim() === "핵심이론";
+  const sopRule = isSopSection
+    ? `\n- 이 섹션은 SOP 지정 위치입니다. ${buildSopPromptContract(args.sopEvidence).replace(/\n/g, "\n  ")}`
+    : "";
   return `전북소방본부 ${args.category} 분야 교육 문서 "${args.docTitle}"의 한 섹션만 다시 작성합니다.
 
 [문서 전체 구성]
 ${outlineText}
 
 [다시 작성할 섹션] ${args.index + 1}번째 — "${args.currentHeading}"
-[요청 조건]${condition.line}
+[요청 조건]${focusLine}${condition.line}
 [현재 내용]
 ${args.currentContent}${instr}
 
@@ -1060,6 +1690,7 @@ ${args.currentContent}${instr}
 - 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
 - ${condition.rule}
 - 다른 섹션과 중복되지 않게, 이 섹션의 역할에 충실하게 작성하세요.
+- 선택된 세부 훈련 방향이 있으면 그 범위에 집중하고 다른 방향을 새로 섞지 마세요.${sopRule}
 - 대상 수준(${args.audience})·교육 시간(${args.duration})에 맞춰 한국어로 작성하세요.
 - heading은 반드시 현재 제목 "${args.currentHeading}"을 글자 그대로 유지하세요.
 - 이 섹션 하나만 JSON으로 반환하세요(heading, content).`;
@@ -1070,11 +1701,17 @@ export function buildSlideRegenPrompt(args: {
   category: string;
   audience: Audience;
   duration: Duration;
+  slideMode?: SlideDeckMode;
   deckTitle: string;
   outline: string[];
   index: number;
   current: GeneratedSlide;
+  topic?: string;
+  focus?: string;
+  sopEvidence?: SopEvidence;
   conditions?: string;
+  /** exact 표식이 없는 과거 저장본에서 사용자가 선택한 장을 SOP 복구 대상으로 강제한다. */
+  sopTarget?: boolean;
   instruction?: string;
 }): string {
   const outlineText = args.outline.map((t, i) => `${i + 1}. ${t}`).join("\n");
@@ -1082,13 +1719,29 @@ export function buildSlideRegenPrompt(args: {
     ? `\n[수정 지시] ${args.instruction.trim()}`
     : "";
   const condition = conditionPromptParts(args.conditions);
+  const slideMode = slideModePromptParts(args.slideMode);
+  const focusLine = args.focus?.trim()
+    ? `\n[세부 훈련 방향] ${args.focus.trim()} (상위 주제: ${args.topic?.trim() || args.category})`
+    : args.topic?.trim()
+      ? `\n[훈련 주제] ${args.topic.trim()}`
+      : "";
+  const currentText = `${args.current.title}\n${args.current.bullets.join("\n")}\n${args.current.notes}`;
+  const isSopSlide =
+    args.sopTarget === true ||
+    currentText.includes(SOP_APPLICATION_MARKER) ||
+    currentText.includes(SOP_NOT_FOUND_DISCLOSURE) ||
+    currentText.includes(SOP_DEGRADED_DISCLOSURE);
+  const sopRule = isSopSlide
+    ? `\n- 이 장은 SOP 적용 근거 장입니다. ${buildSopPromptContract(args.sopEvidence).replace(/\n/g, "\n  ")}`
+    : "";
   return `전북소방본부 ${args.category} 분야 발표 "${args.deckTitle}"의 슬라이드 한 장만 다시 작성합니다.
 
 [발표 전체 구성]
 ${outlineText}
 
 [다시 작성할 슬라이드] ${args.index + 1}번째 — "${args.current.title}"
-[요청 조건]${condition.line}
+[제작 모드] ${slideMode.label}
+[요청 조건]${focusLine}${condition.line}
 [현재 내용]
 ${args.current.bullets.map((b) => `· ${b}`).join("\n")}
 (노트: ${args.current.notes})${instr}
@@ -1097,10 +1750,14 @@ ${args.current.bullets.map((b) => `· ${b}`).join("\n")}
 - 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
 - ${condition.rule}
 - 다른 슬라이드와 중복되지 않게 작성하세요.
+- 선택된 세부 훈련 방향이 있으면 그 범위에 집중하고 다른 방향을 새로 섞지 마세요.${sopRule}
 - 제목은 분류명이 아니라 이 장의 결론이 드러나는 서술형으로 ${MAX_SLIDE_TITLE_CHARS}자 이내로 쓰고, 핵심 문장은 구체적으로 2~4개를 각각 ${MAX_SLIDE_BULLET_CHARS}자 이내로 작성하세요.
 - 발표자 노트는 이유·시범 포인트·질문·흔한 실수 중 해당 내용을 포함해 4~7문장으로 작성하세요.
-- 절차·흐름 슬라이드면 steps 에 ${MAX_SLIDE_STEP_CHARS}자 이내의 단계어 3~5개를 넣고, 아니면 steps 를 생략하세요.
-- 내용 의미에 맞는 layout을 지정하고, sourceRefs에는 참고 자료의 출처 라벨을 글자 그대로 1~4개 넣으세요.
+- ${slideMode.rules}
+- 비교 장이면 steps에 기준명 2개를, 절차·시간흐름·판단흐름 장이면 ${MAX_SLIDE_STEP_CHARS}자 이내의 단계어 3~5개를 넣고, 아니면 steps를 생략하세요.
+- 내용 의미에 맞는 role과 composition을 서로 구분해 지정하고, 호환용 layout도 함께 지정하세요.
+- visual은 source-page/native-diagram/none 중 하나로 지정하세요. 원문 시각자료는 visual-explanation 화면에서만 사용하고 정확한 sourceRef와 altText를 넣되 assetId·documentId·imageData는 만들지 마세요.
+- sourceRefs에는 참고 자료의 출처 라벨을 글자 그대로 1~4개 넣으세요.
 - 참고 자료에 없는 출처 라벨이나 주장을 만들지 마세요.
 - 대상 수준(${args.audience})에 맞는 용어로 한국어로, 이 슬라이드 하나만 JSON으로 반환하세요.`;
 }

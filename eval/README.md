@@ -36,3 +36,33 @@ PRD §2/§12 의 "평가셋 50문항 정확도 60% 이상"(AC-11) 측정용 오�
 
 키워드 매칭은 근사치입니다. 경계 사례는 사람이 최종 확인하세요. 환각 차단(AC-4)·의료
 거부(AC-5)는 반드시 포함시켜 측정하길 권장합니다.
+
+## AI 자료제작 3주 시범운영 회귀평가
+
+`material-generation-pilot-cases.json`은 2026-08-29 운영 `rag_rescue`를 읽기 전용으로
+확인해 고른 대표 5주제입니다. 현재 근거가 있는 산악·화재·화학사고·수난·일반구조를 사용하고,
+운영 RAG에 독립 구급 자료가 없어 구급은 넣지 않았습니다. 훈련계획·교안·슬라이드를 모두
+포함하며, 넓은 산악 주제는 세부방향까지 고정해 반복성과 주제 이탈을 함께 점검합니다.
+
+```bash
+# 외부 API 호출 없음: fixture 구조·분야·중복·필수 기대항목만 검증
+node eval/run-material-generation-pilot.mjs
+
+# Supabase + 현재 임베딩 검색 5건(LLM 쿼리확장·재순위는 끈 결정론적 RAG 점검)
+node eval/run-material-generation-pilot.mjs rag
+
+# 앱 /api/generate 운영 경로로 대표 5건 생성
+node eval/run-material-generation-pilot.mjs generation
+
+# 두 실제 평가를 모두 실행
+node eval/run-material-generation-pilot.mjs all
+```
+
+실제 생성 평가는 UI와 같은 정밀 우선 모델을 기본으로 사용합니다. 비용을 제한하려면 실행 전에
+`MATERIAL_PILOT_MODEL=gemini-flash`를 지정할 수 있습니다. 5건 생성 중 품질검사 실패 시 자동
+보완이 각각 한 번 실행될 수 있어 **최대 10회의 생성 LLM 호출**과 검색용 임베딩 호출이
+발생합니다. 제공자별 단가는 바뀔 수 있으므로 실행 직전 콘솔의 모델과 해당 제공자 가격표를
+확인하세요. 실제 RAG·LLM 평가는 명시한 실행 모드에서만 켜지며 기본 `npm test`는 외부 API를
+호출하지 않습니다. 관련 SOP가 실제 검색되면 `found`, 근거가 없으면 최신 SOP 확인 고정문구를
+요구하는 `not_found`를 정상 상태로 봅니다. 검색 자체가 불완전한 `degraded`는 시범운영 전
+점검이 필요한 실패로 기록합니다.

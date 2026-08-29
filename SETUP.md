@@ -24,19 +24,24 @@ npm install
    - `service_role` → `SUPABASE_SERVICE_ROLE_KEY` (서버 전용, 절대 노출 금지)
 
 ## 3. DB 스키마 적용
-Supabase 대시보드 → **SQL Editor** 에서 아래 파일을 **순서대로** 실행:
-1. `supabase/migrations/0001_init.sql` (확장 + 테이블 + 인덱스)
-2. `supabase/migrations/0002_hybrid_search.sql` (하이브리드 검색 RPC)
-3. `supabase/migrations/0003_triggers_rls.sql` (트리거 + RLS)
-4. `supabase/migrations/0004_learning.sql` (학습 진도 — 교육훈련 플랫폼)
-5. `supabase/migrations/0005_platform.sql` (공지 + 제거된 체력 기능의 보존 스키마)
-6. `supabase/migrations/0006_remove_quiz.sql` (퀴즈 제거 — 이수 기준 변경)
+- **새 프로젝트**: Supabase 대시보드 → SQL Editor에서
+  `supabase/setup_new_project.sql` 전체를 한 번에 실행합니다.
+- **기존 프로젝트**: `supabase/migrations/README.md`를 기준으로 아직 적용하지 않은
+  마이그레이션만 파일명 순서대로 실행합니다.
+
+AI 자료제작 품질·공동계정 편집 보호를 적용하려면
+`20260829160624_allow_common_sop_generation_evidence.sql` 다음에
+`20260829163049_protect_generated_material_quality_and_revision.sql`을 실행해야 합니다.
+후자는 기존 저장본을 삭제하지 않고 `revision=1`을 부여하며, 이후 같은 저장본의 오래된
+편집 화면이 최신 내용을 덮어쓰지 못하게 합니다.
 
 > Supabase CLI가 있으면 `supabase db push` 로도 적용 가능합니다.
 
 ## 4. Storage 버킷 생성 (원본 PDF 뷰어용)
-- Storage → New bucket → 이름 `documents`, **Public 체크 해제(비공개)**.
-- 웹앱은 로그인 확인 후 1시간 유효 서명 URL을 발급해 원본을 엽니다.
+- 최신 통합 SQL 또는 `20260828115838_allow_authenticated_document_downloads.sql`이
+  `documents` 비공개 버킷과 인증 사용자 읽기 정책을 자동 구성합니다.
+- 웹앱은 로그인 세션과 RLS를 확인한 뒤 5분 유효 서명 URL을 발급해 원본을 열거나,
+  필요한 페이지만 PPTX용 이미지로 변환합니다.
 
 ## 5. Auth 설정 (매직링크)
 - Authentication → Providers → **Email** 활성화 (Confirm email/매직링크).
@@ -138,11 +143,27 @@ npx tsc --noEmit   # 타입만 체크
    - **교육자료(교안)**: 학습 목표 → 도입 → 본문(시범·실습 포인트) → 정리·평가
    - **슬라이드(PPTX)**: 슬라이드 10~20장(제목+핵심문장+**발표자 노트**)을 생성하고
      분야 색 표준 양식 PPTX로 다운로드
-3. **분야 / 대상 / 교육 시간**을 선택하고 구체적인 **주제** 입력
+3. **분야 / 대상 / 교육 시간**을 선택하고 **주제** 입력
+   - `공기호흡기 착용 방법`처럼 구체적인 주제는 바로 생성
+   - `산악사고 대비 훈련`처럼 범위가 넓은 주제는 교범 근거와 최근 본인 저장 자료를 바탕으로
+     겹침이 적은 세부 훈련 방향을 먼저 제안 → 하나를 선택하거나 직접 입력
    - 훈련계획은 필요할 때만 **훈련 일자·장소** 입력
    - 인원·교관·보유 장비·훈련 환경이 정해졌다면 **현장 조건** 한 칸에 입력
    - 생성 모델·훈련 형태·훈련 방법은 시스템이 목적에 맞게 자동 적용
-4. **생성** → 미리보기 확인 → **워드(docx)/PPTX 다운로드** 또는 텍스트 복사
+4. **생성** → SOP·표준절차 적용 내용과 근거 상태 확인 → 미리보기 확인 →
+   **워드(docx)/PPTX 다운로드** 또는 텍스트 복사
+
+모든 자료 유형에 SOP 확인이 적용됩니다. `rag7.py`에서 같은 분야의 자료를
+`표준작전절차(SOP)` 또는 `현장활동 지침·매뉴얼`로 분류했고 관련 근거가 검색되면 출처와 적용
+내용을 표시합니다. 근거를 찾지 못했거나 검색 상태를 확인할 수 없으면 담당자가 시행 전 최신
+SOP를 확인해야 한다고 명시하며, 모델이 SOP 번호나 절차를 추정하지 않습니다. 이 필수 내용이
+누락되거나 근거 상태가 서버 재검증 결과와 다르면 저장·공유·복사·파일 다운로드가 차단됩니다.
+`20260829052407_protect_generated_material_sharing.sql`은 공유 계약을,
+`20260829163049_protect_generated_material_quality_and_revision.sql`은 필수 구성·시간·안전·평가·
+출처의 핵심 품질을 DB 트리거에서도 강제해 Data API 직접 호출 우회를 막습니다. 후자는 저장본에
+개정 번호도 부여해 같은 일반 계정을 여러 명이 사용하더라도 오래 열린 편집 화면이 최신 저장본을
+조용히 덮어쓰지 못하게 합니다. 적용 과정에서 기존 자료 본문은 삭제하지 않으며, 이전 공식 공유본은
+재검증 전 비공개로 전환되므로 필요한 자료는 다시 생성·저장한 뒤 공유해 주세요.
 
 ### 동작에 필요한 것 (유형별)
 | 유형 | 설정한 LLM의 API 키 | 인덱싱 자료(Supabase) |
@@ -174,9 +195,13 @@ npx tsc --noEmit   # 타입만 체크
 - [ ] **PL-2** `/courses/[분야]` 에서 레슨 완료 토글 시 진도율이 갱신된다
 - [ ] **PL-3** 분야의 모든 레슨 완료 시 과정에 "이수" 배지가 표시된다
 - [ ] **PL-4** `/generate` 에서 훈련계획·교안이 자료 근거(출처 표시)로 생성되고 docx로 받아진다
-- [ ] **PL-5** `/generate` 슬라이드 생성 → 분야 색 표준 양식 PPTX(발표자 노트 포함)가 받아진다
+- [ ] **PL-5** `/generate` 슬라이드 생성 → 발표형/상세형·분야 색·발표자 노트·검증된 원문
+  시각자료가 반영된 PPTX가 받아진다
 - [ ] **PL-6** 슬라이드 미리보기에서 레이아웃·순서를 조정한 뒤 PPTX에 반영된다
 - [ ] **PL-7** 관리자 대시보드에 "학습 현황"(레슨 완료·과정 이수)이 집계된다
+- [ ] **PL-8** 넓은 주제는 세부 훈련 방향을 선택할 수 있고, 구체적인 주제는 추가 단계 없이 생성된다
+- [ ] **PL-9** 훈련계획·교안·슬라이드 모두 SOP 근거 있음/없음/검색 장애 상태를 구분하며,
+  근거가 없을 때 SOP 번호나 절차를 만들어내지 않는다
 
 ## 트러블슈팅
 - **답변이 안 나옴**: `ANTHROPIC_API_KEY`/`ANTHROPIC_MODEL` 확인. 콘솔 로그 `[chat]` 참고.
@@ -184,6 +209,6 @@ npx tsc --noEmit   # 타입만 체크
   `rag_rescue`의 활성 행과 `rag_embedding_config` 계약을 확인하세요. 레거시 경로만
   `chunks` 테이블 행 수를 확인합니다.
 - **로그인 링크 클릭 후 오류**: Supabase Redirect URLs 에 `/auth/callback` 등록 여부 확인.
-- **PDF가 안 열림**: 비공개 `documents` 버킷 존재 여부와 `documents.file_url` 경로,
-  `SUPABASE_SERVICE_ROLE_KEY` 설정을 확인.
+- **PDF가 안 열림**: 비공개 `documents` 버킷, 인증 사용자 Storage 읽기 정책,
+  `documents.file_url` 경로를 확인합니다. 일반 열람·PPTX 생성에는 service role 키를 쓰지 않습니다.
 - **임베딩 차원 오류**: 스키마 `vector(1024)` 와 모델 차원(1024) 일치 여부 확인.

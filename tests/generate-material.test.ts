@@ -6,6 +6,7 @@ import {
   initialGenerationType,
   mergeGeneratedSources,
   preferredGenerationModel,
+  stripSlideDeckRuntimeData,
 } from "@/lib/generate-material";
 
 function savedMaterial(overrides: Partial<SavedMaterial> = {}): SavedMaterial {
@@ -18,6 +19,7 @@ function savedMaterial(overrides: Partial<SavedMaterial> = {}): SavedMaterial {
     topic: "공기호흡기 점검",
     title: "공기호흡기 점검 훈련계획",
     content: { sections: [], sources: [] },
+    revision: 1,
     created_at: "2026-08-28T00:00:00.000Z",
     ...overrides,
   };
@@ -78,6 +80,126 @@ describe("hydrateMaterial", () => {
     );
     expect(hydrated.date).toBe("");
     expect(hydrated.place).toHaveLength(100);
+  });
+
+  it("선택한 세부 방향과 SOP 근거 상태를 재편집 상태로 복원한다", () => {
+    const hydrated = hydrateMaterial(
+      savedMaterial({
+        content: {
+          sections: [],
+          sources: [],
+          focus: "야간 조난자 수색구역 설정",
+          sopEvidence: {
+            status: "found",
+            sourceLabels: ["[산악 현장활동 지침 p.12]", 10],
+          },
+        },
+      })
+    );
+
+    expect(hydrated.focus).toBe("야간 조난자 수색구역 설정");
+    expect(hydrated.doc?.sopEvidence).toEqual({
+      status: "found",
+      sourceLabels: ["[산악 현장활동 지침 p.12]"],
+    });
+  });
+
+  it("슬라이드 모드는 검증해 복원하고 과거 저장본은 발표형을 기본으로 사용한다", () => {
+    const detailed = hydrateMaterial(
+      savedMaterial({
+        kind: "slides",
+        content: { mode: "detailed", slides: [], sources: [] },
+      })
+    );
+    const legacy = hydrateMaterial(
+      savedMaterial({ kind: "slides", content: { slides: [], sources: [] } })
+    );
+    const invalid = hydrateMaterial(
+      savedMaterial({ kind: "slides", content: { mode: "unknown", slides: [], sources: [] } })
+    );
+
+    expect(detailed.deck?.mode).toBe("detailed");
+    expect(legacy.deck?.mode).toBe("presenter");
+    expect(invalid.deck?.mode).toBe("presenter");
+  });
+
+  it("PPTX 런타임 이미지는 저장·복원 데이터에서 제거한다", () => {
+    const deck = {
+      title: "원문 시각자료 덱",
+      mode: "presenter" as const,
+      slides: [
+        {
+          title: "원문을 확인합니다",
+          bullets: ["출처가 확인된 그림만 사용합니다"],
+          notes: "교관 설명",
+          visual: {
+            mode: "source-page" as const,
+            documentId: 3,
+            page: 5,
+            sourceRef: "[교범 p.5]",
+            imageData: "data:image/png;base64,AAAA",
+          },
+        },
+      ],
+      sources: [{ document_id: 3, doc: "교범", page: 5 }],
+    };
+
+    const stored = stripSlideDeckRuntimeData(deck);
+    expect(stored.slides[0].visual).toMatchObject({
+      mode: "source-page",
+      documentId: 3,
+      page: 5,
+    });
+    expect(stored.slides[0].visual).not.toHaveProperty("imageData");
+
+    const hydrated = hydrateMaterial(
+      savedMaterial({
+        kind: "slides",
+        content: { mode: stored.mode, slides: deck.slides, sources: deck.sources },
+      })
+    );
+    expect(hydrated.deck?.slides[0].visual).not.toHaveProperty("imageData");
+  });
+
+  it("저장 데이터의 비문자 섹션·슬라이드 필드를 제거해 목록 렌더링을 보호한다", () => {
+    const malformedDoc = hydrateMaterial(
+      savedMaterial({
+        content: {
+          sections: [
+            { heading: "훈련내용", content: "정상 본문" },
+            { heading: "안전관리", content: {} },
+          ],
+          sources: [{ document_id: "1", doc: "가짜", page: 1 }],
+        } as never,
+      })
+    );
+    const malformedDeck = hydrateMaterial(
+      savedMaterial({
+        kind: "slides",
+        content: {
+          slides: [
+            {
+              title: "정상 제목",
+              bullets: ["정상 문장", { text: "객체 문장" }],
+              sourceRefs: ["[정상 출처 p.1]", { label: "가짜" }],
+              layout: "unknown",
+            },
+          ],
+          sources: [],
+        } as never,
+      })
+    );
+
+    expect(malformedDoc.doc?.sections).toEqual([
+      { heading: "훈련내용", content: "정상 본문" },
+    ]);
+    expect(malformedDoc.doc?.sources).toEqual([]);
+    expect(malformedDeck.deck?.slides[0]).toMatchObject({
+      title: "정상 제목",
+      bullets: ["정상 문장"],
+      sourceRefs: ["[정상 출처 p.1]"],
+    });
+    expect(malformedDeck.deck?.slides[0].layout).toBeUndefined();
   });
 });
 

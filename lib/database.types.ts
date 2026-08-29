@@ -227,6 +227,7 @@ type GeneratedMaterialsRow = {
   topic: string | null;
   title: string;
   content: unknown; // {sections|slides|prompt, sources}
+  revision: number;
   shared: boolean;
   author_name: string | null;
   created_at: string;
@@ -241,6 +242,7 @@ type GeneratedMaterialsInsert = {
   topic?: string | null;
   title: string;
   content: unknown;
+  revision?: number;
   shared?: boolean;
   author_name?: string | null;
   created_at?: string;

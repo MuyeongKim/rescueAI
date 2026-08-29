@@ -54,8 +54,8 @@ export function DocViewerClient({
           <FileWarning className="h-10 w-10 text-muted-foreground" />
           <p className="text-base font-medium">원본 파일이 없습니다</p>
           <p className="max-w-sm text-sm text-muted-foreground">
-            이 자료에는 PDF 원본(file_url)이 연결되어 있지 않습니다. 인덱싱 시
-            Supabase Storage에 업로드되었는지 확인하세요.
+            현재 열람할 수 있는 원본 PDF가 연결되어 있지 않습니다. 자료 관리자에게
+            원본 연결 상태를 알려 주세요.
           </p>
         </div>
       )}

@@ -6,7 +6,6 @@ import { format } from "date-fns";
 import { ChevronRight, Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
   Select,
@@ -24,6 +23,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { CategoryBadge } from "@/components/learning/CategoryBadge";
+import { COURSE_CATEGORIES } from "@/lib/courses";
 
 export type DocRow = {
   id: number;
@@ -36,7 +36,6 @@ export type DocRow = {
   source_type: string;
 };
 
-const CATEGORIES = ["전체", "산악", "수난", "화재", "구급"] as const;
 const DIFFICULTIES = ["전체", "초급", "중급", "고급"] as const;
 
 function fmtDate(d: string | null): string {
@@ -53,6 +52,21 @@ export function DocsBrowser({ documents }: { documents: DocRow[] }) {
   const [difficulty, setDifficulty] = useState<string>("전체");
   const [query, setQuery] = useState("");
 
+  const categoryOptions = useMemo(() => {
+    const known = new Set<string>(COURSE_CATEGORIES);
+    const extras = Array.from(
+      new Set(
+        documents
+          .map((document) => document.category)
+          .filter((value): value is string => Boolean(value))
+      )
+    )
+      .filter((value) => !known.has(value))
+      .sort((a, b) => a.localeCompare(b, "ko"));
+
+    return ["전체", ...COURSE_CATEGORIES, ...extras];
+  }, [documents]);
+
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase();
     return documents.filter((d) => {
@@ -67,29 +81,49 @@ export function DocsBrowser({ documents }: { documents: DocRow[] }) {
     <div className="space-y-4">
       {/* 필터 */}
       <div className="space-y-3">
-        <Tabs value={category} onValueChange={setCategory}>
-          <TabsList className="flex w-full flex-wrap">
-            {CATEGORIES.map((c) => (
-              <TabsTrigger key={c} value={c} className="flex-1">
+        <fieldset>
+          <legend className="sr-only">자료 분야 필터</legend>
+          <div className="flex h-auto w-full flex-wrap gap-1 rounded-lg bg-muted p-1">
+            {categoryOptions.map((c) => (
+              <button
+                key={c}
+                type="button"
+                aria-pressed={category === c}
+                onClick={() => setCategory(c)}
+                className={
+                  "min-h-11 min-w-20 flex-1 rounded-md px-3 text-sm font-medium " +
+                  "transition-colors motion-reduce:transition-none focus-visible:outline-none " +
+                  "focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 " +
+                  (category === c
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-muted-foreground hover:bg-background/60 hover:text-foreground")
+                }
+              >
                 {c}
-              </TabsTrigger>
+              </button>
             ))}
-          </TabsList>
-        </Tabs>
+          </div>
+        </fieldset>
 
         <div className="flex gap-2">
           <div className="relative flex-1">
-            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <label htmlFor="document-search" className="sr-only">
+              자료 제목 검색
+            </label>
+            <Search
+              className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+              aria-hidden
+            />
             <Input
+              id="document-search"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
               placeholder="제목 검색"
-              aria-label="자료 제목 검색"
-              className="h-11 pl-9 text-base"
+              className="h-12 pl-9 text-base sm:h-11"
             />
           </div>
           <Select value={difficulty} onValueChange={setDifficulty}>
-            <SelectTrigger className="h-11 w-28" aria-label="난이도 선택">
+            <SelectTrigger className="h-12 w-28 sm:h-11" aria-label="난이도 선택">
               <SelectValue placeholder="난이도" />
             </SelectTrigger>
             <SelectContent>
@@ -121,7 +155,9 @@ export function DocsBrowser({ documents }: { documents: DocRow[] }) {
                   colSpan={4}
                   className="py-10 text-center text-muted-foreground"
                 >
-                  자료가 없습니다.
+                  {documents.length === 0
+                    ? "등록된 자료가 없습니다."
+                    : "조건과 일치하는 자료가 없습니다. 검색어나 필터를 바꿔보세요."}
                 </TableCell>
               </TableRow>
             ) : (
@@ -154,9 +190,17 @@ export function DocsBrowser({ documents }: { documents: DocRow[] }) {
                     {d.category ? <CategoryBadge category={d.category} /> : "-"}
                   </TableCell>
                   <TableCell className="hidden max-w-[220px] truncate md:table-cell">
-                    {d.equipment && d.equipment.length > 0
-                      ? d.equipment.join(", ")
-                      : "-"}
+                    <span
+                      title={
+                        d.equipment && d.equipment.length > 0
+                          ? d.equipment.join(", ")
+                          : undefined
+                      }
+                    >
+                      {d.equipment && d.equipment.length > 0
+                        ? d.equipment.join(", ")
+                        : "-"}
+                    </span>
                   </TableCell>
                   <TableCell className="hidden sm:table-cell whitespace-nowrap text-muted-foreground">
                     {fmtDate(d.publish_date)}
@@ -168,8 +212,13 @@ export function DocsBrowser({ documents }: { documents: DocRow[] }) {
         </Table>
       </div>
 
-      <p className="text-xs text-muted-foreground">
-        총 {filtered.length}건
+      <p
+        role="status"
+        aria-live="polite"
+        aria-atomic="true"
+        className="text-sm text-muted-foreground"
+      >
+        검색 결과 {filtered.length}건
       </p>
     </div>
   );

@@ -2,7 +2,12 @@
 // 디자인: 전북소방 표준 발표자료의 언어를 유지하면서, 교육 목적에 따라 레이아웃을 달리한다.
 // AI는 내용·레이아웃 힌트·출처를 제공하고 이 모듈은 가독성, 여백, 발표자 노트를 책임진다.
 import pptxgen from "pptxgenjs";
-import type { GeneratedDocSource, GeneratedSlide, GeneratedSlideDeck } from "@/lib/generate";
+import {
+  resolveSlideDeckMode,
+  type GeneratedDocSource,
+  type GeneratedSlide,
+  type GeneratedSlideDeck,
+} from "@/lib/generate";
 import { categoryStyle } from "@/lib/category";
 import { sanitizeFilename } from "@/lib/utils";
 
@@ -27,12 +32,17 @@ const CONTENT_BOTTOM = 6.78;
 
 /** 발표 화면에서 실제 교육 내용을 읽을 수 있도록 보장하는 본문 최소 기준. */
 export const MIN_BODY_FONT_SIZE = 16;
+export const MAX_SLIDE_IMAGE_DATA_CHARS = 16_000_000;
 
 export type RenderLayout =
   | "objectives"
   | "process"
   | "checklist"
   | "scenario"
+  | "comparison"
+  | "timeline"
+  | "decision-flow"
+  | "visual-explanation"
   | "summary"
   | "content";
 
@@ -40,6 +50,18 @@ type RichGeneratedSlide = GeneratedSlide & {
   layout?: unknown;
   sourceRefs?: string[];
 };
+
+const SAFE_SLIDE_IMAGE_DATA =
+  /^data:image\/(?:png|jpe?g|gif);base64,[A-Za-z0-9+/]+={0,2}$/i;
+
+/** 원격 URL·SVG·임의 문자열은 PPTX에 직접 넣지 않고 검증된 래스터 data URL만 허용한다. */
+export function isSafeSlideImageData(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    value.length <= MAX_SLIDE_IMAGE_DATA_CHARS &&
+    SAFE_SLIDE_IMAGE_DATA.test(value)
+  );
+}
 
 function hexOf(category: string): string {
   return categoryStyle(category).hex.replace("#", "");
@@ -90,6 +112,32 @@ export function buildSpeakerNotes(
 
 /** 명시적 레이아웃을 우선하고, 이전 저장본은 제목·steps로 적절한 구성을 추론한다. */
 export function resolveSlideLayout(slide: GeneratedSlide & { layout?: unknown }): RenderLayout {
+  const composition: unknown = slide.composition;
+  if (
+    composition === "process" ||
+    composition === "comparison" ||
+    composition === "timeline" ||
+    composition === "decision-flow" ||
+    composition === "visual-explanation" ||
+    composition === "summary"
+  ) {
+    return composition;
+  }
+  if (composition === "checklist") return "checklist";
+  if (composition === "scenario") return "scenario";
+  if (composition === "statement" || composition === "list") return "content";
+
+  const role: unknown = slide.role;
+  if (role === "objectives") return "objectives";
+  if (role === "procedure") return "process";
+  if (role === "equipment" || role === "safety") return "checklist";
+  if (role === "comparison") return "comparison";
+  if (role === "timeline") return "timeline";
+  if (role === "decision") return "decision-flow";
+  if (role === "case") return "scenario";
+  if (role === "evidence") return "visual-explanation";
+  if (role === "summary") return "summary";
+
   const requested: unknown = slide.layout;
   if (
     requested === "objectives" ||
@@ -119,11 +167,15 @@ export async function downloadPptx(
   subtitle: string
 ): Promise<void> {
   const accent = hexOf(category);
+  const deckMode = resolveSlideDeckMode(deck.mode);
+  const deckModeLabel = deckMode === "detailed" ? "상세형 교육자료" : "발표형 교육자료";
+  const bodyFont = (presenterSize: number): number =>
+    Math.max(MIN_BODY_FONT_SIZE, presenterSize - (deckMode === "detailed" ? 2 : 0));
   const pres = new pptxgen();
   pres.defineLayout({ name: "WIDE", width: SLIDE_WIDTH, height: SLIDE_HEIGHT });
   pres.layout = "WIDE";
   pres.author = "전북특별자치도 소방본부";
-  pres.subject = `${category} 분야 교육훈련 자료`;
+  pres.subject = `${category} 분야 ${deckModeLabel}`;
   pres.title = deck.title;
   pres.company = "전북특별자치도 소방본부";
 
@@ -269,7 +321,7 @@ export async function downloadPptx(
         w: 10.55,
         h: 0.8,
         fontFace: FONT,
-        fontSize: 23,
+        fontSize: bodyFont(23),
         color: BODY,
         bold: index === 0,
         valign: "middle",
@@ -367,7 +419,7 @@ export async function downloadPptx(
         w: 11.25,
         h: 2.25,
         fontFace: FONT,
-        fontSize: bullets.length >= 4 ? 17 : 19,
+        fontSize: bodyFont(bullets.length >= 4 ? 17 : 19),
         color: BODY,
         lineSpacingMultiple: 1.2,
         valign: "top",
@@ -413,7 +465,7 @@ export async function downloadPptx(
         w: 10.5,
         h: 0.72,
         fontFace: FONT,
-        fontSize: 22,
+        fontSize: bodyFont(22),
         color: BODY,
         bold: index === 0,
         valign: "middle",
@@ -475,7 +527,7 @@ export async function downloadPptx(
       w: 3.55,
       h: 2.65,
       fontFace: FONT,
-      fontSize: 25,
+      fontSize: bodyFont(25),
       color: INK,
       bold: true,
       valign: "middle",
@@ -514,7 +566,7 @@ export async function downloadPptx(
         w: 5.73,
         h: 0.72,
         fontFace: FONT,
-        fontSize: 20,
+        fontSize: bodyFont(20),
         color: BODY,
         bold: index === 0,
         margin: 0,
@@ -530,6 +582,380 @@ export async function downloadPptx(
           line: noLine,
         });
       }
+    });
+  }
+
+  function renderComparison(slide: PptxSlide, s: GeneratedSlide): void {
+    const bullets = normalizedBullets(s);
+    const labels = normalizedSteps(s);
+    if (bullets.length < 2) {
+      renderContent(slide, s);
+      return;
+    }
+
+    addSectionLabel(slide, "두 기준을 나란히 비교합니다");
+    const splitAt = Math.ceil(bullets.length / 2);
+    const columns = [bullets.slice(0, splitAt), bullets.slice(splitAt)];
+    const headings = [labels[0] || "비교 기준 1", labels[1] || "비교 기준 2"];
+
+    columns.forEach((items, columnIndex) => {
+      const x = columnIndex === 0 ? 0.92 : 6.88;
+      slide.addShape("roundRect", {
+        x,
+        y: 2.12,
+        w: 5.52,
+        h: 4.17,
+        rectRadius: 0.08,
+        fill: { color: columnIndex === 0 ? TINT : "FFFFFF" },
+        line: { color: columnIndex === 0 ? HAIR : accent, width: columnIndex === 0 ? 1 : 1.4 },
+      });
+      slide.addShape("rect", {
+        x,
+        y: 2.12,
+        w: 5.52,
+        h: 0.08,
+        fill: { color: accent, transparency: columnIndex === 0 ? 46 : 0 },
+        line: noLine,
+      });
+      slide.addText(headings[columnIndex], {
+        x: x + 0.36,
+        y: 2.48,
+        w: 4.8,
+        h: 0.52,
+        fontFace: FONT,
+        fontSize: 21,
+        color: columnIndex === 0 ? INK : accent,
+        bold: true,
+        margin: 0,
+        fit: "shrink",
+      });
+      items.forEach((item, itemIndex) => {
+        const y = 3.28 + itemIndex * 1.25;
+        slide.addText(String(itemIndex + 1).padStart(2, "0"), {
+          x: x + 0.36,
+          y,
+          w: 0.5,
+          h: 0.34,
+          fontFace: FONT,
+          fontSize: MIN_BODY_FONT_SIZE,
+          color: accent,
+          bold: true,
+          margin: 0,
+        });
+        slide.addText(item, {
+          x: x + 1.0,
+          y: y - 0.06,
+          w: 4.15,
+          h: 0.82,
+          fontFace: FONT,
+          fontSize: bodyFont(20),
+          color: BODY,
+          bold: itemIndex === 0,
+          margin: 0,
+          fit: "shrink",
+        });
+      });
+    });
+  }
+
+  function renderTimeline(slide: PptxSlide, s: GeneratedSlide): void {
+    const steps = normalizedSteps(s);
+    if (steps.length < 3) {
+      renderProcess(slide, s);
+      return;
+    }
+
+    addSectionLabel(slide, "시간 흐름에 따라 확인합니다");
+    const startX = 1.15;
+    const endX = 12.18;
+    const centerY = 3.35;
+    const gap = (endX - startX) / (steps.length - 1);
+    slide.addShape("line", {
+      x: startX,
+      y: centerY,
+      w: endX - startX,
+      h: 0,
+      line: { color: accent, width: 2.2, transparency: 20 },
+    });
+
+    steps.forEach((step, index) => {
+      const centerX = startX + index * gap;
+      const labelAbove = index % 2 === 0;
+      slide.addShape("ellipse", {
+        x: centerX - 0.25,
+        y: centerY - 0.25,
+        w: 0.5,
+        h: 0.5,
+        fill: { color: index === 0 || index === steps.length - 1 ? accent : "FFFFFF" },
+        line: { color: accent, width: 1.8 },
+      });
+      slide.addText(String(index + 1).padStart(2, "0"), {
+        x: centerX - 0.45,
+        y: labelAbove ? 2.08 : 3.93,
+        w: 0.9,
+        h: 0.3,
+        fontFace: FONT,
+        fontSize: MIN_BODY_FONT_SIZE,
+        color: accent,
+        bold: true,
+        align: "center",
+        margin: 0,
+      });
+      slide.addText(step, {
+        x: centerX - Math.min(1.05, gap / 2),
+        y: labelAbove ? 2.43 : 4.27,
+        w: Math.min(2.1, gap),
+        h: 0.62,
+        fontFace: FONT,
+        fontSize: bodyFont(18),
+        color: INK,
+        bold: true,
+        align: "center",
+        valign: "middle",
+        margin: 0,
+        fit: "shrink",
+      });
+    });
+
+    const bullets = normalizedBullets(s).slice(0, 2);
+    if (bullets.length > 0) {
+      slide.addText(bullets.join("  ·  "), {
+        x: 1.05,
+        y: 5.34,
+        w: 11.22,
+        h: 0.72,
+        fontFace: FONT,
+        fontSize: bodyFont(18),
+        color: BODY,
+        align: "center",
+        margin: 0.03,
+        fit: "shrink",
+      });
+    }
+  }
+
+  function renderDecisionFlow(slide: PptxSlide, s: GeneratedSlide): void {
+    const steps = normalizedSteps(s);
+    const bullets = normalizedBullets(s);
+    if (steps.length < 3 || bullets.length < 2) {
+      renderScenario(slide, s);
+      return;
+    }
+
+    addSectionLabel(slide, "조건에 따라 다음 행동을 결정합니다");
+    slide.addShape("diamond", {
+      x: 5.53,
+      y: 2.1,
+      w: 2.28,
+      h: 1.36,
+      fill: { color: TINT },
+      line: { color: accent, width: 1.8 },
+    });
+    slide.addText(steps[0], {
+      x: 5.78,
+      y: 2.48,
+      w: 1.78,
+      h: 0.55,
+      fontFace: FONT,
+      fontSize: bodyFont(18),
+      color: INK,
+      bold: true,
+      align: "center",
+      valign: "middle",
+      margin: 0,
+      fit: "shrink",
+    });
+
+    const branches = [
+      { x: 1.15, label: steps[1], text: bullets[1] ?? bullets[0] },
+      { x: 7.15, label: steps[2], text: bullets[2] ?? bullets[bullets.length - 1] },
+    ];
+    branches.forEach((branch, index) => {
+      slide.addShape("line", {
+        x: index === 0 ? 3.85 : 7.68,
+        y: 3.42,
+        w: 1.8,
+        h: 0.72,
+        line: {
+          color: accent,
+          width: 1.8,
+          ...(index === 0
+            ? { beginArrowType: "triangle" as const }
+            : { endArrowType: "triangle" as const }),
+          transparency: 22,
+        },
+      });
+      slide.addShape("roundRect", {
+        x: branch.x,
+        y: 4.25,
+        w: 5.03,
+        h: 1.45,
+        rectRadius: 0.08,
+        fill: { color: index === 0 ? "FFFFFF" : TINT },
+        line: { color: accent, width: index === 0 ? 1.4 : 1 },
+      });
+      slide.addText(branch.label, {
+        x: branch.x + 0.3,
+        y: 4.5,
+        w: 1.38,
+        h: 0.42,
+        fontFace: FONT,
+        fontSize: MIN_BODY_FONT_SIZE,
+        color: accent,
+        bold: true,
+        margin: 0,
+        fit: "shrink",
+      });
+      slide.addText(branch.text, {
+        x: branch.x + 1.75,
+        y: 4.39,
+        w: 2.95,
+        h: 0.82,
+        fontFace: FONT,
+        fontSize: bodyFont(19),
+        color: BODY,
+        bold: true,
+        margin: 0,
+        fit: "shrink",
+      });
+    });
+
+    const question = bullets[0];
+    slide.addText(question, {
+      x: 1.22,
+      y: 5.92,
+      w: 10.89,
+      h: 0.45,
+      fontFace: FONT,
+      fontSize: bodyFont(17),
+      color: GRAY,
+      align: "center",
+      margin: 0,
+      fit: "shrink",
+    });
+  }
+
+  function renderVisualExplanation(slide: PptxSlide, s: GeneratedSlide): void {
+    const visual = s.visual;
+    const bullets = normalizedBullets(s);
+    const imageData = visual?.imageData;
+    const hasImage = isSafeSlideImageData(imageData);
+    const imageX = 0.92;
+    const imageY = 2.05;
+    const imageW = 7.05;
+    const imageH = 3.95;
+    addSectionLabel(slide, "원문 시각자료와 함께 확인합니다");
+
+    slide.addShape("roundRect", {
+      x: imageX,
+      y: imageY,
+      w: imageW,
+      h: imageH,
+      rectRadius: 0.06,
+      fill: { color: hasImage ? "FFFFFF" : TINT },
+      line: {
+        color: hasImage ? HAIR : accent,
+        width: hasImage ? 1 : 1.2,
+        dashType: hasImage ? "solid" : "dash",
+      },
+    });
+    if (hasImage) {
+      slide.addImage({
+        data: imageData,
+        x: imageX + 0.08,
+        y: imageY + 0.08,
+        w: imageW - 0.16,
+        h: imageH - 0.16,
+        sizing: {
+          type: visual?.fit === "cover" ? "cover" : "contain",
+          w: imageW - 0.16,
+          h: imageH - 0.16,
+        },
+        altText: visual?.altText?.trim() || "근거 문서의 원문 시각자료",
+        objectName: "근거 원문 시각자료",
+      });
+    } else {
+      slide.addText("원문 시각자료 연결 대기", {
+        x: imageX + 0.55,
+        y: imageY + 1.1,
+        w: imageW - 1.1,
+        h: 0.55,
+        fontFace: FONT,
+        fontSize: 23,
+        color: INK,
+        bold: true,
+        align: "center",
+        margin: 0,
+      });
+      slide.addText(
+        visual?.altText?.trim() ||
+          "검증된 원문 페이지가 연결되지 않아 설명 텍스트로 대신합니다.",
+        {
+          x: imageX + 0.72,
+          y: imageY + 1.86,
+          w: imageW - 1.44,
+          h: 1.1,
+          fontFace: FONT,
+          fontSize: bodyFont(18),
+          color: GRAY,
+          align: "center",
+          valign: "middle",
+          margin: 0,
+          fit: "shrink",
+        }
+      );
+    }
+
+    const sourceRef = visual?.sourceRef?.trim() || normalizedRefs(s.sourceRefs ?? [])[0];
+    const caption = [visual?.caption?.trim(), sourceRef].filter(Boolean).join(" · ");
+    slide.addText(caption || "출처 정보는 발표자 노트에서 확인", {
+      x: imageX,
+      y: 6.13,
+      w: imageW,
+      h: 0.35,
+      fontFace: FONT,
+      fontSize: MIN_BODY_FONT_SIZE,
+      color: GRAY,
+      margin: 0,
+      fit: "shrink",
+    });
+
+    slide.addText("설명 포인트", {
+      x: 8.43,
+      y: 2.05,
+      w: 3.65,
+      h: 0.4,
+      fontFace: FONT,
+      fontSize: 19,
+      color: accent,
+      bold: true,
+      margin: 0,
+    });
+    bullets.forEach((bullet, index) => {
+      const y = 2.78 + index * 0.96;
+      slide.addText(String(index + 1).padStart(2, "0"), {
+        x: 8.43,
+        y,
+        w: 0.48,
+        h: 0.34,
+        fontFace: FONT,
+        fontSize: MIN_BODY_FONT_SIZE,
+        color: accent,
+        bold: true,
+        margin: 0,
+      });
+      slide.addText(bullet, {
+        x: 9.04,
+        y: y - 0.05,
+        w: 3.27,
+        h: 0.67,
+        fontFace: FONT,
+        fontSize: bodyFont(18),
+        color: BODY,
+        bold: index === 0,
+        margin: 0,
+        fit: "shrink",
+      });
     });
   }
 
@@ -567,7 +993,7 @@ export async function downloadPptx(
         w: 4.85,
         h: 1.2,
         fontFace: FONT,
-        fontSize: 22,
+        fontSize: bodyFont(22),
         color: "FFFFFF",
         bold: index === 0,
         valign: "top",
@@ -596,7 +1022,7 @@ export async function downloadPptx(
         w: 10.35,
         h: 3.05,
         fontFace: FONT,
-        fontSize: 30,
+        fontSize: bodyFont(30),
         color: INK,
         bold: true,
         valign: "middle",
@@ -620,7 +1046,7 @@ export async function downloadPptx(
       w: 4.2,
       h: 3.65,
       fontFace: FONT,
-      fontSize: 26,
+      fontSize: bodyFont(26),
       color: INK,
       bold: true,
       valign: "middle",
@@ -657,7 +1083,7 @@ export async function downloadPptx(
         w: 5.5,
         h: 0.72,
         fontFace: FONT,
-        fontSize: 20,
+        fontSize: bodyFont(20),
         color: BODY,
         bold: index === 0,
         margin: 0,
@@ -687,7 +1113,7 @@ export async function downloadPptx(
     fill: { color: accent },
     line: noLine,
   });
-  cover.addText(`전북특별자치도 소방본부  ·  ${category} 분야`, {
+  cover.addText(`전북특별자치도 소방본부  ·  ${category} 분야  ·  ${deckModeLabel}`, {
     x: 0.92,
     y: 2.12,
     w: 11.45,
@@ -765,10 +1191,20 @@ export async function downloadPptx(
     else if (layout === "process") renderProcess(slide, s);
     else if (layout === "checklist") renderChecklist(slide, s);
     else if (layout === "scenario") renderScenario(slide, s);
+    else if (layout === "comparison") renderComparison(slide, s);
+    else if (layout === "timeline") renderTimeline(slide, s);
+    else if (layout === "decision-flow") renderDecisionFlow(slide, s);
+    else if (layout === "visual-explanation") renderVisualExplanation(slide, s);
     else if (layout === "summary") renderSummary(slide, s);
     else renderContent(slide, s);
 
-    slide.addNotes(buildSpeakerNotes(s.notes, s.sourceRefs, deck.sources));
+    slide.addNotes(
+      buildSpeakerNotes(
+        s.notes,
+        normalizedRefs([...(s.sourceRefs ?? []), ...(s.visual?.sourceRef ? [s.visual.sourceRef] : [])]),
+        deck.sources
+      )
+    );
   });
 
   // ───────── 근거 자료 ─────────

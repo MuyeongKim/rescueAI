@@ -18,12 +18,27 @@ import {
 import { getChatModel } from "@/lib/llm";
 import type { DocSource } from "@/lib/database.types";
 import type { SearchResult } from "@/lib/rag";
-import type { GeneratedDocSource } from "@/lib/generate";
+import {
+  splitGeneratedSourcesForDisplay,
+  type GeneratedDocSource,
+} from "@/lib/generate";
+import type { SopEvidence } from "@/lib/sop-evidence";
 
 // 테이블·검색함수 이름은 RAG_TABLE 단일 출처에서 파생(이름 변경 시 env+SQL만 고치면 됨).
 // 검색 RPC 규칙: match_<테이블명> (예: rag_rescue → match_rag_rescue).
 const RAG_TABLE = process.env.RAG_TABLE || "rag_rescue";
 const MATCH_FN = `match_${RAG_TABLE}`;
+const SOP_DOCUMENT_TYPES = ["sop", "operational_guidance"] as const;
+export const COMMON_SOP_CATEGORY = "현장지휘·공통";
+
+/** 요청 분야의 절차 자료에 전 분야 공통 SOP를 보조 범위로 더한다. */
+export function sopCategoryScope(category: string): string[] {
+  const requested = category.trim().slice(0, 100);
+  if (!requested) return [];
+  return requested === COMMON_SOP_CATEGORY
+    ? [COMMON_SOP_CATEGORY]
+    : [requested, COMMON_SOP_CATEGORY];
+}
 
 // Route/Server Component에서는 쿠키 기반 클라이언트를 기본 사용한다. 요청 컨텍스트가 없는
 // 평가 러너는 service-role 클라이언트를 명시적으로 주입할 수 있으며, 자동 승격은 하지 않는다.
@@ -97,8 +112,11 @@ type RagRow = {
 };
 
 function numberMetadata(value: unknown): number | null {
-  if (typeof value === "number" && Number.isInteger(value)) return value;
-  if (typeof value === "string" && /^\d+$/.test(value)) return Number(value);
+  if (typeof value === "number" && Number.isSafeInteger(value)) return value;
+  if (typeof value === "string" && /^\d+$/.test(value)) {
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed) ? parsed : null;
+  }
   return null;
 }
 
@@ -124,6 +142,163 @@ function labelOf(meta: RagRow["metadata"]): string {
   const label = documentLabelOf(meta);
   const page = pageOf(meta);
   return page == null ? label : `${label} p.${page}`;
+}
+
+export type VerifiedExternalRagSources = {
+  sources: GeneratedDocSource[];
+  degraded: boolean;
+};
+
+const PROVENANCE_PAIR_BATCH_SIZE = 20;
+const PROVENANCE_ROWS_PER_PAIR_LIMIT = 16;
+
+function externalProvenancePairFilter(
+  sources: readonly Pick<GeneratedDocSource, "document_id" | "page">[]
+): string {
+  return sources
+    .map((source) =>
+      source.page === null
+        ? `and(metadata->>document_id.eq.${source.document_id},metadata->>page_num.is.null)`
+        : `and(metadata->>document_id.eq.${source.document_id},metadata->>page_num.eq.${source.page})`
+    )
+    .join(",");
+}
+
+function provenancePairBatches(
+  sources: readonly GeneratedDocSource[]
+): GeneratedDocSource[][] {
+  const pairs = new Map<string, GeneratedDocSource>();
+  for (const source of sources) {
+    const key = `${source.document_id}:${source.page ?? "null"}`;
+    if (!pairs.has(key)) pairs.set(key, source);
+  }
+  const uniquePairs = Array.from(pairs.values());
+  const batches: GeneratedDocSource[][] = [];
+  for (let index = 0; index < uniquePairs.length; index += PROVENANCE_PAIR_BATCH_SIZE) {
+    batches.push(uniquePairs.slice(index, index + PROVENANCE_PAIR_BATCH_SIZE));
+  }
+  return batches;
+}
+
+/**
+ * 저장 생성물의 문서 ID·페이지·표시 라벨을 현재 활성 RAG 메타데이터에 다시 대조한다.
+ * 클라이언트가 content.sources를 바꿔도 요청 분야의 실제 RAG 행과 정확히 일치하지 않으면
+ * 신뢰 출처로 돌려주지 않는다. 단, 현장지휘·공통 자료는 SOP·현장지침 유형만 허용한다.
+ * page=null은 실제 메타데이터도 NULL인 경우에만 인정한다.
+ */
+export async function verifyExternalRagSourceProvenance(
+  candidates: readonly GeneratedDocSource[],
+  expectedCategory: string,
+  suppliedClient?: ExternalRagSupabaseClient
+): Promise<VerifiedExternalRagSources> {
+  const category = expectedCategory.trim().slice(0, 100);
+  if (!category) return { sources: [], degraded: false };
+  const unique = new Map<string, GeneratedDocSource>();
+  for (const candidate of candidates) {
+    if (
+      !Number.isSafeInteger(candidate.document_id) ||
+      candidate.document_id <= 0 ||
+      (candidate.page !== null &&
+        (!Number.isSafeInteger(candidate.page) || (candidate.page ?? 0) <= 0)) ||
+      !candidate.doc.trim()
+    ) {
+      continue;
+    }
+    const safe = {
+      document_id: candidate.document_id,
+      doc: candidate.doc.trim().slice(0, 300),
+      page: candidate.page,
+    } satisfies GeneratedDocSource;
+    unique.set(JSON.stringify([safe.document_id, safe.page, safe.doc]), safe);
+    if (unique.size >= 80) break;
+  }
+  const requested = Array.from(unique.values());
+  if (requested.length === 0) return { sources: [], degraded: false };
+
+  try {
+    const supabase = suppliedClient ?? (await createClient());
+    const scopes = [
+      { category, sopOnly: false },
+      ...(category === COMMON_SOP_CATEGORY
+        ? []
+        : [{ category: COMMON_SOP_CATEGORY, sopOnly: true }]),
+    ];
+    const query = (
+      scope: (typeof scopes)[number],
+      batch: readonly GeneratedDocSource[]
+    ) => {
+      let request = (supabase.from as CallableFunction)(RAG_TABLE)
+        .select("id, metadata")
+        .eq("is_active", true)
+        .eq(`metadata->>${CATEGORY_FIELD}`, scope.category)
+        // document_id와 page_num을 독립 IN으로 조회하면 요청하지 않은 조합까지 섞인다.
+        // 정확한 쌍만 OR로 묶고 URL 길이를 제한하기 위해 20개씩 나눈다.
+        .or(externalProvenancePairFilter(batch));
+      if (scope.sopOnly) {
+        request = request.in("metadata->>document_type", [...SOP_DOCUMENT_TYPES]);
+      }
+      return request.limit(
+        Math.min(
+          1000,
+          Math.max(64, batch.length * PROVENANCE_ROWS_PER_PAIR_LIMIT)
+        )
+      );
+    };
+    const requests: Array<
+      PromiseLike<{
+        data: unknown;
+        error: { message?: string } | null;
+      }>
+    > = [];
+    const batches = provenancePairBatches(requested);
+    const requestLimits: number[] = [];
+    for (const scope of scopes) {
+      for (const batch of batches) {
+        requestLimits.push(
+          Math.min(
+            1000,
+            Math.max(64, batch.length * PROVENANCE_ROWS_PER_PAIR_LIMIT)
+          )
+        );
+        requests.push(query(scope, batch));
+      }
+    }
+    const results = await Promise.all(requests);
+    const queryError = results.find((result) => result.error)?.error;
+    if (queryError) {
+      console.error("[rag-external] 저장 출처 검증 실패:", queryError.message);
+      return { sources: [], degraded: true };
+    }
+    // 응답 상한에 닿으면 일부 요청 페이지가 잘렸을 수 있으므로 안전하게 재시도를 요구한다.
+    if (results.some((result, index) =>
+      Array.isArray(result.data) && result.data.length >= requestLimits[index]
+    )) {
+      return { sources: [], degraded: true };
+    }
+    const rows = results.flatMap(
+      (result) => (result.data ?? []) as Array<Pick<RagRow, "id" | "metadata">>
+    );
+
+    const actual = new Set(
+      rows.map((row) => {
+        const documentId = documentIdOf(row.metadata);
+        const page = pageOf(row.metadata);
+        return JSON.stringify([documentId, page, documentLabelOf(row.metadata)]);
+      })
+    );
+    return {
+      sources: requested.filter((source) =>
+        actual.has(JSON.stringify([source.document_id, source.page, source.doc]))
+      ),
+      degraded: false,
+    };
+  } catch (error) {
+    console.error(
+      "[rag-external] 저장 출처 검증 요청 실패:",
+      error instanceof Error ? error.message : error
+    );
+    return { sources: [], degraded: true };
+  }
 }
 
 // 청크 본문 정제: docling 이미지 마커·목차 점선·과잉 공백 제거 (LLM 입력 노이즈 감소)
@@ -414,6 +589,23 @@ const GENERIC_SUBJECTS = new Set([
   "표준작전절차",
   "현장",
   "훈련",
+]);
+const SOP_TOPIC_STOP_WORDS = new Set([
+  ...Array.from(GENERIC_SUBJECTS),
+  "대비",
+  "대응",
+  "관련",
+  "상위",
+  "주제",
+  "산악",
+  "수난",
+  "화재",
+  "구급",
+  "산악사고",
+  "수난사고",
+  "화재사고",
+  "구조활동",
+  "현장활동",
 ]);
 
 function normalizeSearchText(text: string): string {
@@ -742,6 +934,45 @@ function rankKeywordRows(rows: RagRow[], terms: string[]): RagRow[] {
     .map(({ row }) => row);
 }
 
+function meaningfulSopTopicTerms(topic: string): string[] {
+  return Array.from(
+    new Set(
+      normalizeSearchText(topic)
+        .split(" ")
+        .map((term) => stripKoreanParticle(term.trim()))
+        .map((term) => {
+          const suffix = ["관련", "대비", "대응", "교육", "훈련", "방법", "절차"].find(
+            (candidate) => term.endsWith(candidate) && term.length - candidate.length >= 2
+          );
+          return suffix ? term.slice(0, -suffix.length) : term;
+        })
+        .filter((term) => term.length >= 2 && !SOP_TOPIC_STOP_WORDS.has(term))
+    )
+  ).slice(0, 12);
+}
+
+function rowSupportsSopTopic(row: RagRow, terms: readonly string[]): boolean {
+  if (terms.length === 0) return false;
+  const pageText = compactSearchText(
+    `${row.metadata?.["Header 2"] ?? ""} ${row.content}`
+  );
+  const sourceText = compactSearchText(row.metadata?.source ?? "");
+  const normalizedTerms = terms
+    .map((term) => compactSearchText(term))
+    .filter((term) => term.length >= 2);
+  const pageSupported = normalizedTerms.filter((term) => pageText.includes(term));
+  const allSupported = normalizedTerms.filter(
+    (term) => pageText.includes(term) || sourceText.includes(term)
+  );
+
+  // 파일명은 문서 범위를 알려 줄 뿐 해당 페이지의 절차 근거가 아니다. 파일명에 주제가
+  // 들어 있어도 제목/본문에서 핵심어가 하나도 확인되지 않으면 그 페이지를 SOP로 채택하지 않는다.
+  return (
+    pageSupported.length >= 1 &&
+    allSupported.length >= Math.min(2, normalizedTerms.length)
+  );
+}
+
 async function keywordRowsForPlan(
   supabase: Awaited<ReturnType<typeof createClient>>,
   plan: TopicSearchPlan,
@@ -1032,23 +1263,26 @@ async function hybridCandidatesWithCategoryFallback(
 function buildContextFromRefined(
   refined: RefinedRagRow[],
   maxSources: number
-): { contextText: string; sources: GeneratedDocSource[] } {
+): {
+  contextText: string;
+  sources: GeneratedDocSource[];
+  bindingSources: GeneratedDocSource[];
+} {
   const contextText = refined
     .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
     .join("\n\n---\n\n");
 
-  const seen = new Set<string>();
-  const sources: GeneratedDocSource[] = [];
+  const sourceCandidates: GeneratedDocSource[] = [];
   for (const r of refined) {
     const documentId = documentIdOf(r.meta);
     const page = pageOf(r.meta);
-    const key = `${documentId || r.meta?.source || "자료"}::${page ?? "-"}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    sources.push({ document_id: documentId, doc: documentLabelOf(r.meta), page });
-    if (sources.length >= maxSources) break;
+    sourceCandidates.push({ document_id: documentId, doc: documentLabelOf(r.meta), page });
   }
-  return { contextText, sources };
+  const { sources, bindingSources } = splitGeneratedSourcesForDisplay(
+    sourceCandidates,
+    maxSources
+  );
+  return { contextText, sources, bindingSources };
 }
 
 // 하이브리드 검색(벡터+키워드 RRF) + LLM 재순위 → 컨텍스트 + 출처 (lib/rag.ts SearchResult)
@@ -1258,7 +1492,12 @@ export async function fetchExternalRagContext(
   category: string,
   limit = 40,
   topic?: string
-): Promise<{ contextText: string; sources: GeneratedDocSource[]; degraded: boolean }> {
+): Promise<{
+  contextText: string;
+  sources: GeneratedDocSource[];
+  bindingSources: GeneratedDocSource[];
+  degraded: boolean;
+}> {
   const supabase = await createClient();
   const topicTrimmed = topic?.trim().slice(0, 100);
   let retrievalDegraded = false;
@@ -1283,7 +1522,9 @@ export async function fetchExternalRagContext(
     try {
       const { keywords } = await expansionPromise;
       const plans = buildTopicSearchPlans(topicTrimmed, keywords);
-      const candidates = await hybridCandidatesWithCategoryFallback(
+      // AI 자료제작의 일반 교재는 사용자가 고른 분야 밖으로 넓히지 않는다. 전 분야 공통
+      // 근거는 별도 SOP 검색에서 document_type까지 검증한 뒤에만 합친다.
+      const candidates = await hybridCandidates(
         supabase,
         embedding,
         plans,
@@ -1324,7 +1565,7 @@ export async function fetchExternalRagContext(
   const sourceRows = await fetchRowsByCategorySources(supabase, category, desiredLimit);
   let rows = sourceRows ?? (await fetchLegacyCategoryRows(supabase, category, desiredLimit));
   if (!rows || rows.length === 0) {
-    return { contextText: "", sources: [], degraded: retrievalDegraded };
+    return { contextText: "", sources: [], bindingSources: [], degraded: retrievalDegraded };
   }
 
   // 모든 문서의 후보를 먼저 정제해야 앞 문서의 정상 청크만으로 keep이 차는 편향이 생기지 않는다.
@@ -1332,7 +1573,7 @@ export async function fetchExternalRagContext(
   if (refined.length === 0 && sourceRows) {
     rows = await fetchLegacyCategoryRows(supabase, category, desiredLimit);
     if (!rows || rows.length === 0) {
-      return { contextText: "", sources: [], degraded: retrievalDegraded };
+      return { contextText: "", sources: [], bindingSources: [], degraded: retrievalDegraded };
     }
     refined = refine(rows, rows.length);
   }
@@ -1340,11 +1581,168 @@ export async function fetchExternalRagContext(
     documentSourceKey(item.meta)
   );
   if (diverse.length === 0) {
-    return { contextText: "", sources: [], degraded: retrievalDegraded };
+    return { contextText: "", sources: [], bindingSources: [], degraded: retrievalDegraded };
   }
   return {
     ...buildContextFromRefined(diverse, 5),
     degraded: retrievalDegraded,
+  };
+}
+
+export type ExternalSopContext = {
+  contextText: string;
+  sources: GeneratedDocSource[];
+  bindingSources: GeneratedDocSource[];
+  degraded: boolean;
+  evidence: SopEvidence;
+};
+
+function selectScopedSopRows(
+  refined: readonly RefinedRagRow[],
+  requestedCategory: string,
+  limit: number
+): RefinedRagRow[] {
+  const requested = requestedCategory.trim().slice(0, 100);
+  const commonRows = refined.filter(
+    (row) => row.meta?.edu_category === COMMON_SOP_CATEGORY
+  );
+  const requestedRows = refined.filter((row) => {
+    const rowCategory = row.meta?.edu_category;
+    return !rowCategory || rowCategory === requested;
+  });
+
+  if (requested === COMMON_SOP_CATEGORY) {
+    return selectSourceDiverse(
+      commonRows.length > 0 ? commonRows : requestedRows,
+      limit,
+      (item) => documentSourceKey(item.meta)
+    );
+  }
+  if (requestedRows.length === 0) {
+    return selectSourceDiverse(commonRows, limit, (item) =>
+      documentSourceKey(item.meta)
+    );
+  }
+  if (commonRows.length === 0 || limit <= 1) {
+    return selectSourceDiverse(requestedRows, limit, (item) =>
+      documentSourceKey(item.meta)
+    );
+  }
+
+  // 요청 분야가 주 근거가 되도록 먼저 채우되, 관련 공통 SOP가 있으면 기본 조회(4건)의
+  // 최소 한 자리를 보장한다. 요청 분야 근거가 적으면 남은 자리는 공통 SOP로 채운다.
+  const primary = selectSourceDiverse(requestedRows, limit - 1, (item) =>
+    documentSourceKey(item.meta)
+  );
+  const common = selectSourceDiverse(commonRows, limit - primary.length, (item) =>
+    documentSourceKey(item.meta)
+  );
+  return [...primary, ...common].slice(0, limit);
+}
+
+/**
+ * 공식 SOP 또는 관리자가 현장지침·매뉴얼로 분류한 문서만 별도로 검색한다.
+ * 일반 교재의 출처 라벨이 SOP 근거로 승격되지 않도록 metadata.document_type을
+ * 서버 필터로 고정한다. 요청 분야를 주 범위로 하고 `현장지휘·공통`만 전 분야 보조 범위로
+ * 허용한다. 다른 분야 지침이나 공통 분야의 일반 교육자료는 근거로 승격하지 않는다.
+ * 임베딩·질의확장 없이 제한된 키워드 검색만 수행해 일반 RAG와 병렬 실행해도 부담을 낮춘다.
+ */
+export async function fetchExternalSopContext(
+  category: string,
+  topic: string,
+  limit = 4,
+  suppliedClient?: ExternalRagSupabaseClient
+): Promise<ExternalSopContext> {
+  const supabase = suppliedClient ?? (await createClient());
+  const normalizedLimit = Number.isFinite(limit)
+    ? Math.max(1, Math.min(8, Math.floor(limit)))
+    : 4;
+  const plans = buildTopicSearchPlans(topic, []);
+  const relevanceTerms = meaningfulSopTopicTerms(topic);
+  const categoryScope = sopCategoryScope(category);
+  // '훈련·대비' 같은 분야 공통어만으로는 특정 SOP 적용 근거를 고를 수 없다. 세부 수행이나
+  // 장비를 나타내는 핵심어가 없으면 일반 지침을 임의로 승격하지 않고 미확인으로 남긴다.
+  if (plans.length === 0 || relevanceTerms.length === 0 || categoryScope.length === 0) {
+    return {
+      contextText: "",
+      sources: [],
+      bindingSources: [],
+      degraded: false,
+      evidence: { status: "not_found", sourceLabels: [] },
+    };
+  }
+
+  const results = await Promise.all(
+    plans.slice(0, 4).flatMap((plan) =>
+      plan.queries.slice(0, 2).map(async (keywordQuery) => {
+        try {
+          const request = (supabase.from as CallableFunction)(RAG_TABLE)
+            .select("id, content, metadata")
+            .eq("is_active", true)
+            .in(`metadata->>${CATEGORY_FIELD}`, categoryScope)
+            .in("metadata->>document_type", [...SOP_DOCUMENT_TYPES])
+            // SOP 공유 DB 계약은 Header 2+본문에서 관련성을 판정한다. 같은 범위를 미리
+            // 검색하는 생성 열을 써야 제목에만 주제가 있고 본문은 단계문인 정상 페이지를
+            // not_found로 놓친 뒤 공유 단계에서 거절하는 불일치가 생기지 않는다.
+            .textSearch("sop_search_vector", keywordQuery, {
+              type: "websearch",
+              config: "simple",
+            })
+            .limit(32);
+          const { data, error } = await request;
+          if (error) {
+            console.error("[rag-external] SOP keyword error:", error.message);
+            return { rows: [] as RagRow[], degraded: true, terms: plan.terms };
+          }
+          const relevantRows = ((data ?? []) as RagRow[]).filter((row) =>
+            rowSupportsSopTopic(row, relevanceTerms)
+          );
+          return {
+            rows: rankKeywordRows(relevantRows, plan.terms),
+            degraded: false,
+            terms: plan.terms,
+          };
+        } catch (error) {
+          console.error(
+            "[rag-external] SOP keyword request failed:",
+            error instanceof Error ? error.message : error
+          );
+          return { rows: [] as RagRow[], degraded: true, terms: plan.terms };
+        }
+      })
+    )
+  );
+
+  const degraded = results.some((result) => result.degraded);
+  const combined = interleaveUnique(
+    results.map((result) => result.rows),
+    64,
+    (row) => row.id
+  );
+  const refined = refine(combined, combined.length);
+  const selected = selectScopedSopRows(refined, category, normalizedLimit);
+
+  if (selected.length === 0) {
+    return {
+      contextText: "",
+      sources: [],
+      bindingSources: [],
+      degraded,
+      evidence: {
+        status: degraded ? "degraded" : "not_found",
+        sourceLabels: [],
+      },
+    };
+  }
+
+  const context = buildContextFromRefined(selected, normalizedLimit);
+  return {
+    ...context,
+    degraded,
+    evidence: {
+      status: "found",
+      sourceLabels: selected.map((row) => `[${labelOf(row.meta)}]`),
+    },
   };
 }
 

@@ -7,6 +7,7 @@ import {
   MAX_SLIDE_STEP_CHARS,
   MAX_SLIDE_TITLE_CHARS,
   TRAINING_PLAN_SECTIONS,
+  bindSlideVisualsToSources,
   buildGeneratePrompt,
   buildGenerateSystemPrompt,
   buildGenerationRepairPrompt,
@@ -17,16 +18,23 @@ import {
   generatedPlanSchema,
   generatedSlidesSchema,
   extractSourceLabels,
+  generationQualityMessages,
   generationQualityWarnings,
   inspectCurrentGenerationQuality,
   inspectGeneratedLesson,
   inspectGeneratedPlan,
   inspectGeneratedSlides,
+  splitGeneratedSourcesForDisplay,
   type GenerateRequest,
   type GeneratedDocDraft,
   type GeneratedSlide,
   type GeneratedSlideDeckDraft,
 } from "@/lib/generate";
+import {
+  SOP_APPLICATION_MARKER,
+  SOP_DEGRADED_DISCLOSURE,
+  SOP_NOT_FOUND_DISCLOSURE,
+} from "@/lib/sop-evidence";
 
 function fill(prefix: string, minimum: number): string {
   let value = prefix;
@@ -146,9 +154,29 @@ function validLesson(): GeneratedDocDraft {
   };
 }
 
+function citeSections(
+  draft: GeneratedDocDraft,
+  headings: readonly string[],
+  sourceRef: string
+): GeneratedDocDraft {
+  const cited = structuredClone(draft);
+  cited.sections.forEach((section) => {
+    if (headings.includes(section.heading)) section.content += ` ${sourceRef}`;
+  });
+  return cited;
+}
+
 function validSlide(index: number): GeneratedSlide {
   const isSafety = index === 8;
   const isSummary = index === 9;
+  const role = isSafety ? "safety" : isSummary ? "summary" : index === 0 ? "objectives" : "concept";
+  const composition = isSafety
+    ? "checklist"
+    : isSummary
+      ? "summary"
+      : index === 0
+        ? "list"
+        : "statement";
   return {
     title: isSafety
       ? "이상이 보이면 즉시 훈련을 멈춥니다"
@@ -174,6 +202,9 @@ function validSlide(index: number): GeneratedSlide {
       165
     ),
     layout: isSafety ? "safety" : isSummary ? "summary" : index === 0 ? "objectives" : "concept",
+    role,
+    composition,
+    visual: { mode: "none" },
     sourceRefs: ["[공기호흡기 교육교범 p.3]"],
   };
 }
@@ -181,6 +212,7 @@ function validSlide(index: number): GeneratedSlide {
 function validSlides(): GeneratedSlideDeckDraft {
   return {
     title: "공기호흡기 점검이 안전한 진입을 만듭니다",
+    mode: "presenter",
     slides: Array.from({ length: 10 }, (_, index) => validSlide(index)),
   };
 }
@@ -208,14 +240,123 @@ describe("유형별 생성 스키마", () => {
     expect(() => generatedLessonSchema.parse({ ...lesson, sections: lesson.sections.slice(0, 6) })).toThrow();
   });
 
-  it("슬라이드는 의미 레이아웃과 장별 출처를 받을 수 있다", () => {
+  it("슬라이드는 교육 역할·화면 구도·시각자료 계획과 장별 출처를 받을 수 있다", () => {
     expect(generatedSlidesSchema.parse(validSlides()).slides[0]).toMatchObject({
       layout: "objectives",
+      role: "objectives",
+      composition: "list",
+      visual: { mode: "none" },
       sourceRefs: ["[공기호흡기 교육교범 p.3]"],
     });
     const invalid = validSlides();
     invalid.slides[0] = { ...invalid.slides[0], layout: "poster" as GeneratedSlide["layout"] };
     expect(() => generatedSlidesSchema.parse(invalid)).toThrow();
+  });
+
+  it("비교·흐름·원문 설명 구도를 구조화하고 런타임 이미지는 LLM 스키마에서 제외한다", () => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1],
+      role: "comparison",
+      composition: "comparison",
+      steps: ["정상", "이상"],
+      visual: {
+        mode: "source-page",
+        sourceRef: "[공기호흡기 교육교범 p.3]",
+        altText: "정상과 이상 상태를 나란히 보여 주는 교범 페이지",
+        imageData: "data:image/png;base64,AAAA",
+      },
+    };
+
+    const parsed = generatedSlidesSchema.parse(deck);
+    expect(parsed.slides[1]).toMatchObject({
+      role: "comparison",
+      composition: "comparison",
+      steps: ["정상", "이상"],
+      visual: { mode: "source-page" },
+    });
+    expect(parsed.slides[1].visual).not.toHaveProperty("imageData");
+  });
+});
+
+describe("SOP·표준절차 생성 계약 통합", () => {
+  const sopLabel = "[공기호흡기 교육교범 p.3]";
+
+  it("세 유형의 결정론 검사에 분리된 SOP 근거 계약을 함께 적용한다", () => {
+    const plan = validPlan();
+    plan.sections[1].content = `${SOP_APPLICATION_MARKER} 점검 순서를 적용한다. ${sopLabel}\n${plan.sections[1].content}`;
+    const lesson = validLesson();
+    lesson.sections[2].content = `${SOP_APPLICATION_MARKER} 점검 순서를 시범과 실습에 적용한다. ${sopLabel}\n${lesson.sections[2].content}`;
+    const slides = validSlides();
+    slides.slides[1].notes = `${SOP_APPLICATION_MARKER} 점검 순서를 적용합니다. ${slides.slides[1].notes}`;
+    slides.slides[1].sourceRefs = [sopLabel];
+    const evidence = { status: "found" as const, sourceLabels: [sopLabel] };
+
+    expect(
+      inspectGeneratedPlan(plan, "1시간", undefined, evidence).issues.filter((issue) =>
+        issue.code.includes("sop")
+      )
+    ).toEqual([]);
+    expect(
+      inspectGeneratedLesson(lesson, "1시간", undefined, evidence).issues.filter((issue) =>
+        issue.code.includes("sop")
+      )
+    ).toEqual([]);
+    expect(
+      inspectGeneratedSlides(slides, "1시간", [sopLabel], evidence).issues.filter((issue) =>
+        issue.code.includes("sop")
+      )
+    ).toEqual([]);
+  });
+
+  it("SOP 근거가 없거나 검색 장애면 지정 위치에 상태별 정확한 안내문을 요구한다", () => {
+    const plan = validPlan();
+    const missing = inspectGeneratedPlan(plan, "1시간", undefined, {
+      status: "not_found",
+      sourceLabels: [],
+    });
+    expect(missing.issues.map((issue) => issue.code)).toContain("missing_sop_disclosure");
+
+    plan.sections[1].content = `${SOP_NOT_FOUND_DISCLOSURE}\n${plan.sections[1].content}`;
+    expect(
+      inspectGeneratedPlan(plan, "1시간", undefined, {
+        status: "not_found",
+        sourceLabels: [],
+      }).issues.map((issue) => issue.code)
+    ).not.toContain("missing_sop_disclosure");
+
+    const lesson = validLesson();
+    lesson.sections[2].content = `${SOP_DEGRADED_DISCLOSURE}\n${lesson.sections[2].content}`;
+    expect(
+      inspectGeneratedLesson(lesson, "1시간", undefined, {
+        status: "degraded",
+        sourceLabels: [],
+      }).issues.map((issue) => issue.code)
+    ).not.toContain("missing_sop_disclosure");
+  });
+
+  it("프롬프트는 상위 주제와 선택 방향을 분리하고 SOP 고정 위치를 명시한다", () => {
+    const request: GenerateRequest = {
+      type: "plan",
+      category: "산악",
+      audience: "일반 대원",
+      duration: "1시간",
+      topic: "산악사고대비 훈련",
+      focus: "야간 조난자 수색구역 설정",
+    };
+    const prompt = buildGeneratePrompt(request, {
+      status: "not_found",
+      sourceLabels: [],
+    });
+    const system = buildGenerateSystemPrompt("산악", "[산악 교범 p.1]\n근거", {
+      status: "not_found",
+      sourceLabels: [],
+    });
+
+    expect(prompt).toContain("상위 훈련 주제: 산악사고대비 훈련");
+    expect(prompt).toContain("이번 세부 훈련 방향: 야간 조난자 수색구역 설정");
+    expect(prompt).toContain(SOP_NOT_FOUND_DISCLOSURE);
+    expect(system).toContain(SOP_NOT_FOUND_DISCLOSURE);
   });
 });
 
@@ -255,12 +396,23 @@ describe("생성 프롬프트 품질 계약", () => {
     const prompt = buildGeneratePrompt({ ...base, type: "slides" });
     expect(prompt).toContain("기억할 결론이 드러나는 서술형 문장");
     expect(prompt).toContain("발표자 노트는 4~7문장");
-    expect(prompt).toContain("layout을 지정");
+    expect(prompt).toContain("교육 역할 role과 화면 구도 composition");
+    expect(prompt).toContain("원문 사진·표·도해");
+    expect(prompt).toContain("source-page");
+    expect(prompt).not.toContain("source-crop");
+    expect(prompt).toContain("mode=presenter");
     expect(prompt).toContain("sourceRefs");
     expect(prompt).toContain("없는 출처를 만들지 마세요");
     expect(prompt).toContain(`서술형 문장으로 쓰고 ${MAX_SLIDE_TITLE_CHARS}자`);
     expect(prompt).toContain(`각 문장은 ${MAX_SLIDE_BULLET_CHARS}자`);
     expect(prompt).toContain(`각 단계어는 ${MAX_SLIDE_STEP_CHARS}자`);
+  });
+
+  it("상세형은 혼자 읽을 수 있는 화면 밀도와 보충 노트를 요구한다", () => {
+    const prompt = buildGeneratePrompt({ ...base, type: "slides", slideMode: "detailed" });
+    expect(prompt).toContain("상세형 — 발표 없이 읽어도 이해되는 교육자료");
+    expect(prompt).toContain('최상위 mode는 반드시 "detailed"');
+    expect(prompt).toContain("화면 문장은 3~4개");
   });
 
   it("사용자가 입력한 현장 조건은 반영하고 입력하지 않은 수량은 추정하지 않는다", () => {
@@ -318,6 +470,8 @@ describe("생성 프롬프트 품질 계약", () => {
     });
     expect(slidePrompt).toContain("현장 조건: 입력되지 않음");
     expect(slidePrompt).toContain("장비 수량을 임의로 특정하지 마세요");
+    expect(slidePrompt).toContain("source-page/native-diagram/none");
+    expect(slidePrompt).not.toContain("source-crop");
   });
 
   it("시스템 컨텍스트에서 실제 출처 라벨만 추출한다", () => {
@@ -326,6 +480,165 @@ describe("생성 프롬프트 품질 계약", () => {
         "[공기호흡기 교육교범 p.3]\n본문\n\n---\n\n[안전관리 지침 p.8]\n본문"
       )
     ).toEqual(["[공기호흡기 교육교범 p.3]", "[안전관리 지침 p.8]"]);
+  });
+});
+
+describe("원문 시각자료 출처 바인딩", () => {
+  it("LLM의 ID는 버리고 정확히 일치하는 검색 출처의 문서·페이지를 연결한다", () => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1],
+      role: "evidence",
+      composition: "visual-explanation",
+      visual: {
+        mode: "source-page",
+        documentId: 999,
+        page: 999,
+        sourceRef: "[공기호흡기 교육교범 p.3]",
+        altText: "교범 원문 장비 점검 그림",
+      },
+    };
+
+    const bound = bindSlideVisualsToSources(deck, [
+      { document_id: 17, doc: "공기호흡기 교육교범", page: 3 },
+    ]);
+
+    expect(bound.slides[1].visual).toMatchObject({
+      mode: "source-page",
+      documentId: 17,
+      page: 3,
+      sourceRef: "[공기호흡기 교육교범 p.3]",
+      fit: "contain",
+    });
+  });
+
+  it("출처가 일치하지 않거나 원문 문서 ID가 없으면 외부 이미지를 요청하지 않는다", () => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1],
+      role: "timeline",
+      composition: "timeline",
+      steps: ["준비", "수행", "보고"],
+      visual: {
+        mode: "source-crop",
+        documentId: 123,
+        page: 7,
+        sourceRef: "[만들어낸 교범 p.7]",
+        altText: "검증되지 않은 그림",
+      },
+    };
+    deck.slides[2] = {
+      ...deck.slides[2],
+      role: "evidence",
+      composition: "visual-explanation",
+      visual: {
+        mode: "source-page",
+        sourceRef: "[외부 자료 p.5]",
+        altText: "연결할 수 없는 외부 자료",
+      },
+      sourceRefs: ["[외부 자료 p.5]"],
+    };
+
+    const bound = bindSlideVisualsToSources(deck, [
+      { document_id: 0, doc: "외부 자료", page: 5 },
+    ]);
+
+    expect(bound.slides[1].visual).toMatchObject({ mode: "native-diagram" });
+    expect(bound.slides[1].visual).not.toHaveProperty("documentId");
+    expect(bound.slides[2].visual).toMatchObject({ mode: "none" });
+  });
+
+  it("visual.sourceRef 자체가 정확히 일치해야 하며 일반 본문 출처로 대신 연결하지 않는다", () => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1],
+      role: "evidence",
+      composition: "visual-explanation",
+      visual: {
+        mode: "source-page",
+        altText: "결합부 위치를 보여 주는 원문 페이지",
+      },
+      sourceRefs: ["[공기호흡기 교육교범 p.3]"],
+    };
+
+    const bound = bindSlideVisualsToSources(deck, [
+      { document_id: 17, doc: "공기호흡기 교육교범", page: 3 },
+    ]);
+
+    expect(bound.slides[1].visual).toMatchObject({ mode: "none" });
+    expect(bound.slides[1].visual).not.toHaveProperty("documentId");
+  });
+
+  it("같은 출처 라벨이 서로 다른 문서 ID를 가리키면 모호한 원문을 연결하지 않는다", () => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1],
+      role: "evidence",
+      composition: "visual-explanation",
+      visual: {
+        mode: "source-page",
+        sourceRef: "[공기호흡기 교육교범 p.3]",
+        altText: "공기호흡기 원문 그림",
+      },
+    };
+
+    const bound = bindSlideVisualsToSources(deck, [
+      { document_id: 17, doc: "공기호흡기 교육교범", page: 3 },
+      { document_id: 18, doc: "공기호흡기 교육교범", page: 3 },
+    ]);
+
+    expect(bound.slides[1].visual).toMatchObject({ mode: "none" });
+  });
+
+  it("원문 시각자료는 visual-explanation에서만 연결하고 과거 crop 요청은 전체 페이지로 정규화한다", () => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1],
+      composition: "comparison",
+      steps: ["정상", "이상"],
+      visual: {
+        mode: "source-page",
+        sourceRef: "[공기호흡기 교육교범 p.3]",
+        altText: "정상과 이상 상태",
+      },
+    };
+    deck.slides[2] = {
+      ...deck.slides[2],
+      role: "evidence",
+      composition: "visual-explanation",
+      visual: {
+        mode: "source-crop",
+        sourceRef: "[공기호흡기 교육교범 p.3]",
+        altText: "교범 원문 페이지",
+      },
+    };
+
+    const bound = bindSlideVisualsToSources(deck, [
+      { document_id: 17, doc: "공기호흡기 교육교범", page: 3 },
+    ]);
+
+    expect(bound.slides[1].visual).toMatchObject({ mode: "native-diagram" });
+    expect(bound.slides[2].visual).toMatchObject({
+      mode: "source-page",
+      documentId: 17,
+      page: 3,
+    });
+  });
+});
+
+describe("생성 출처 표시와 시각자료 바인딩 분리", () => {
+  it("화면에는 5개만 표시하지만 바인딩에는 회수한 모든 고유 페이지를 유지한다", () => {
+    const candidates = Array.from({ length: 7 }, (_, index) => ({
+      document_id: index + 1,
+      doc: `교범 ${index + 1}`,
+      page: index + 1,
+    }));
+
+    const split = splitGeneratedSourcesForDisplay(candidates, 5);
+
+    expect(split.sources).toHaveLength(5);
+    expect(split.bindingSources).toHaveLength(7);
+    expect(split.bindingSources[6]).toEqual({ document_id: 7, doc: "교범 7", page: 7 });
   });
 });
 
@@ -412,6 +725,47 @@ describe("결정론적 생성 품질 검사", () => {
     expect(inspectGeneratedSlides(validSlides(), "1시간")).toEqual({ ok: true, issues: [] });
   });
 
+  it("안전·요약 role과 layout만 지정한 슬라이드는 실제 안전·평가 내용으로 인정하지 않는다", () => {
+    const deck = validSlides();
+    deck.slides[8] = {
+      ...deck.slides[8],
+      title: "장비 구성 요소를 순서대로 학습합니다",
+      bullets: [
+        "용기와 면체 및 조정기의 명칭을 함께 읽고 위치를 찾아봅니다",
+        "각 구성 요소가 서로 연결되는 방식과 기본 기능을 설명합니다",
+      ],
+      notes: fill(
+        "교관은 장비의 구성 요소를 하나씩 가리키며 명칭을 설명합니다. 대원은 명칭을 따라 읽고 장비에서 같은 부위를 찾아봅니다. 각 부위가 연결되는 순서를 그림과 실물로 비교합니다. 이후 동료와 번갈아 명칭과 기능을 말합니다. 마무리로 오늘 다룬 구성 요소를 다시 정리합니다.",
+        165
+      ),
+    };
+    deck.slides[9] = {
+      ...deck.slides[9],
+      title: "교육에서 다룬 장비 구성 요소를 되짚습니다",
+      bullets: [
+        "용기와 면체 및 조정기의 이름과 위치를 차례로 떠올립니다",
+        "구성 요소가 연결되는 흐름과 각 부위의 기능을 함께 정리합니다",
+      ],
+      notes: fill(
+        "교관은 앞서 설명한 장비 구성 요소를 차례로 다시 보여 줍니다. 대원은 각 명칭과 기능을 소리 내어 말합니다. 그림에 표시된 위치와 실물의 위치를 서로 비교합니다. 조별로 역할을 바꾸어 같은 내용을 설명합니다. 마지막에는 장비 구성의 전체 흐름을 다시 정리합니다.",
+        165
+      ),
+    };
+
+    const codes = inspectGeneratedSlides(deck, "1시간").issues.map((issue) => issue.code);
+    expect(codes).toEqual(expect.arrayContaining(["missing_safety", "missing_evaluation"]));
+  });
+
+  it("실제 문구에 안전·중단 및 평가·판단 기준이 있으면 role·layout 값과 무관하게 인정한다", () => {
+    const deck = validSlides();
+    deck.slides[8] = { ...deck.slides[8], role: "concept", layout: "concept" };
+    deck.slides[9] = { ...deck.slides[9], role: "concept", layout: "concept" };
+
+    const codes = inspectGeneratedSlides(deck, "1시간").issues.map((issue) => issue.code);
+    expect(codes).not.toContain("missing_safety");
+    expect(codes).not.toContain("missing_evaluation");
+  });
+
   it("슬라이드 제목·핵심 문장·단계어가 화면 한계를 넘으면 각각 보고한다", () => {
     const deck = validSlides();
     deck.slides[0] = {
@@ -442,6 +796,66 @@ describe("결정론적 생성 품질 검사", () => {
     );
   });
 
+  it("화면 구도별 단계 계약과 원문 시각자료 출처·대체 텍스트를 검사한다", () => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1],
+      role: "comparison",
+      composition: "comparison",
+      steps: ["기준 하나", "기준 둘", "불필요한 기준"],
+      visual: {
+        mode: "source-page",
+        sourceRef: "[만들어낸 교범 p.99]",
+      },
+    };
+
+    const issues = inspectGeneratedSlides(deck, "1시간", ["[공기호흡기 교육교범 p.3]"]).issues;
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "invalid_slide_composition",
+          path: "slides.1.steps",
+        }),
+        expect.objectContaining({ code: "invalid_slide_visual", path: "slides.1.visual" }),
+        expect.objectContaining({
+          code: "invalid_slide_visual",
+          path: "slides.1.visual.sourceRef",
+        }),
+        expect.objectContaining({
+          code: "invalid_slide_visual",
+          path: "slides.1.composition",
+        }),
+      ])
+    );
+  });
+
+  it("유효한 원문 출처라도 visual-explanation이 아닌 화면에서는 거부한다", () => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1],
+      composition: "comparison",
+      steps: ["정상", "이상"],
+      visual: {
+        mode: "source-page",
+        sourceRef: "[공기호흡기 교육교범 p.3]",
+        altText: "정상과 이상 상태를 보여 주는 원문 페이지",
+      },
+    };
+
+    const issues = inspectGeneratedSlides(deck, "1시간", [
+      "[공기호흡기 교육교범 p.3]",
+    ]).issues;
+
+    expect(issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          code: "invalid_slide_visual",
+          path: "slides.1.composition",
+        }),
+      ])
+    );
+  });
+
   it("API와 화면에서 쓸 품질 경고 라벨을 중복 없이 요약한다", () => {
     const warnings = generationQualityWarnings({
       ok: false,
@@ -457,6 +871,37 @@ describe("결정론적 생성 품질 검사", () => {
     ]);
   });
 
+  it("공식 출력 차단 오류와 교관 검토 경고를 같은 보고서에서 분리한다", () => {
+    const messages = generationQualityMessages({
+      ok: false,
+      issues: [
+        {
+          code: "time_total_mismatch",
+          path: "sections",
+          message: "시간 합계가 다름",
+        },
+        {
+          code: "missing_safety",
+          path: "sections.3.content",
+          message: "안전 기준 누락",
+        },
+        {
+          code: "slide_title_too_long",
+          path: "slides.0.title",
+          message: "제목이 김",
+        },
+      ],
+    });
+
+    expect(messages.errors).toEqual([
+      GENERATION_QUALITY_LABELS.time_total_mismatch,
+      GENERATION_QUALITY_LABELS.missing_safety,
+    ]);
+    expect(messages.warnings).toEqual([
+      GENERATION_QUALITY_LABELS.slide_title_too_long,
+    ]);
+  });
+
   it("실제 참고 자료에 없는 문서 출처를 품질 문제로 잡는다", () => {
     const allowed = ["[공기호흡기 교육교범 p.3]"];
     const deck = validSlides();
@@ -469,6 +914,78 @@ describe("결정론적 생성 품질 검사", () => {
     expect(inspectGeneratedPlan(plan, "1시간", allowed).issues).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "missing_source_citation" })])
     );
+  });
+
+  it("계획·교안의 모든 필수 섹션에서 페이지 없는 허위 대괄호 출처도 잡는다", () => {
+    const allowed = "[공기호흡기 교육교범 p.3]";
+    const cases = [
+      {
+        type: "plan",
+        draft: citeSections(
+          validPlan(),
+          ["훈련내용", "필요장비", "안전관리"],
+          allowed
+        ),
+        headings: TRAINING_PLAN_SECTIONS,
+      },
+      {
+        type: "lesson",
+        draft: citeSections(
+          validLesson(),
+          ["핵심이론", "교관시범", "안전유의사항"],
+          allowed
+        ),
+        headings: LESSON_SECTIONS,
+      },
+    ] as const;
+
+    for (const { type, draft, headings } of cases) {
+      for (const heading of headings) {
+        const tampered = structuredClone(draft);
+        const index = tampered.sections.findIndex((section) => section.heading === heading);
+        tampered.sections[index].content += ` [검증되지 않은 ${heading} 자료]`;
+        const quality = type === "plan"
+          ? inspectGeneratedPlan(tampered, "1시간", [allowed])
+          : inspectGeneratedLesson(tampered, "1시간", [allowed]);
+
+        expect(quality.issues).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              code: "invalid_source_ref",
+              path: `sections.${index}.content`,
+            }),
+          ])
+        );
+      }
+    }
+  });
+
+  it("시간 배분·SOP 적용 표식은 출처로 오인하지 않고 페이지 없는 허용 라벨은 인정한다", () => {
+    const allowed = "[공기호흡기 교육교범]";
+    const plan = citeSections(
+      validPlan(),
+      ["훈련내용", "필요장비", "안전관리"],
+      allowed
+    );
+    plan.sections[1].content = `${SOP_APPLICATION_MARKER}\n${plan.sections[1].content}`;
+    plan.sections[0].content += " [시간: 00분]";
+    const lesson = citeSections(
+      validLesson(),
+      ["핵심이론", "교관시범", "안전유의사항"],
+      allowed
+    );
+    lesson.sections[2].content = `${SOP_APPLICATION_MARKER}\n${lesson.sections[2].content}`;
+
+    expect(
+      inspectGeneratedPlan(plan, "1시간", [allowed]).issues.filter(
+        (issue) => issue.code === "invalid_source_ref"
+      )
+    ).toEqual([]);
+    expect(
+      inspectGeneratedLesson(lesson, "1시간", [allowed]).issues.filter(
+        (issue) => issue.code === "invalid_source_ref"
+      )
+    ).toEqual([]);
   });
 
   it("편집본은 API가 보관한 실제 출처 라벨로 다시 검사한다", () => {

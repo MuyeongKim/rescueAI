@@ -28,9 +28,13 @@ vi.mock("@/lib/embeddings", () => ({
 }));
 
 import {
+  COMMON_SOP_CATEGORY,
   fetchExternalRagContext,
+  fetchExternalSopContext,
   MAX_KEYWORD_SEARCH_QUERIES,
   searchExternalRag,
+  sopCategoryScope,
+  verifyExternalRagSourceProvenance,
 } from "@/lib/rag-external";
 
 type RagRow = {
@@ -39,8 +43,10 @@ type RagRow = {
   metadata: {
     source: string;
     document_id: number;
-    page_num: number;
+    page_num: number | null;
     "Header 2": string;
+    edu_category?: string;
+    document_type?: string;
   };
 };
 
@@ -48,7 +54,11 @@ type QueryRecord = {
   table: string;
   index: number;
   eqs: Array<[column: string, value: unknown]>;
+  ins: Array<[column: string, values: unknown[]]>;
+  isFilters: Array<[column: string, value: unknown]>;
+  orFilters: string[];
   keyword?: string;
+  keywordColumn?: string;
   limit?: number;
 };
 
@@ -137,6 +147,9 @@ function createSupabaseMock(
       table,
       index: records.length,
       eqs: [],
+      ins: [],
+      isFilters: [],
+      orFilters: [],
     };
     records.push(record);
 
@@ -146,7 +159,20 @@ function createSupabaseMock(
         record.eqs.push([column, value]);
         return builder;
       }),
-      textSearch: vi.fn((_column: string, keyword: string) => {
+      in: vi.fn((column: string, values: unknown[]) => {
+        record.ins.push([column, values]);
+        return builder;
+      }),
+      is: vi.fn((column: string, value: unknown) => {
+        record.isFilters.push([column, value]);
+        return builder;
+      }),
+      or: vi.fn((filter: string) => {
+        record.orFilters.push(filter);
+        return builder;
+      }),
+      textSearch: vi.fn((column: string, keyword: string) => {
+        record.keywordColumn = column;
         record.keyword = keyword;
         return builder;
       }),
@@ -154,6 +180,8 @@ function createSupabaseMock(
         record.limit = limit;
         return builder;
       }),
+      order: vi.fn(() => builder),
+      range: vi.fn(() => builder),
       then: <TResult1 = QueryResponse, TResult2 = never>(
         onFulfilled?: ((value: QueryResponse) => TResult1 | PromiseLike<TResult1>) | null,
         onRejected?: ((reason: unknown) => TResult2 | PromiseLike<TResult2>) | null
@@ -187,6 +215,12 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     mocks.toPgVector.mockReturnValue("[0.1]");
     mocks.getConfiguredEmbeddingContract.mockReturnValue(GOOGLE_CONTRACT);
     mocks.getQueryEmbedding.mockResolvedValue([0.1]);
+  });
+
+  it("SOP 검색 범위는 요청 분야에 현장지휘·공통만 보조로 더한다", () => {
+    expect(sopCategoryScope("산악")).toEqual(["산악", COMMON_SOP_CATEGORY]);
+    expect(sopCategoryScope(COMMON_SOP_CATEGORY)).toEqual([COMMON_SOP_CATEGORY]);
+    expect(sopCategoryScope("  ")).toEqual([]);
   });
 
   it("명시적 Supabase 클라이언트가 있으면 쿠키 기반 서버 클라이언트를 만들지 않는다", async () => {
@@ -286,7 +320,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(result.degraded).toBe(false);
   });
 
-  it("자료제작도 분야 후보가 0건이면 동일한 전 분야 폴백으로 근거를 회수한다", async () => {
+  it("자료제작 일반 교재는 분야 후보가 0건이어도 전 분야로 넓히지 않는다", async () => {
     const supabase = createSupabaseMock((record) => {
       if (record.table === "rag_embedding_config") {
         return { data: [GOOGLE_CONTRACT], error: null };
@@ -307,10 +341,207 @@ describe("searchExternalRag Supabase I/O 계약", () => {
 
     const result = await fetchExternalRagContext("드론 운용", 40, DRONE_TOPIC);
 
-    expect(supabase.client.rpc).toHaveBeenCalledTimes(2);
-    expect(result.contextText).toContain("소방드론 비행 전");
-    expect(result.sources[0]?.document_id).toBe(15);
+    const keywordQueries = supabase.records.filter((record) => record.keyword !== undefined);
+    expect(keywordQueries.length).toBeGreaterThan(0);
+    expect(keywordQueries.every((record) => hasCategoryFilter(record, "드론 운용"))).toBe(
+      true
+    );
+    expect(supabase.client.rpc).toHaveBeenCalledTimes(1);
+    expect(result.contextText).toBe("");
+    expect(result.sources).toEqual([]);
+    expect(result.bindingSources).toEqual([]);
     expect(result.degraded).toBe(true);
+  });
+
+  it("SOP 검색은 요청 분야와 현장지휘·공통의 관리자 분류 문서만 별도 조회한다", async () => {
+    const sopRow = row(70, {
+      content:
+        "산악 조난자 수색에서는 수색 구역을 나누고 위치와 진행 상황을 지휘관에게 보고한다. 충분히 긴 현장 절차 근거 문장이다.",
+      metadata: {
+        source: "산악 현장활동 지침.pdf",
+        document_id: 70,
+        page_num: 12,
+        "Header 2": "조난자 수색과 보고",
+      },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [sopRow], error: null }));
+
+    const result = await fetchExternalSopContext(
+      "산악",
+      "조난자 수색구역 설정 / 상위 주제: 산악사고 대비 훈련",
+      4,
+      supabase.client as never
+    );
+
+    expect(result.evidence.status).toBe("found");
+    expect(result.evidence.sourceLabels[0]).toContain("산악 현장활동 지침");
+    expect(result.contextText).toContain("수색 구역");
+    const keywordQueries = supabase.records.filter((record) => record.keyword !== undefined);
+    expect(keywordQueries.length).toBeGreaterThan(0);
+    for (const query of keywordQueries) {
+      expect(query.keywordColumn).toBe("sop_search_vector");
+      expect(query.ins).toContainEqual([
+        "metadata->>document_type",
+        ["sop", "operational_guidance"],
+      ]);
+      expect(query.ins).toContainEqual([
+        "metadata->>edu_category",
+        ["산악", COMMON_SOP_CATEGORY],
+      ]);
+    }
+  });
+
+  it("요청 분야 근거를 우선하면서 관련 현장지휘·공통 SOP를 보조 근거로 포함한다", async () => {
+    const requested = row(74, {
+      content:
+        "산악 조난자 수색에서는 수색 구역을 나누고 위치와 진행 상황을 지휘관에게 보고한다. 충분히 긴 현장 절차 근거 문장이다.",
+      metadata: {
+        source: "산악 현장활동 지침.pdf",
+        document_id: 74,
+        page_num: 12,
+        "Header 2": "조난자 수색과 보고",
+        edu_category: "산악",
+        document_type: "operational_guidance",
+      },
+    });
+    const common = row(75, {
+      content:
+        "조난자 수색 구역을 설정한 현장은 지휘체계를 유지하고 대원의 위치와 진행 상황을 지휘관에게 보고한다. 충분히 긴 공통 현장 절차 근거 문장이다.",
+      metadata: {
+        source: "재난현장 표준작전절차.pdf",
+        document_id: 75,
+        page_num: 20,
+        "Header 2": "조난자 수색 지휘와 보고",
+        edu_category: COMMON_SOP_CATEGORY,
+        document_type: "sop",
+      },
+    });
+    const supabase = createSupabaseMock(() => ({
+      // DB 응답 순서와 관계없이 요청 분야가 주 근거, 공통 SOP가 보조 근거여야 한다.
+      data: [common, requested],
+      error: null,
+    }));
+
+    const result = await fetchExternalSopContext(
+      "산악",
+      "조난자 수색구역 설정 / 상위 주제: 산악사고 대비 훈련",
+      4,
+      supabase.client as never
+    );
+
+    expect(result.evidence.status).toBe("found");
+    expect(result.evidence.sourceLabels).toEqual([
+      "[산악 현장활동 지침 — 조난자 수색과 보고 p.12]",
+      "[재난현장 표준작전절차 — 조난자 수색 지휘와 보고 p.20]",
+    ]);
+    expect(result.contextText).toContain("공통 현장 절차 근거");
+  });
+
+  it("SOP 주제가 본문이 아닌 페이지 제목에만 있어도 통합 검색 후보에서 근거로 채택한다", async () => {
+    const headerOnly = row(73, {
+      content:
+        "면체의 밀착 상태와 용기 압력을 확인하고 이상이 있으면 교관에게 보고한다. 충분히 긴 현장 단계 설명이다.",
+      metadata: {
+        source: "공기호흡기 현장활동 지침.pdf",
+        document_id: 73,
+        page_num: 8,
+        "Header 2": "공기호흡기 착용",
+      },
+    });
+    const supabase = createSupabaseMock((record) =>
+      record.keywordColumn === "sop_search_vector"
+        ? { data: [headerOnly], error: null }
+        : { data: [], error: null }
+    );
+
+    const result = await fetchExternalSopContext(
+      "화재",
+      "공기호흡기 착용 방법",
+      4,
+      supabase.client as never
+    );
+
+    expect(result.evidence.status).toBe("found");
+    expect(result.evidence.sourceLabels).toContain(
+      "[공기호흡기 현장활동 지침 — 공기호흡기 착용 p.8]"
+    );
+  });
+
+  it("같은 분야 지침이어도 주제의 구체 핵심어가 부족하면 SOP 근거로 승격하지 않는다", async () => {
+    const unrelated = row(71, {
+      content:
+        "산악 안전교육은 훈련 전 위험요소를 확인하고 대원 건강상태를 점검한다. 충분히 긴 일반 안전 문장이다.",
+      metadata: {
+        source: "산악 현장활동 지침.pdf",
+        document_id: 71,
+        page_num: 3,
+        "Header 2": "교육 전 일반 안전관리",
+      },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [unrelated], error: null }));
+
+    const result = await fetchExternalSopContext(
+      "산악",
+      "조난자 수색구역 설정 / 상위 주제: 산악사고 대비 훈련",
+      4,
+      supabase.client as never
+    );
+
+    expect(result.evidence).toEqual({ status: "not_found", sourceLabels: [] });
+    expect(result.contextText).toBe("");
+  });
+
+  it("파일명만 주제와 일치하고 해당 페이지가 무관하면 SOP 근거로 승격하지 않는다", async () => {
+    const filenameOnly = row(72, {
+      content:
+        "교육 운영을 위한 정기 훈련 일정과 참석 인원을 기록한다. 교관 배정과 출석부 보관 기준을 안내한다.",
+      metadata: {
+        source: "산악 조난자 수색 현장활동지침.pdf",
+        document_id: 72,
+        page_num: 99,
+        "Header 2": "정기 교육 운영",
+      },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [filenameOnly], error: null }));
+
+    const result = await fetchExternalSopContext(
+      "산악",
+      "조난자 수색구역 설정 / 상위 주제: 산악사고 대비 훈련",
+      4,
+      supabase.client as never
+    );
+
+    expect(result.evidence).toEqual({ status: "not_found", sourceLabels: [] });
+    expect(result.contextText).toBe("");
+  });
+
+  it("SOP 분류 자료가 0건이면 not_found, 조회 장애면 degraded를 구분한다", async () => {
+    const empty = createSupabaseMock(() => ({ data: [], error: null }));
+    const unavailable = createSupabaseMock(() => ({
+      data: [],
+      error: { message: "temporary SOP search failure" },
+    }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const notFound = await fetchExternalSopContext(
+        "산악",
+        "조난자 수색구역 설정 / 상위 주제: 산악사고 대비 훈련",
+        4,
+        empty.client as never
+      );
+      const degraded = await fetchExternalSopContext(
+        "산악",
+        "조난자 수색구역 설정 / 상위 주제: 산악사고 대비 훈련",
+        4,
+        unavailable.client as never
+      );
+
+      expect(notFound.evidence).toEqual({ status: "not_found", sourceLabels: [] });
+      expect(degraded.evidence).toEqual({ status: "degraded", sourceLabels: [] });
+    } finally {
+      consoleError.mockRestore();
+    }
   });
 
   it("일부 키워드 질의가 실패해도 성공 결과를 유지하고 degraded를 표시한다", async () => {
@@ -448,5 +679,270 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     } finally {
       process.env.RERANK = "0";
     }
+  });
+
+  it("저장 시각자료는 실제 RAG 문서 ID·페이지·정규화 라벨이 모두 맞는 출처만 검증한다", async () => {
+    const actual = row(7, {
+      metadata: {
+        source: "화학보호복 교범.pdf",
+        document_id: 7,
+        page_num: 3,
+        "Header 2": "화학보호복 교범",
+      },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [actual], error: null }));
+
+    const result = await verifyExternalRagSourceProvenance(
+      [
+        { document_id: 7, doc: "화학보호복 교범", page: 3 },
+        { document_id: 8, doc: "화학보호복 교범", page: 3 },
+        { document_id: 7, doc: "다른 표시 라벨", page: 3 },
+      ],
+      "화학사고",
+      supabase.client as never
+    );
+
+    expect(result).toEqual({
+      sources: [{ document_id: 7, doc: "화학보호복 교범", page: 3 }],
+      degraded: false,
+    });
+    expect(supabase.records[0].orFilters[0]).toContain(
+      "and(metadata->>document_id.eq.7,metadata->>page_num.eq.3)"
+    );
+    expect(supabase.records[0].orFilters[0]).toContain(
+      "and(metadata->>document_id.eq.8,metadata->>page_num.eq.3)"
+    );
+    expect(supabase.records[0].ins).not.toContainEqual([
+      "metadata->>document_id",
+      ["7", "8"],
+    ]);
+    expect(supabase.records[0].eqs).toContainEqual([
+      "metadata->>edu_category",
+      "화학사고",
+    ]);
+  });
+
+  it("저장 출처 검증은 공통 분야에서 SOP 유형만 보조 출처로 허용한다", async () => {
+    const categorySource = row(76, {
+      metadata: {
+        source: "산악구조 교범.pdf",
+        document_id: 76,
+        page_num: 4,
+        "Header 2": "조난자 수색",
+        edu_category: "산악",
+        document_type: "training_material",
+      },
+    });
+    const commonSop = row(77, {
+      metadata: {
+        source: "재난현장 표준작전절차.pdf",
+        document_id: 77,
+        page_num: 8,
+        "Header 2": "수색 현장 지휘",
+        edu_category: COMMON_SOP_CATEGORY,
+        document_type: "sop",
+      },
+    });
+    const supabase = createSupabaseMock((record) => {
+      const categoryFilter = record.eqs.find(
+        ([column]) => column === "metadata->>edu_category"
+      )?.[1];
+      return {
+        data: categoryFilter === COMMON_SOP_CATEGORY ? [commonSop] : [categorySource],
+        error: null,
+      };
+    });
+
+    const result = await verifyExternalRagSourceProvenance(
+      [
+        { document_id: 76, doc: "산악구조 교범 — 조난자 수색", page: 4 },
+        { document_id: 77, doc: "재난현장 표준작전절차 — 수색 현장 지휘", page: 8 },
+      ],
+      "산악",
+      supabase.client as never
+    );
+
+    expect(result.sources).toHaveLength(2);
+    const commonQuery = supabase.records.find((record) =>
+      record.eqs.some(
+        ([column, value]) =>
+          column === "metadata->>edu_category" && value === COMMON_SOP_CATEGORY
+      )
+    );
+    expect(commonQuery?.ins).toContainEqual([
+      "metadata->>document_type",
+      ["sop", "operational_guidance"],
+    ]);
+  });
+
+  it("저장 출처 검증은 공통 일반자료와 타 분야 SOP를 요청 분야 출처로 허용하지 않는다", async () => {
+    const commonTraining = row(78, {
+      metadata: {
+        source: "공통 교육자료.pdf",
+        document_id: 78,
+        page_num: 2,
+        "Header 2": "교육 운영",
+        edu_category: COMMON_SOP_CATEGORY,
+        document_type: "training_material",
+      },
+    });
+    const otherCategorySop = row(79, {
+      metadata: {
+        source: "화재 현장활동 지침.pdf",
+        document_id: 79,
+        page_num: 5,
+        "Header 2": "화재 현장 지휘",
+        edu_category: "화재",
+        document_type: "sop",
+      },
+    });
+    const supabase = createSupabaseMock((record) => {
+      const categoryFilter = record.eqs.find(
+        ([column]) => column === "metadata->>edu_category"
+      )?.[1];
+      const sopOnly = record.ins.some(
+        ([column]) => column === "metadata->>document_type"
+      );
+      if (categoryFilter === COMMON_SOP_CATEGORY && !sopOnly) {
+        return { data: [commonTraining], error: null };
+      }
+      if (categoryFilter === "화재") {
+        return { data: [otherCategorySop], error: null };
+      }
+      return { data: [], error: null };
+    });
+
+    const result = await verifyExternalRagSourceProvenance(
+      [
+        { document_id: 78, doc: "공통 교육자료 — 교육 운영", page: 2 },
+        { document_id: 79, doc: "화재 현장활동 지침 — 화재 현장 지휘", page: 5 },
+      ],
+      "산악",
+      supabase.client as never
+    );
+
+    expect(result).toEqual({ sources: [], degraded: false });
+    const queriedCategories = supabase.records.flatMap((record) =>
+      record.eqs
+        .filter(([column]) => column === "metadata->>edu_category")
+        .map(([, value]) => value)
+    );
+    expect(new Set(queriedCategories)).toEqual(
+      new Set(["산악", COMMON_SOP_CATEGORY])
+    );
+  });
+
+  it("저장 시각자료 RAG 조회 장애는 출처 없음이 아니라 재시도 상태로 구분한다", async () => {
+    const supabase = createSupabaseMock(() => ({
+      data: [],
+      error: { message: "temporary provenance failure" },
+    }));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      await expect(
+        verifyExternalRagSourceProvenance(
+          [{ document_id: 7, doc: "화학보호복 교범", page: 3 }],
+          "화학사고",
+          supabase.client as never
+        )
+      ).resolves.toEqual({ sources: [], degraded: true });
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
+  it("page=null 출처는 실제 활성 RAG 메타데이터 페이지도 NULL일 때만 인정한다", async () => {
+    const actual = row(7, {
+      metadata: {
+        source: "산악구조 일반지침.pdf",
+        document_id: 7,
+        page_num: null,
+        "Header 2": "산악구조 일반지침",
+      },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [actual], error: null }));
+
+    const result = await verifyExternalRagSourceProvenance(
+      [
+        { document_id: 7, doc: "산악구조 일반지침", page: null },
+        { document_id: 7, doc: "조작한 라벨", page: null },
+      ],
+      "산악",
+      supabase.client as never
+    );
+
+    expect(result).toEqual({
+      sources: [{ document_id: 7, doc: "산악구조 일반지침", page: null }],
+      degraded: false,
+    });
+    expect(supabase.records[0].orFilters[0]).toContain(
+      "and(metadata->>document_id.eq.7,metadata->>page_num.is.null)"
+    );
+  });
+
+  it("80개 출처도 정확한 문서·페이지 쌍을 20개씩 나눠 검증한다", async () => {
+    const sources = Array.from({ length: 80 }, (_, index) => ({
+      document_id: index + 1,
+      doc: `구조 교범 ${index + 1}`,
+      page: index + 101,
+    }));
+    const actualRows = sources.map((source, index) =>
+      row(index + 900, {
+        metadata: {
+          source: `${source.doc}.pdf`,
+          document_id: source.document_id,
+          page_num: source.page,
+          "Header 2": source.doc,
+          edu_category: "산악",
+          document_type: "training_material",
+        },
+      })
+    );
+    const supabase = createSupabaseMock((record) => {
+      const category = record.eqs.find(
+        ([column]) => column === "metadata->>edu_category"
+      )?.[1];
+      return { data: category === "산악" ? actualRows : [], error: null };
+    });
+
+    const result = await verifyExternalRagSourceProvenance(
+      sources,
+      "산악",
+      supabase.client as never
+    );
+
+    expect(result).toEqual({ sources, degraded: false });
+    const requestedCategoryQueries = supabase.records.filter((record) =>
+      record.eqs.some(
+        ([column, value]) =>
+          column === "metadata->>edu_category" && value === "산악"
+      )
+    );
+    expect(requestedCategoryQueries).toHaveLength(4);
+    for (const record of requestedCategoryQueries) {
+      expect(record.orFilters).toHaveLength(1);
+      expect(record.orFilters[0].match(/metadata->>document_id\.eq\./g)).toHaveLength(20);
+      expect(record.ins.some(([column]) => column === "metadata->>page_num")).toBe(false);
+    }
+  });
+
+  it("page=null 주장에 실제 RAG 페이지 번호가 있으면 정확한 문서라도 거절한다", async () => {
+    const actual = row(7, {
+      metadata: {
+        source: "산악구조 일반지침.pdf",
+        document_id: 7,
+        page_num: 3,
+        "Header 2": "산악구조 일반지침",
+      },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [actual], error: null }));
+
+    await expect(
+      verifyExternalRagSourceProvenance(
+        [{ document_id: 7, doc: "산악구조 일반지침", page: null }],
+        "산악",
+        supabase.client as never
+      )
+    ).resolves.toEqual({ sources: [], degraded: false });
   });
 });

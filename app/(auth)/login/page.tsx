@@ -3,7 +3,6 @@
 import { Suspense, useState } from "react";
 import Image from "next/image";
 import { useSearchParams } from "next/navigation";
-import { toast } from "sonner";
 import {
   Eye,
   EyeOff,
@@ -24,6 +23,19 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
+function loginErrorMessage(message: string, magicMode: boolean): string {
+  const normalized = message.toLowerCase();
+  if (normalized.includes("invalid login credentials")) {
+    return "이메일 또는 비밀번호를 확인한 뒤 다시 시도해 주세요.";
+  }
+  if (normalized.includes("rate") || normalized.includes("too many")) {
+    return "요청이 많아 잠시 처리할 수 없습니다. 잠시 후 다시 시도해 주세요.";
+  }
+  return magicMode
+    ? "로그인 링크를 보내지 못했습니다. 이메일 주소를 확인하고 다시 시도해 주세요."
+    : "로그인하지 못했습니다. 입력 내용을 확인하거나 잠시 후 다시 시도해 주세요.";
+}
+
 function LoginForm() {
   const searchParams = useSearchParams();
   // 외부 URL·javascript: 스킴을 걸러 앱 내부 경로만 남긴다(오픈 리다이렉트 차단).
@@ -35,12 +47,14 @@ function LoginForm() {
   const [magicMode, setMagicMode] = useState(false);
   const [sent, setSent] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   async function handlePasswordLogin(e: React.FormEvent) {
     e.preventDefault();
     const trimmed = email.trim();
     if (!trimmed || !password) return;
 
+    setFormError(null);
     setLoading(true);
     try {
       const supabase = createClient();
@@ -49,19 +63,14 @@ function LoginForm() {
         password,
       });
       if (error) {
-        toast.error("로그인 실패", {
-          description:
-            error.message === "Invalid login credentials"
-              ? "이메일 또는 비밀번호가 올바르지 않습니다."
-              : error.message,
-        });
+        setFormError(loginErrorMessage(error.message, false));
         return;
       }
       window.location.assign(redirect);
     } catch (err) {
-      toast.error("오류가 발생했습니다", {
-        description: err instanceof Error ? err.message : String(err),
-      });
+      setFormError(
+        loginErrorMessage(err instanceof Error ? err.message : String(err), false)
+      );
     } finally {
       setLoading(false);
     }
@@ -72,6 +81,7 @@ function LoginForm() {
     const trimmed = email.trim();
     if (!trimmed) return;
 
+    setFormError(null);
     setLoading(true);
     try {
       const supabase = createClient();
@@ -86,14 +96,14 @@ function LoginForm() {
         },
       });
       if (error) {
-        toast.error("로그인 링크 전송 실패", { description: error.message });
+        setFormError(loginErrorMessage(error.message, true));
         return;
       }
       setSent(true);
     } catch (err) {
-      toast.error("오류가 발생했습니다", {
-        description: err instanceof Error ? err.message : String(err),
-      });
+      setFormError(
+        loginErrorMessage(err instanceof Error ? err.message : String(err), true)
+      );
     } finally {
       setLoading(false);
     }
@@ -109,15 +119,18 @@ function LoginForm() {
         <h2 className="mt-2 text-xl font-extrabold text-slate-950 sm:text-2xl dark:text-slate-50">
           대원 로그인
         </h2>
-        <p className="mt-1.5 text-sm leading-6 text-muted-foreground">
+        <p className="mt-1.5 text-base leading-6 text-muted-foreground sm:text-sm">
           발급받은 공직자 계정으로 구조 교육훈련 시스템에 접속하세요.
         </p>
       </div>
 
       {sent ? (
-        <div className="border border-slate-300 border-l-4 border-l-primary bg-card px-6 py-8 text-center dark:border-slate-700 dark:border-l-primary">
+        <div
+          role="status"
+          className="border border-slate-300 border-l-4 border-l-primary bg-card px-6 py-8 text-center dark:border-slate-700 dark:border-l-primary"
+        >
           <span className="mx-auto flex h-12 w-12 items-center justify-center border border-primary/30 bg-primary/5">
-            <MailCheck className="h-6 w-6 text-primary" />
+            <MailCheck className="h-6 w-6 text-primary" aria-hidden />
           </span>
           <p className="mt-4 text-base font-bold">이메일을 확인하세요</p>
           <p className="mt-2 text-sm leading-6 text-muted-foreground">
@@ -153,9 +166,14 @@ function LoginForm() {
               required
               placeholder="name@jbfire.go.kr"
               value={email}
-              onChange={(e) => setEmail(e.target.value)}
+              onChange={(e) => {
+                setEmail(e.target.value);
+                setFormError(null);
+              }}
               className="h-[52px] border-slate-300 bg-white px-4 text-base dark:border-slate-700 dark:bg-slate-950"
               disabled={loading}
+              aria-invalid={formError ? true : undefined}
+              aria-describedby={formError ? "login-error" : undefined}
             />
           </div>
 
@@ -172,9 +190,14 @@ function LoginForm() {
                   required
                   placeholder="비밀번호"
                   value={password}
-                  onChange={(e) => setPassword(e.target.value)}
+                  onChange={(e) => {
+                    setPassword(e.target.value);
+                    setFormError(null);
+                  }}
                   className="h-[52px] border-slate-300 bg-white px-4 pr-12 text-base dark:border-slate-700 dark:bg-slate-950"
                   disabled={loading}
+                  aria-invalid={formError ? true : undefined}
+                  aria-describedby={formError ? "login-error" : undefined}
                 />
                 <button
                   type="button"
@@ -183,10 +206,24 @@ function LoginForm() {
                   aria-label={showPassword ? "비밀번호 숨기기" : "비밀번호 보기"}
                   aria-pressed={showPassword}
                 >
-                  {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
+                  {showPassword ? (
+                    <EyeOff className="h-5 w-5" aria-hidden />
+                  ) : (
+                    <Eye className="h-5 w-5" aria-hidden />
+                  )}
                 </button>
               </div>
             </div>
+          )}
+
+          {formError && (
+            <p
+              id="login-error"
+              role="alert"
+              className="border border-destructive/30 bg-destructive/10 px-3 py-2.5 text-sm leading-5 text-destructive"
+            >
+              {formError}
+            </p>
           )}
 
           <Button
@@ -195,11 +232,11 @@ function LoginForm() {
             disabled={loading}
           >
             {loading ? (
-              <Loader2 className="h-5 w-5 animate-spin" />
+              <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" aria-hidden />
             ) : magicMode ? (
-              <Mail className="h-5 w-5" />
+              <Mail className="h-5 w-5" aria-hidden />
             ) : (
-              <LogIn className="h-5 w-5" />
+              <LogIn className="h-5 w-5" aria-hidden />
             )}
             {magicMode ? "로그인 링크 받기" : "로그인"}
           </Button>
@@ -207,9 +244,16 @@ function LoginForm() {
           <button
             type="button"
             className="flex min-h-12 w-full items-center justify-center gap-2 text-center text-sm font-medium text-muted-foreground transition-colors hover:text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            onClick={() => setMagicMode((enabled) => !enabled)}
+            onClick={() => {
+              setMagicMode((enabled) => !enabled);
+              setFormError(null);
+            }}
           >
-            {magicMode ? <LockKeyhole className="h-4 w-4" /> : <Mail className="h-4 w-4" />}
+            {magicMode ? (
+              <LockKeyhole className="h-4 w-4" aria-hidden />
+            ) : (
+              <Mail className="h-4 w-4" aria-hidden />
+            )}
             {magicMode ? "비밀번호로 로그인" : "이메일 링크로 로그인"}
           </button>
 
@@ -224,18 +268,18 @@ function LoginForm() {
 
 function LoginHero() {
   return (
-    <section className="command-grid relative flex min-h-[260px] flex-col overflow-hidden bg-[#0b1426] px-5 py-6 text-white sm:px-8 md:min-h-screen md:px-12 md:py-12 lg:px-16">
-      <div className="hazard-stripe absolute inset-x-0 top-0 h-1.5 text-[#d63f18]" aria-hidden />
+    <section className="command-grid relative flex min-h-[260px] flex-col overflow-hidden bg-ops-navy px-5 py-6 text-white sm:px-8 md:min-h-dvh md:px-12 md:py-12 lg:px-16">
+      <div className="hazard-stripe absolute inset-x-0 top-0 h-1.5 text-ops-signal" aria-hidden />
       <div
-        className="command-scan-line pointer-events-none absolute inset-x-0 top-0 z-0 h-px bg-[#f0542d] shadow-[0_0_18px_2px_rgba(240,84,45,0.45)]"
+        className="command-scan-line pointer-events-none absolute inset-x-0 top-0 z-0 h-px bg-ops-signal-bright shadow-[0_0_18px_2px_rgba(240,84,45,0.45)]"
         aria-hidden
       />
 
-      <div className="pointer-events-none absolute -right-32 top-[20%] h-[420px] w-[420px] rounded-full border border-[#d63f18]/25 md:-right-24 md:top-[26%]" aria-hidden>
-        <span className="absolute inset-[72px] rounded-full border border-[#d63f18]/20" />
-        <span className="absolute inset-[145px] rounded-full border border-[#d63f18]/20" />
-        <span className="absolute left-1/2 top-1/2 h-px w-1/2 -translate-y-1/2 bg-[#d63f18]/60 command-radar-sweep origin-left" />
-        <span className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-[#f0542d] shadow-[0_0_18px_5px_rgba(240,84,45,0.35)]" />
+      <div className="pointer-events-none absolute -right-32 top-[20%] h-[420px] w-[420px] rounded-full border border-ops-signal/25 md:-right-24 md:top-[26%]" aria-hidden>
+        <span className="absolute inset-[72px] rounded-full border border-ops-signal/20" />
+        <span className="absolute inset-[145px] rounded-full border border-ops-signal/20" />
+        <span className="command-radar-sweep absolute left-1/2 top-1/2 h-px w-1/2 origin-left -translate-y-1/2 bg-ops-signal/60" />
+        <span className="absolute left-1/2 top-1/2 h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full bg-ops-signal-bright shadow-[0_0_18px_5px_rgba(240,84,45,0.35)]" />
       </div>
 
       <div className="anim-rise relative z-10 flex items-center gap-3" style={{ animationDelay: "0.05s" }}>
@@ -249,7 +293,7 @@ function LoginHero() {
       </div>
 
       <div className="relative z-10 mt-auto max-w-xl pb-1 pt-6 md:my-auto md:py-14">
-        <p className="anim-rise text-xs font-bold text-[#ff8a66]" style={{ animationDelay: "0.12s" }}>
+        <p className="anim-rise text-xs font-bold text-ops-signal-soft" style={{ animationDelay: "0.12s" }}>
           구조 대응 준비 시스템
         </p>
         <h1
@@ -280,7 +324,7 @@ function LoginHero() {
           ].map(({ label, icon: Icon, color }) => (
             <span
               key={label}
-              className="flex min-h-11 items-center gap-2 border border-slate-600 bg-[#101e34] px-3 text-xs font-semibold text-slate-200"
+              className="flex min-h-11 items-center gap-2 border border-slate-600 bg-ops-panel px-3 text-xs font-semibold text-slate-200"
             >
               <Icon className={`h-4 w-4 ${color}`} aria-hidden />
               {label}
@@ -307,14 +351,14 @@ function LoginHero() {
 
 export default function LoginPage() {
   return (
-    <main className="min-h-screen md:grid md:grid-cols-[minmax(0,1.2fr)_minmax(420px,0.8fr)]">
+    <main className="min-h-dvh md:grid md:grid-cols-[minmax(0,1.2fr)_minmax(420px,0.8fr)]">
       <LoginHero />
-      <section className="relative flex min-h-[calc(100vh-260px)] items-center justify-center bg-background px-5 py-8 sm:px-8 md:min-h-screen md:px-10 md:py-10">
+      <section className="relative flex min-h-[calc(100dvh-260px)] items-center justify-center bg-background px-5 py-8 sm:px-8 md:min-h-dvh md:px-10 md:py-10">
         <div className="absolute inset-y-0 left-0 hidden w-1 bg-primary md:block" aria-hidden />
         <Suspense
           fallback={
             <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-5 w-5 animate-spin" /> 불러오는 중…
+              <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" aria-hidden /> 불러오는 중…
             </div>
           }
         >

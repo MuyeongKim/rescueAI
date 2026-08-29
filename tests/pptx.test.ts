@@ -13,6 +13,7 @@ import {
   buildSpeakerNotes,
   downloadPptx,
   formatDeckSources,
+  isSafeSlideImageData,
   MIN_BODY_FONT_SIZE,
   resolveSlideLayout,
 } from "@/lib/pptx";
@@ -58,6 +59,35 @@ describe("resolveSlideLayout", () => {
     expect(resolveSlideLayout(slide("현장 대응 사례"))).toBe("scenario");
     expect(resolveSlideLayout(slide("오늘의 핵심 요약"))).toBe("summary");
     expect(resolveSlideLayout(slide("공기호흡기 기본 원리"))).toBe("content");
+  });
+
+  it("교육 역할과 화면 구도를 분리하고 화면 구도를 우선한다", () => {
+    expect(
+      resolveSlideLayout(
+        slide("정상과 이상을 비교합니다", {
+          role: "safety",
+          composition: "comparison",
+        })
+      )
+    ).toBe("comparison");
+    expect(resolveSlideLayout(slide("시간 순서", { role: "timeline" }))).toBe("timeline");
+    expect(resolveSlideLayout(slide("조건 판단", { composition: "decision-flow" }))).toBe(
+      "decision-flow"
+    );
+    expect(
+      resolveSlideLayout(slide("교범 그림", { composition: "visual-explanation" }))
+    ).toBe("visual-explanation");
+  });
+});
+
+describe("PPTX 시각자료 입력 안전성", () => {
+  it("검증된 래스터 data URL만 허용하고 URL·SVG·과대 데이터는 거부한다", () => {
+    expect(isSafeSlideImageData("data:image/png;base64,AAAA")).toBe(true);
+    expect(isSafeSlideImageData("https://example.com/image.png")).toBe(false);
+    expect(isSafeSlideImageData("data:image/svg+xml;base64,AAAA")).toBe(false);
+    expect(isSafeSlideImageData(`data:image/png;base64,${"A".repeat(16_000_001)}`)).toBe(
+      false
+    );
   });
 });
 
@@ -113,24 +143,79 @@ describe("PPTX 실제 파일 생성", () => {
       "safety",
       "summary",
     ];
+    const sourceImageData =
+      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const enhancedSlides: GeneratedSlide[] = [
+      slide("정상 상태와 이상 상태를 나란히 구분합니다", {
+        role: "comparison",
+        composition: "comparison",
+        steps: ["정상 상태", "이상 상태"],
+        bullets: [
+          "정상 표시는 교범의 점검 위치와 기준에 따라 확인합니다",
+          "확인 결과를 동료에게 말해 다음 점검 전 누락을 막습니다",
+          "이상 표시는 즉시 사용을 멈추고 안전담당자에게 보고합니다",
+          "원인이 해소되기 전에는 장비를 다시 사용하지 않습니다",
+        ],
+      }),
+      slide("훈련은 준비부터 결과 보고까지 시간 순서로 이어집니다", {
+        role: "timeline",
+        composition: "timeline",
+        steps: ["사전 준비", "교관 시범", "대원 실습", "결과 보고"],
+      }),
+      slide("조건 확인 후 진행 또는 중단을 결정합니다", {
+        role: "decision",
+        composition: "decision-flow",
+        steps: ["상태 확인", "훈련 진행", "즉시 중단"],
+        bullets: [
+          "장비와 대원의 상태가 안전 기준에 맞는지 먼저 확인합니다",
+          "정상 상태를 확인한 경우에만 다음 단계로 진행합니다",
+          "이상 상태가 보이면 즉시 중단하고 안전담당자에게 보고합니다",
+        ],
+      }),
+      slide("교범 원문 그림에서 확인 위치를 찾습니다", {
+        role: "evidence",
+        composition: "visual-explanation",
+        bullets: [
+          "원문 그림에서 장비의 점검 위치를 먼저 찾습니다",
+          "그림의 설명과 현장 장비 상태를 차례로 비교합니다",
+        ],
+        visual: {
+          mode: "source-page",
+          documentId: 1,
+          page: 12,
+          sourceRef: "[구조대원 교육교범 p.12]",
+          altText: "구조대원 교육교범의 장비 점검 위치 그림",
+          caption: "교범 원문 장비 점검 위치",
+          fit: "contain",
+          imageData: sourceImageData,
+        },
+      }),
+    ];
     const deck: GeneratedSlideDeck = {
       title: "PPTX 다중 레이아웃 현장 교육 검증",
-      slides: layouts.map((layout, index) => ({
-        title:
-          layout === "process"
-            ? "현장 절차는 확인부터 보고까지 이어집니다"
-            : `${index + 1}번째 핵심 행동을 현장에서 확인합니다`,
-        bullets: [
-          "교관 시범을 본 뒤 대원이 같은 순서로 직접 수행합니다",
-          "이상 상태를 발견하면 즉시 중단하고 안전담당자에게 보고합니다",
-          "체크리스트로 누락 없이 수행했는지 서로 확인합니다",
-        ],
-        steps: layout === "process" ? ["위험 확인", "장비 점검", "대원 수행", "결과 보고"] : undefined,
-        notes:
-          "교관은 먼저 이 행동이 필요한 이유를 설명합니다. 정상 상태와 이상 상태를 직접 비교해 보여 줍니다. 대원에게 다음 행동을 질문하여 이해 여부를 확인합니다. 실습에서는 한 번에 한 가지 행동만 피드백합니다. 이상이 발견되면 즉시 중단하고 안전담당자에게 보고하도록 강조합니다.",
-        layout,
-        sourceRefs: ["[구조대원 교육교범 p.12]"],
-      })),
+      mode: "detailed",
+      slides: [
+        ...layouts.map((layout, index) => ({
+          title:
+            layout === "process"
+              ? "현장 절차는 확인부터 보고까지 이어집니다"
+              : `${index + 1}번째 핵심 행동을 현장에서 확인합니다`,
+          bullets: [
+            "교관 시범을 본 뒤 대원이 같은 순서로 직접 수행합니다",
+            "이상 상태를 발견하면 즉시 중단하고 안전담당자에게 보고합니다",
+            "체크리스트로 누락 없이 수행했는지 서로 확인합니다",
+          ],
+          steps:
+            layout === "process"
+              ? ["위험 확인", "장비 점검", "대원 수행", "결과 보고"]
+              : undefined,
+          notes:
+            "교관은 먼저 이 행동이 필요한 이유를 설명합니다. 정상 상태와 이상 상태를 직접 비교해 보여 줍니다. 대원에게 다음 행동을 질문하여 이해 여부를 확인합니다. 실습에서는 한 번에 한 가지 행동만 피드백합니다. 이상이 발견되면 즉시 중단하고 안전담당자에게 보고하도록 강조합니다.",
+          layout,
+          sourceRefs: ["[구조대원 교육교범 p.12]"],
+        })),
+        ...enhancedSlides,
+      ],
       sources: deckSources,
     };
 
@@ -161,6 +246,12 @@ describe("PPTX 실제 파일 생성", () => {
       // 번호·출처 같은 본문 보조 요소도 13~14pt 대신 16pt 기준을 사용한다.
       expect(slideXml).not.toContain('sz="1300"');
       expect(slideXml).not.toContain('sz="1400"');
+      expect(slideXml).toContain("상세형 교육자료");
+      expect(slideXml).toContain("구조대원 교육교범의 장비 점검 위치 그림");
+      const mediaPaths = Object.keys(zip.files).filter((name) =>
+        /^ppt\/media\/image[-\d]+\./.test(name)
+      );
+      expect(mediaPaths.length).toBeGreaterThanOrEqual(1);
     } finally {
       process.chdir(previousCwd);
       if (!requestedOutput) rmSync(workDir, { recursive: true, force: true });

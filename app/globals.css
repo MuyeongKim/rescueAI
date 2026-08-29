@@ -63,6 +63,16 @@
   --color-sidebar-border: hsl(var(--sidebar-border));
   --color-sidebar-ring: hsl(var(--sidebar-ring));
 
+  /* 구조지휘 화면 전용 색도 의미 토큰으로 노출해 컴포넌트의 직접 색상 지정을 막는다. */
+  --color-ops-navy: var(--ops-navy);
+  --color-ops-sidebar: var(--ops-sidebar);
+  --color-ops-navy-deep: var(--ops-navy-deep);
+  --color-ops-panel: var(--ops-panel);
+  --color-ops-panel-hover: var(--ops-panel-hover);
+  --color-ops-signal: var(--ops-signal);
+  --color-ops-signal-bright: var(--ops-signal-bright);
+  --color-ops-signal-soft: var(--ops-signal-soft);
+
   --radius-lg: var(--radius);
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
@@ -119,7 +129,12 @@
     --radius: 0.375rem;
     --ops-navy: #0b1426;
     --ops-sidebar: #111d31;
+    --ops-navy-deep: #0d192b;
+    --ops-panel: #1a2a43;
+    --ops-panel-hover: #17253b;
     --ops-signal: #d63f18;
+    --ops-signal-bright: #f0542d;
+    --ops-signal-soft: #ff7752;
     --ops-steel: #687487;
     --ops-ready: #168c5b;
   }
@@ -170,6 +185,10 @@
     @apply bg-background text-foreground;
     letter-spacing: 0;
   }
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
 }
 
 /* 구조지휘 콘솔 모션. 장식은 transform/opacity만 움직여 레이아웃을 건드리지 않는다. */
@@ -211,6 +230,14 @@
     animation: rise-in 0.7s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   }
   @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
     .command-scan-line,
     .command-radar-sweep,
     .command-status-pulse { animation: none; }
