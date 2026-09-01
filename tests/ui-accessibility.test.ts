@@ -550,6 +550,16 @@ describe("넓은 훈련 주제 세부 방향", () => {
             sourceRefs: ["[로프구조 교범 p.8]"],
           },
         ],
+        similarMaterials: [
+          {
+            id: 37,
+            kind: "plan",
+            title: "산악사고 대비 훈련계획",
+            topic: "산악사고대비 훈련",
+            focus: "조난자 수색구역 설정",
+            createdAt: "2026-09-01T00:00:00.000Z",
+          },
+        ],
         recommendedId: "focus-1",
         selectedId: "focus-1",
         customValue: "",
@@ -568,8 +578,17 @@ describe("넓은 훈련 주제 세부 방향", () => {
     expect(html).toContain('role="status"');
     expect(html).toContain("min-h-12");
     expect(html).toContain("선택됨");
-    expect(html).toContain("최근 세부 방향과 겹침 적음");
+    expect(html).toContain("이 계정 저장 자료와 겹침 적음");
     expect(html).toContain("SOP·표준절차의 적용 여부와 근거 상태");
+    expect(html).toContain("<details");
+    expect(html).toContain("<summary");
+    expect(html).toContain("이 계정의 최근 유사 자료");
+    expect(html).toContain("1건 표시");
+    expect(html).toContain("최대 5건 표시합니다");
+    expect(html).toContain("훈련계획");
+    expect(html).toContain("열어 편집");
+    expect(html).toContain('href="/generate?m=37"');
+    expect(html).toContain("작성자는 공유 로그인 환경에서 구분되지 않습니다");
     expect(html.match(/\(추천\)/g)).toHaveLength(1);
     expect(html).toMatch(/조난자 수색구역 설정[\s\S]*?\(추천\)[\s\S]*?급경사 로프 접근과 확보/);
   });
@@ -587,6 +606,7 @@ describe("넓은 훈련 주제 세부 방향", () => {
             sourceRefs: ["[데모 연결 교범 p.1]"],
           },
         ],
+        similarMaterials: [],
         customValue: "",
         historyCompared: false,
         warnings: [],
@@ -599,6 +619,7 @@ describe("넓은 훈련 주제 세부 방향", () => {
     );
 
     expect(html).not.toContain("(추천)");
+    expect(html).not.toContain("이 계정의 최근 유사 자료");
   });
 });
 

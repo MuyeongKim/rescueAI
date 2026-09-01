@@ -1,19 +1,119 @@
 "use client";
 
+import Link from "next/link";
 import type { RefObject } from "react";
 import {
   AlertTriangle,
+  ChevronDown,
+  ChevronRight,
   CheckCircle2,
+  FileClock,
   Loader2,
   RefreshCw,
   ShieldCheck,
 } from "lucide-react";
 
-import type { TrainingFocusOption } from "@/lib/generate-focus";
+import type {
+  SimilarTrainingMaterial,
+  TrainingFocusOption,
+} from "@/lib/generate-focus";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+
+const MATERIAL_KIND_LABELS: Record<SimilarTrainingMaterial["kind"], string> = {
+  plan: "훈련계획",
+  lesson: "교안",
+  slides: "슬라이드",
+};
+
+function formatSavedDate(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "저장일 확인 불가";
+  return `${new Intl.DateTimeFormat("ko-KR", {
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    timeZone: "Asia/Seoul",
+  }).format(date)} 저장`;
+}
+
+function SimilarMaterialsDetails({
+  materials,
+}: {
+  materials: readonly SimilarTrainingMaterial[];
+}) {
+  if (materials.length === 0) return null;
+
+  return (
+    <details className="group rounded-lg border border-border/80 bg-background/80">
+      <summary className="flex min-h-12 cursor-pointer list-none items-center justify-between gap-3 px-3 py-2.5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+        <span className="flex min-w-0 items-center gap-2">
+          <FileClock className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <span className="text-sm font-semibold text-foreground">
+            이 계정의 최근 유사 자료
+          </span>
+          <span className="shrink-0 rounded-full border border-border bg-muted px-2 py-0.5 text-xs font-semibold text-muted-foreground">
+            {materials.length}건 표시
+          </span>
+        </span>
+        <ChevronDown
+          className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-open:rotate-180 motion-reduce:transition-none"
+          aria-hidden="true"
+        />
+      </summary>
+      <div className="space-y-2 border-t border-border/70 p-3">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          같은 계정의 최근 저장 자료 중 주제가 유사한 항목을 최대 5건 표시합니다.
+          작성자는 공유 로그인 환경에서 구분되지 않습니다.
+        </p>
+        <ul className="space-y-2">
+          {materials.map((material) => (
+            <li
+              key={material.id}
+              className="flex flex-col gap-2 rounded-md border border-border/70 bg-muted/20 p-3 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0 space-y-1">
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="shrink-0 rounded-full border border-border bg-background px-2 py-0.5 text-xs font-semibold text-muted-foreground">
+                    {MATERIAL_KIND_LABELS[material.kind]}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {formatSavedDate(material.createdAt)}
+                  </span>
+                </div>
+                <p className="break-words text-sm font-semibold leading-snug text-foreground">
+                  {material.title}
+                </p>
+                {material.focus && material.focus !== material.topic && (
+                  <p className="break-words text-xs leading-relaxed text-muted-foreground">
+                    세부 방향: {material.focus}
+                  </p>
+                )}
+              </div>
+              <Link
+                href={`/generate?m=${material.id}`}
+                aria-label={`${material.title} 열어 편집`}
+                className="inline-flex min-h-12 shrink-0 items-center justify-center gap-1 rounded-md border border-border bg-background px-3 text-sm font-semibold text-primary transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:self-center"
+              >
+                열어 편집
+                <ChevronRight className="h-4 w-4" aria-hidden="true" />
+              </Link>
+            </li>
+          ))}
+        </ul>
+        <Link
+          href="/generate/saved"
+          className="inline-flex min-h-12 items-center gap-1 px-1 text-sm font-semibold text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          저장 자료 전체 보기
+          <ChevronRight className="h-4 w-4" aria-hidden="true" />
+        </Link>
+      </div>
+    </details>
+  );
+}
 
 export type TopicFocusPanelStatus = "loading" | "refreshing" | "choosing" | "error";
 
@@ -21,6 +121,7 @@ export function TopicFocusPanel({
   topic,
   status,
   options,
+  similarMaterials,
   recommendedId,
   selectedId,
   customValue,
@@ -38,6 +139,7 @@ export function TopicFocusPanel({
   topic: string;
   status: TopicFocusPanelStatus;
   options: readonly TrainingFocusOption[];
+  similarMaterials: readonly SimilarTrainingMaterial[];
   recommendedId?: string;
   selectedId?: string;
   customValue: string;
@@ -61,7 +163,7 @@ export function TopicFocusPanel({
         ? "겹침이 적은 다른 세부 방향을 찾고 있습니다"
         : status === "error"
           ? "세부 훈련 방향을 찾지 못했습니다"
-          : `‘${topic}’의 세부 방향을 선택하세요`;
+          : `‘${topic}’의 새 세부 방향을 선택하세요`;
   const liveMessage =
     status === "loading"
       ? "세부 훈련 방향을 찾고 있습니다."
@@ -113,6 +215,7 @@ export function TopicFocusPanel({
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>{error ?? "세부 훈련 방향을 찾지 못했습니다."}</p>
           </div>
+          <SimilarMaterialsDetails materials={similarMaterials} />
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
             <Button
               type="button"
@@ -167,6 +270,7 @@ export function TopicFocusPanel({
                     title: "",
                     description: "",
                     sourceRefs: [],
+                    historyOverlap: undefined,
                   }))
                 : options
               ).map((option) => {
@@ -235,12 +339,16 @@ export function TopicFocusPanel({
                         className={cn(
                           "mt-auto pt-2 text-xs font-medium",
                           historyCompared
-                            ? "text-emerald-700 dark:text-emerald-300"
+                            ? option.historyOverlap === "similar"
+                              ? "text-amber-700 dark:text-amber-300"
+                              : "text-emerald-700 dark:text-emerald-300"
                             : "text-amber-700 dark:text-amber-300"
                         )}
                       >
                         {historyCompared
-                          ? "최근 세부 방향과 겹침 적음"
+                          ? option.historyOverlap === "similar"
+                            ? "이 계정 저장 자료와 일부 유사"
+                            : "이 계정 저장 자료와 겹침 적음"
                           : "최근 저장 자료 비교 미완료"}
                       </span>
                     </Label>
@@ -325,6 +433,8 @@ export function TopicFocusPanel({
               {selectionError}
             </p>
           )}
+
+          <SimilarMaterialsDetails materials={similarMaterials} />
 
           {warnings.length > 0 && (
             <ul className="space-y-1 text-sm leading-relaxed text-amber-700 dark:text-amber-300">

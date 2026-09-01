@@ -71,6 +71,29 @@ describe("buildTopicSearchPlans", () => {
     expect(plans[1]).toMatchObject({ id: "topic", mode: "precise" });
   });
 
+  it("암모니아 누출 주제를 누출·누설·유출·차단·중화 검색으로 확장한다", () => {
+    const plans = buildTopicSearchPlans("암모니아 누출시 대응");
+    const leakPlan = plans.find((plan) => plan.id === "leak-control");
+
+    expect(leakPlan).toMatchObject({
+      mode: "precise",
+      subject: "암모니아",
+      protect: true,
+    });
+    expect(leakPlan?.queries).toEqual(
+      expect.arrayContaining([
+        "암모니아 누출",
+        "암모니아 누설",
+        "암모니아 유출",
+        "암모니아 차단",
+        "암모니아 중화",
+      ])
+    );
+    expect(plans.flatMap((plan) => plan.queries).length).toBeLessThanOrEqual(
+      MAX_KEYWORD_SEARCH_QUERIES
+    );
+  });
+
   it.each([
     [
       "화학보호복을 입기 전에 대원이 점검해야 할 항목을 순서대로 알려줘",

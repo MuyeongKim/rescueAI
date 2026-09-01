@@ -33,7 +33,7 @@ function requestWith(body: unknown): Request {
   });
 }
 
-function makeClient(rows: unknown[] = []) {
+function makeClient(rows: unknown[] = [], error: { message: string } | null = null) {
   const eqs: Array<[string, unknown]> = [];
   const builder = {
     select: vi.fn(() => builder),
@@ -43,14 +43,14 @@ function makeClient(rows: unknown[] = []) {
     }),
     in: vi.fn(() => builder),
     order: vi.fn(() => builder),
-    limit: vi.fn().mockResolvedValue({ data: rows, error: null }),
+    limit: vi.fn().mockResolvedValue({ data: rows, error }),
   };
   return { from: vi.fn(() => builder), eqs };
 }
 
 const context = {
   contextText:
-    "[산악구조 교범 p.12]\n수색 구역을 나누고 조난자 위치를 확인한다.\n\n---\n\n" +
+    "[산악구조 교범 p.12]\n수색 구역을 설정하고 나누어 조난자 위치를 확인한다.\n\n---\n\n" +
     "[로프구조 교범 p.8]\n급경사 접근 전 확보 지점을 확인한다.",
   sources: [],
   bindingSources: [],
@@ -121,8 +121,13 @@ describe("POST /api/generate/focus", () => {
   it("넓은 주제는 현재 사용자 저장 이력만 조회하고 근거 있는 방향을 반환한다", async () => {
     const client = makeClient([
       {
+        id: 91,
+        kind: "plan",
+        category: "산악",
         topic: "산악사고대비 훈련",
+        title: "산악사고 대비 훈련계획",
         focus: "조난자 수색구역 설정과 위치 확인",
+        created_at: "2026-08-31T03:00:00.000Z",
       },
     ]);
     mocks.createClient.mockResolvedValue(client);
@@ -136,13 +141,128 @@ describe("POST /api/generate/focus", () => {
     expect(client.eqs).toContainEqual(["user_id", "user-1"]);
     expect(client.eqs).toContainEqual(["category", "산악"]);
     const builder = client.from.mock.results[0]?.value;
-    expect(builder.select).toHaveBeenCalledWith("topic, focus:content->>focus");
+    expect(builder.select).toHaveBeenCalledWith(
+      "id, kind, category, topic, title, created_at, focus:content->>focus"
+    );
+    expect(builder.in).toHaveBeenCalledWith("kind", ["plan", "lesson", "slides"]);
     expect(payload.scope).toBe("broad");
     expect(payload.options.map((option: { title: string }) => option.title)).toEqual([
       "급경사 로프 접근과 확보",
+      "조난자 수색구역 설정과 위치 확인",
     ]);
+    expect(
+      payload.options.map((option: { historyOverlap: string }) => option.historyOverlap)
+    ).toEqual(["low", "similar"]);
     expect(payload.recommendedId).toBe("focus-1");
-    expect(payload.warnings).toContain("연결 자료 범위에서 서로 다른 방향을 4개보다 적게 찾았습니다.");
+    expect(payload.similarMaterials).toEqual([
+      {
+        id: 91,
+        kind: "plan",
+        title: "산악사고 대비 훈련계획",
+        topic: "산악사고대비 훈련",
+        focus: "조난자 수색구역 설정과 위치 확인",
+        createdAt: "2026-08-31T03:00:00.000Z",
+      },
+    ]);
+    expect(Object.keys(payload.similarMaterials[0]).sort()).toEqual(
+      ["createdAt", "focus", "id", "kind", "title", "topic"].sort()
+    );
+    expect(payload.warnings).toContain(
+      "연결 자료 범위에서 새로 제안할 방향을 4개보다 적게 찾았습니다."
+    );
+  });
+
+  it("현재 추천 세션에서 이미 본 방향만 hard exclusion으로 제거한다", async () => {
+    const response = await POST(
+      requestWith({
+        category: "산악",
+        topic: "산악사고대비 훈련",
+        excludeFocuses: ["조난자 수색구역 설정과 위치 확인"],
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.options.map((option: { title: string }) => option.title)).toEqual([
+      "급경사 로프 접근과 확보",
+    ]);
+  });
+
+  it("같은 분야라도 다른 상위 주제의 저장 자료는 추천 순위와 하단 목록에 섞지 않는다", async () => {
+    mocks.createClient.mockResolvedValue(
+      makeClient([
+        {
+          id: 92,
+          kind: "lesson",
+          category: "산악",
+          topic: "산악 로프구조 훈련",
+          title: "로프구조 교안",
+          focus: "조난자 수색구역 설정과 위치 확인",
+          created_at: "2026-08-30T03:00:00.000Z",
+        },
+      ])
+    );
+
+    const response = await POST(
+      requestWith({ category: "산악", topic: "산악사고대비 훈련" })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.options[0].title).toBe("조난자 수색구역 설정과 위치 확인");
+    expect(payload.similarMaterials).toEqual([]);
+  });
+
+  it("새 추천이 없어도 같은 주제의 저장 자료가 있으면 정상 응답으로 재사용 경로를 제공한다", async () => {
+    mocks.createClient.mockResolvedValue(
+      makeClient([
+        {
+          id: 93,
+          kind: "slides",
+          category: "산악",
+          topic: "산악사고 대비 훈련",
+          title: "산악사고 대응 슬라이드",
+          focus: "급경사 로프 접근과 확보",
+          created_at: "2026-08-29T03:00:00.000Z",
+        },
+      ])
+    );
+    mocks.generateObject.mockResolvedValue({
+      object: {
+        options: [
+          {
+            title: "근거 없는 방향",
+            description: "연결 자료에 없는 방향을 임의로 설명합니다.",
+            sourceRefs: ["[조작한 SOP p.99]"],
+          },
+        ],
+      },
+    });
+
+    const response = await POST(
+      requestWith({ category: "산악", topic: "산악사고대비 훈련" })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.options).toEqual([]);
+    expect(payload.recommendedId).toBeUndefined();
+    expect(payload.similarMaterials).toHaveLength(1);
+  });
+
+  it("저장 이력 조회가 실패해도 추천을 반환하고 유사 자료 비교 경고를 표시한다", async () => {
+    mocks.createClient.mockResolvedValue(makeClient([], { message: "temporary failure" }));
+
+    const response = await POST(
+      requestWith({ category: "산악", topic: "산악사고대비 훈련" })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.options).toHaveLength(2);
+    expect(payload.similarMaterials).toEqual([]);
+    expect(payload.historyBasis).toBe("request-only");
+    expect(payload.warnings).toContain("최근 저장 자료와의 중복 비교를 완료하지 못했습니다.");
   });
 
   it("허용 목록에 없는 출처만 만든 경우 억지로 옵션을 반환하지 않는다", async () => {

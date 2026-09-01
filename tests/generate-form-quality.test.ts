@@ -7,6 +7,7 @@ import {
   localQuality,
   normalizedEvidenceIssueIndices,
   restoreTopicFocusAfterRequestAbort,
+  safeSimilarTrainingMaterials,
   shouldApplyQualityRepairResponse,
   shouldApplyEvidenceRepairResponse,
   shouldForceLegacySopSlideRecovery,
@@ -46,6 +47,16 @@ describe("편집 후 SOP 상태 경고", () => {
       restoreTopicFocusAfterRequestAbort({
         status: "refreshing",
         options: [option],
+        similarMaterials: [
+          {
+            id: 7,
+            kind: "plan",
+            title: "야간 산악수색 훈련계획",
+            topic: "산악사고 대비 훈련",
+            focus: option.title,
+            createdAt: "2026-09-01T00:00:00.000Z",
+          },
+        ],
         warnings: [],
         recommendedId: option.id,
         selectedId: option.id,
@@ -56,7 +67,28 @@ describe("편집 후 SOP 상태 경고", () => {
       status: "choosing",
       recommendedId: "focus-1",
       selectedId: "focus-1",
+      similarMaterials: [{ id: 7 }],
     });
+  });
+
+  it("유사 저장 자료 응답은 양의 ID·지원 유형·유효한 저장일만 허용한다", () => {
+    const valid = {
+      id: 18,
+      kind: "slides",
+      title: "암모니아 누출 대응 슬라이드",
+      topic: "암모니아 누출시 대응",
+      focus: "누출원 확인과 공급 차단",
+      createdAt: "2026-09-01T03:00:00.000Z",
+    };
+
+    expect(
+      safeSimilarTrainingMaterials([
+        valid,
+        { ...valid, id: -1 },
+        { ...valid, id: 19, kind: "notebooklm" },
+        { ...valid, id: 20, createdAt: "invalid" },
+      ])
+    ).toEqual([valid]);
   });
 
   it("선택한 세부 방향만 바뀌어도 새 방향 조회 응답은 폐기하지 않는다", () => {

@@ -4,11 +4,14 @@ import { z } from "zod";
 import { requireApiUser } from "@/lib/auth";
 import { DEMO } from "@/lib/demo";
 import {
+  MAX_TRAINING_FOCUS_CANDIDATES,
+  MAX_TRAINING_FOCUS_OPTIONS,
   buildTrainingFocusSuggestionPrompt,
   extractTrainingFocusEvidenceBySource,
-  filterGroundedTrainingFocusOptions,
+  filterGroundedTrainingFocusOptionsWithDiagnostics,
   isLikelyBroadTrainingTopic,
   trainingFocusSuggestionsSchema,
+  type SimilarTrainingMaterial,
   type TrainingFocusOption,
 } from "@/lib/generate-focus";
 import { extractSourceLabels } from "@/lib/generate";
@@ -20,6 +23,11 @@ import {
 import { getChatModel } from "@/lib/llm";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { createClient } from "@/lib/supabase/server";
+import {
+  prioritizeTrainingFocusOptions,
+  selectTrainingTopicHistory,
+  type StoredTrainingMaterialRow,
+} from "@/lib/training-focus-history";
 
 export const maxDuration = 60;
 
@@ -31,26 +39,6 @@ const requestSchema = z
     model: z.string().trim().max(100).optional(),
   })
   .strip();
-
-type StoredFocusRow = {
-  topic: string | null;
-  focus: string | null;
-};
-
-function storedFocuses(rows: readonly StoredFocusRow[]): string[] {
-  const focuses = new Set<string>();
-  for (const row of rows) {
-    if (typeof row.focus === "string" && row.focus.trim().length >= 2) {
-      focuses.add(row.focus.trim().slice(0, 100));
-      continue;
-    }
-    // 기능 도입 전 저장본은 focus가 없으므로 구체적인 기존 주제를 중복 비교 기준으로 보완한다.
-    if (typeof row.topic === "string" && row.topic.trim().length >= 2) {
-      focuses.add(row.topic.trim().slice(0, 100));
-    }
-  }
-  return Array.from(focuses);
-}
 
 function demoOptions(category: string): TrainingFocusOption[] {
   const examples: Record<string, Array<[string, string]>> = {
@@ -83,11 +71,17 @@ export async function POST(request: Request) {
     try {
       const parsed = requestSchema.parse(input);
       if (!isLikelyBroadTrainingTopic(parsed.topic)) {
-        return Response.json({ scope: "specific", options: [], warnings: [] });
+        return Response.json({
+          scope: "specific",
+          options: [],
+          similarMaterials: [],
+          warnings: [],
+        });
       }
       return Response.json({
         scope: "broad",
         options: demoOptions(parsed.category),
+        similarMaterials: [],
         // 데모 후보는 고정 예시라 입력 주제에 따른 추천 순위를 단정하지 않는다.
         warnings: [],
         historyBasis: "demo",
@@ -119,15 +113,20 @@ export async function POST(request: Request) {
   }
   const { category, topic, excludeFocuses, model } = parsed.data;
   if (!isLikelyBroadTrainingTopic(topic)) {
-    return Response.json({ scope: "specific", options: [], warnings: [] });
+    return Response.json({
+      scope: "specific",
+      options: [],
+      similarMaterials: [],
+      warnings: [],
+    });
   }
 
   try {
     const [context, historyResult] = await Promise.all([
       fetchCategoryContext(category, 40, topic),
       (supabase.from as CallableFunction)("generated_materials")
-        // 저장 본문 전체를 내려받지 않고 중복 비교에 필요한 JSON 문자열 하나만 투영한다.
-        .select("topic, focus:content->>focus")
+        // 본문 전체를 내려받지 않고 유사 자료 안내와 중복 비교에 필요한 최소 필드만 투영한다.
+        .select("id, kind, category, topic, title, created_at, focus:content->>focus")
         .eq("user_id", auth.user.id)
         .eq("category", category)
         .in("kind", ["plan", "lesson", "slides"])
@@ -145,16 +144,21 @@ export async function POST(request: Request) {
     }
 
     const allowedSourceRefs = extractSourceLabels(context.contextText);
-    const recentFocuses = historyResult.error
-      ? []
-      : storedFocuses((historyResult.data ?? []) as StoredFocusRow[]);
-    const excluded = Array.from(new Set([...recentFocuses, ...excludeFocuses])).slice(0, 120);
+    const topicHistory = historyResult.error
+      ? { comparisonFocuses: [] as string[], similarMaterials: [] as SimilarTrainingMaterial[] }
+      : selectTrainingTopicHistory(
+          (historyResult.data ?? []) as StoredTrainingMaterialRow[],
+          topic
+        );
+    // 저장 이력은 새 후보를 삭제하지 않고 뒤로 정렬한다. 현재 추천 세션에서 이미 본 방향만
+    // hard exclusion으로 유지해 ‘다른 방향 추천’의 의미를 보장한다.
+    const sessionExcluded = Array.from(new Set(excludeFocuses)).slice(0, 60);
     const prompt = buildTrainingFocusSuggestionPrompt({
       category,
       topic,
       contextText: context.contextText,
       allowedSourceRefs,
-      excludedFocuses: excluded,
+      excludedFocuses: sessionExcluded,
     });
 
     let activeModel = model;
@@ -176,25 +180,45 @@ export async function POST(request: Request) {
       generated = await run();
     }
 
-    const options = filterGroundedTrainingFocusOptions(
+    const filtered = filterGroundedTrainingFocusOptionsWithDiagnostics(
       generated.object.options,
       allowedSourceRefs,
-      excluded,
-      undefined,
-      extractTrainingFocusEvidenceBySource(context.contextText)
+      sessionExcluded,
+      {
+        evidenceBySource: extractTrainingFocusEvidenceBySource(context.contextText),
+        maxOptions: MAX_TRAINING_FOCUS_CANDIDATES,
+      }
     );
-    if (options.length === 0) {
+    const options = prioritizeTrainingFocusOptions(
+      filtered.options,
+      topicHistory.comparisonFocuses
+    )
+      .slice(0, MAX_TRAINING_FOCUS_OPTIONS)
+      .map((option, index) => ({ ...option, id: `focus-${index + 1}` }));
+    if (
+      filtered.diagnostics.totalCandidates !== filtered.diagnostics.accepted ||
+      options.length < 4
+    ) {
+      // 사용자 입력·문서 원문은 로그에 넣지 않고 단계별 개수만 남긴다.
+      console.info("[generate/focus] 후보 선별 집계:", {
+        totalCandidates: filtered.diagnostics.totalCandidates,
+        acceptedBeforeRanking: filtered.diagnostics.accepted,
+        finalOptions: options.length,
+        ...filtered.diagnostics.rejected,
+      });
+    }
+    if (options.length === 0 && topicHistory.similarMaterials.length === 0) {
       return Response.json(
         {
           error:
-            "현재 연결 자료와 최근 생성 이력 안에서는 근거가 있는 새 훈련 방향을 찾지 못했습니다.",
+            "현재 연결 자료에서는 근거가 있는 새 훈련 방향을 찾지 못했습니다.",
         },
         { status: 422 }
       );
     }
     const warnings = [
       ...(options.length < 4
-        ? ["연결 자료 범위에서 서로 다른 방향을 4개보다 적게 찾았습니다."]
+        ? ["연결 자료 범위에서 새로 제안할 방향을 4개보다 적게 찾았습니다."]
         : []),
       ...(context.degraded ? ["자료 검색 일부 기능이 제한되었습니다."] : []),
       ...(historyResult.error ? ["최근 저장 자료와의 중복 비교를 완료하지 못했습니다."] : []),
@@ -203,8 +227,9 @@ export async function POST(request: Request) {
     return Response.json({
       scope: "broad",
       options,
+      similarMaterials: topicHistory.similarMaterials,
       // 프롬프트의 추천 우선순위와 서버의 근거·중복 필터를 모두 통과한 최상위 후보다.
-      recommendedId: options[0].id,
+      recommendedId: options[0]?.id,
       warnings,
       historyBasis: historyResult.error ? "request-only" : "saved-materials",
     });

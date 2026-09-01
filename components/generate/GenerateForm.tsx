@@ -67,6 +67,7 @@ import { TopicFocusPanel } from "@/components/generate/TopicFocusPanel";
 import {
   focusRequestFingerprint,
   isLikelyBroadTrainingTopic,
+  type SimilarTrainingMaterial,
   type TrainingFocusOption,
 } from "@/lib/generate-focus";
 import type { SopEvidence } from "@/lib/sop-evidence";
@@ -92,10 +93,15 @@ const SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE =
 
 type TopicFocusState =
   | { status: "idle" }
-  | { status: "loading"; options: TrainingFocusOption[] }
+  | {
+      status: "loading";
+      options: TrainingFocusOption[];
+      similarMaterials: SimilarTrainingMaterial[];
+    }
   | {
       status: "refreshing";
       options: TrainingFocusOption[];
+      similarMaterials: SimilarTrainingMaterial[];
       warnings: string[];
       recommendedId?: string;
       selectedId?: string;
@@ -105,6 +111,7 @@ type TopicFocusState =
   | {
       status: "choosing";
       options: TrainingFocusOption[];
+      similarMaterials: SimilarTrainingMaterial[];
       warnings: string[];
       recommendedId?: string;
       selectedId?: string;
@@ -112,7 +119,11 @@ type TopicFocusState =
       historyCompared: boolean;
       error?: string;
     }
-  | { status: "error"; message: string }
+  | {
+      status: "error";
+      message: string;
+      similarMaterials: SimilarTrainingMaterial[];
+    }
   | { status: "resolved"; focus: string }
   | { status: "bypassed" };
 
@@ -126,12 +137,50 @@ export function restoreTopicFocusAfterRequestAbort(
   return {
     status: "choosing",
     options: current.options,
+    similarMaterials: current.similarMaterials,
     warnings: current.warnings,
     recommendedId: current.recommendedId,
     selectedId: current.selectedId,
     customValue: current.customValue,
     historyCompared: current.historyCompared,
   };
+}
+
+/** 네트워크 응답의 저장 자료 ID·유형을 다시 제한해 편집 링크를 안전하게 만든다. */
+export function safeSimilarTrainingMaterials(value: unknown): SimilarTrainingMaterial[] {
+  if (!Array.isArray(value)) return [];
+  const supportedKinds = new Set<SimilarTrainingMaterial["kind"]>([
+    "plan",
+    "lesson",
+    "slides",
+  ]);
+  return value
+    .filter((item): item is SimilarTrainingMaterial => {
+      if (!item || typeof item !== "object") return false;
+      const candidate = item as Partial<SimilarTrainingMaterial>;
+      return (
+        Number.isSafeInteger(candidate.id) &&
+        Number(candidate.id) > 0 &&
+        typeof candidate.title === "string" &&
+        candidate.title.trim().length > 0 &&
+        candidate.title.length <= 200 &&
+        typeof candidate.topic === "string" &&
+        candidate.topic.length <= 100 &&
+        typeof candidate.focus === "string" &&
+        candidate.focus.length <= 100 &&
+        typeof candidate.kind === "string" &&
+        supportedKinds.has(candidate.kind as SimilarTrainingMaterial["kind"]) &&
+        typeof candidate.createdAt === "string" &&
+        Number.isFinite(Date.parse(candidate.createdAt))
+      );
+    })
+    .slice(0, 5)
+    .map((item) => ({
+      ...item,
+      title: item.title.trim(),
+      topic: item.topic.trim(),
+      focus: item.focus.trim(),
+    }));
 }
 
 type ResultGenerationContext = {
@@ -1729,6 +1778,7 @@ export function GenerateForm({
       topicFocus.status === "choosing" || topicFocus.status === "refreshing"
         ? {
             options: topicFocus.options,
+            similarMaterials: topicFocus.similarMaterials,
             warnings: topicFocus.warnings,
             recommendedId: topicFocus.recommendedId,
             selectedId: topicFocus.selectedId,
@@ -1737,6 +1787,7 @@ export function GenerateForm({
           }
         : {
             options: [] as TrainingFocusOption[],
+            similarMaterials: [] as SimilarTrainingMaterial[],
             warnings: [] as string[],
             recommendedId: undefined,
             selectedId: undefined,
@@ -1757,7 +1808,7 @@ export function GenerateForm({
     setTopicFocus(
       refresh
         ? { status: "refreshing", ...previousChoice }
-        : { status: "loading", options: [] }
+        : { status: "loading", options: [], similarMaterials: [] }
     );
 
     try {
@@ -1776,6 +1827,7 @@ export function GenerateForm({
         | {
             scope?: "specific" | "broad";
             options?: TrainingFocusOption[];
+            similarMaterials?: SimilarTrainingMaterial[];
             recommendedId?: string;
             warnings?: string[];
             historyBasis?: "demo" | "saved-materials" | "request-only";
@@ -1806,6 +1858,7 @@ export function GenerateForm({
         setTopicFocus({
           status: "error",
           message,
+          similarMaterials: safeSimilarTrainingMaterials(payload?.similarMaterials),
         });
         requestAnimationFrame(() => focusHeadingRef.current?.focus());
         return;
@@ -1816,12 +1869,17 @@ export function GenerateForm({
         return;
       }
       const options = Array.isArray(payload?.options) ? payload.options.slice(0, 5) : [];
+      const similarMaterials = safeSimilarTrainingMaterials(payload?.similarMaterials);
       if (options.length === 0) {
-        const message = "연결 자료 범위에서는 근거가 있는 세부 방향을 찾지 못했습니다.";
+        const message =
+          similarMaterials.length > 0
+            ? "새로 제안할 세부 방향은 찾지 못했습니다. 아래 저장 자료를 열거나 입력한 주제로 종합훈련을 만들 수 있습니다."
+            : "연결 자료 범위에서는 근거가 있는 세부 방향을 찾지 못했습니다.";
         if (restoreResolvedFocus(message)) return;
         setTopicFocus({
           status: "error",
           message,
+          similarMaterials,
         });
         requestAnimationFrame(() => focusHeadingRef.current?.focus());
         return;
@@ -1833,11 +1891,12 @@ export function GenerateForm({
       setTopicFocus({
         status: "choosing",
         options,
+        similarMaterials,
         recommendedId,
         warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
         customValue: "",
         historyCompared:
-          payload?.historyBasis === "saved-materials" || payload?.historyBasis === "demo",
+          payload?.historyBasis === "saved-materials",
       });
       requestAnimationFrame(() => {
         const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
@@ -1869,6 +1928,7 @@ export function GenerateForm({
       setTopicFocus({
         status: "error",
         message,
+        similarMaterials: [],
       });
       requestAnimationFrame(() => focusHeadingRef.current?.focus());
     } finally {
@@ -2525,6 +2585,9 @@ export function GenerateForm({
                 topic={topic.trim()}
                 status={topicFocus.status}
                 options={"options" in topicFocus ? topicFocus.options : []}
+                similarMaterials={
+                  "similarMaterials" in topicFocus ? topicFocus.similarMaterials : []
+                }
                 recommendedId={
                   topicFocus.status === "choosing" || topicFocus.status === "refreshing"
                     ? topicFocus.recommendedId

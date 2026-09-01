@@ -1,13 +1,16 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_FOCUSED_TRAINING_QUERY_CHARS,
+  MAX_TRAINING_FOCUS_CANDIDATES,
   MAX_TRAINING_FOCUS_OPTIONS,
+  TRAINING_FOCUS_BATCH_CONCEPT_OVERLAP_THRESHOLD,
   TRAINING_FOCUS_CONCEPT_OVERLAP_THRESHOLD,
   TRAINING_FOCUS_SIMILARITY_THRESHOLD,
   buildFocusedTrainingQuery,
   buildTrainingFocusSuggestionPrompt,
   extractTrainingFocusEvidenceBySource,
   filterGroundedTrainingFocusOptions,
+  filterGroundedTrainingFocusOptionsWithDiagnostics,
   isLikelyBroadTrainingTopic,
   normalizeTrainingFocusText,
   trainingFocusConceptOverlap,
@@ -101,7 +104,7 @@ describe("buildFocusedTrainingQuery", () => {
 });
 
 describe("buildTrainingFocusSuggestionPrompt", () => {
-  it("RAG 근거·정확한 출처·과거 중복 제외·부족 시 소수 반환을 명시한다", () => {
+  it("RAG 근거·수행축 다양성·출처 원어 사용·과거 중복 제외를 명시한다", () => {
     const prompt = buildTrainingFocusSuggestionPrompt({
       category: "산악",
       topic: "산악사고대비 훈련",
@@ -113,7 +116,9 @@ describe("buildTrainingFocusSuggestionPrompt", () => {
     expect(prompt).toContain("분야: 산악");
     expect(prompt).toContain("상위 주제: 산악사고대비 훈련");
     expect(prompt).toContain("일반 상식이나 추측으로 내용을 보충하지 않습니다");
-    expect(prompt).toContain("근거가 부족하면 0~3개만 반환");
+    expect(prompt).toContain(`6~${MAX_TRAINING_FOCUS_CANDIDATES}개`);
+    expect(prompt).toContain("서로 다른 주요 수행축");
+    expect(prompt).toContain("출처 본문에서 실제 사용한 장비명·행동명·절차명");
     expect(prompt).toContain("철자와 공백까지 정확히 복사");
     expect(prompt).toContain("야간 산악 실종자 수색과 위치 확인");
     expect(prompt.match(/\[산악구조 교육교범 p\.12\]/g)).toHaveLength(2);
@@ -171,6 +176,24 @@ describe("filterGroundedTrainingFocusOptions", () => {
       "산악구조 통신망 운용 및 지휘",
     ]);
     expect(options.map((option) => option.id)).toEqual(["focus-1", "focus-2"]);
+  });
+
+  it("후보끼리는 0.85 미만의 개념 겹침을 서로 다른 수행축으로 남긴다", () => {
+    const first = "암모니아 누출원 확인 밸브 차단";
+    const second = "밸브 폐쇄를 위한 암모니아 누출원 확인";
+    const overlap = trainingFocusConceptOverlap(first, second);
+
+    expect(overlap).toBeGreaterThanOrEqual(TRAINING_FOCUS_CONCEPT_OVERLAP_THRESHOLD);
+    expect(overlap).toBeLessThan(TRAINING_FOCUS_BATCH_CONCEPT_OVERLAP_THRESHOLD);
+    expect(trainingFocusSimilarity(first, second)).toBeLessThan(
+      TRAINING_FOCUS_SIMILARITY_THRESHOLD
+    );
+    expect(
+      filterGroundedTrainingFocusOptions(
+        [candidate(first), candidate(second)],
+        [SOURCE_A]
+      ).map((option) => option.title)
+    ).toEqual([first, second]);
   });
 
   it("어순을 바꾼 유사 훈련도 과거 방향의 새 변형으로 다시 제시하지 않는다", () => {
@@ -255,11 +278,78 @@ describe("filterGroundedTrainingFocusOptions", () => {
     expect(insufficient).toEqual([]);
   });
 
-  it("LLM 응답 스키마는 빈 배열과 최대 5개를 허용하지만 6개는 거부한다", () => {
+  it("상세 필터는 최대 8개 검증 후보와 탈락 사유 집계를 반환한다", () => {
+    const distinct = [
+      "야간 조난자 위치 탐색",
+      "급경사지 들것 인양",
+      "암벽 추락사고 접근",
+      "산악 통신 음영지역 지휘",
+      "저체온 요구조자 응급처치",
+      "헬기 연계 인계지점 운영",
+      "계곡 고립자 도하 구조",
+      "낙석 위험구역 통제",
+    ].map((title) => candidate(title));
+    const result = filterGroundedTrainingFocusOptionsWithDiagnostics(
+      [
+        ...distinct,
+        candidate("야간 조난자 위치 탐색"),
+        candidate("허용되지 않은 출처", ["[없는 출처]"]),
+        { title: "불완전" },
+      ],
+      [SOURCE_A],
+      [],
+      { maxOptions: MAX_TRAINING_FOCUS_CANDIDATES }
+    );
+
+    expect(result.options).toHaveLength(MAX_TRAINING_FOCUS_CANDIDATES);
+    expect(result.diagnostics).toEqual({
+      totalCandidates: 11,
+      accepted: 8,
+      rejected: {
+        invalidSchema: 1,
+        disallowedSource: 1,
+        missingEvidence: 0,
+        excludedDuplicate: 0,
+        candidateDuplicate: 1,
+        optionLimit: 0,
+      },
+    });
+  });
+
+  it("상세 필터는 근거 부족·이력 중복·상한 초과를 구분해 집계한다", () => {
+    const evidence = extractTrainingFocusEvidenceBySource(
+      `${SOURCE_A}\n야간 조난자 위치 탐색과 급경사지 들것 인양, 암벽 추락사고 접근을 수행한다.`
+    );
+    const result = filterGroundedTrainingFocusOptionsWithDiagnostics(
+      [
+        candidate("야간 조난자 위치 탐색"),
+        candidate("급경사지 들것 인양"),
+        candidate("화학보호복 제독텐트 설치"),
+        candidate("암벽 추락사고 접근"),
+      ],
+      [SOURCE_A],
+      ["야간 조난자 위치 탐색"],
+      { evidenceBySource: evidence, maxOptions: 1 }
+    );
+
+    expect(result.options.map((option) => option.title)).toEqual(["급경사지 들것 인양"]);
+    expect(result.diagnostics.rejected).toMatchObject({
+      missingEvidence: 1,
+      excludedDuplicate: 1,
+      optionLimit: 1,
+    });
+  });
+
+  it("LLM 응답 스키마는 빈 배열과 최대 8개를 허용하지만 9개는 거부한다", () => {
     expect(trainingFocusSuggestionsSchema.parse({ options: [] })).toEqual({ options: [] });
+    expect(
+      trainingFocusSuggestionsSchema.parse({
+        options: Array.from({ length: 8 }, (_, index) => candidate(`방향 ${index + 1}`)),
+      }).options
+    ).toHaveLength(MAX_TRAINING_FOCUS_CANDIDATES);
     expect(() =>
       trainingFocusSuggestionsSchema.parse({
-        options: Array.from({ length: 6 }, (_, index) => candidate(`방향 ${index + 1}`)),
+        options: Array.from({ length: 9 }, (_, index) => candidate(`방향 ${index + 1}`)),
       })
     ).toThrow();
   });

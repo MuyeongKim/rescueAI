@@ -560,6 +560,14 @@ const PROCEDURE_FACETS: readonly FacetDefinition[] = [
     recallTerms: ["오염통제", "제독", "오염도", "2차오염"],
   },
   {
+    id: "leak-control",
+    // '차단'만으로 켜면 차량 전원 차단·화재 확산 방지까지 화학 누출로 오인하므로
+    // 누출 계열 표현이 실제 질의나 확장어에 있을 때만 하위 절차를 펼친다.
+    triggers: /누출|누설|유출/,
+    queryTerms: [["누출"], ["누설"], ["유출"], ["차단"], ["중화"]],
+    recallTerms: ["누출", "누설", "유출", "누출원", "차단", "봉쇄", "확산", "중화"],
+  },
+  {
     id: "emergency",
     triggers: /중단|철수|비상|이상|파손|누설|고갈|보고/,
     queryTerms: [["이상", "보고"], ["파손"]],
@@ -733,7 +741,7 @@ function preciseKeywordQuery(terms: string[]): string {
     new Set(
       terms
         .flatMap((term) => normalizeSearchText(term).split(" "))
-        .map((term) => term.trim())
+        .map((term) => term.trim().replace(/누출시$/, "누출"))
         .filter((term) => term.length >= 2 && !SUBJECT_STOP_WORDS.has(term))
     )
   )
