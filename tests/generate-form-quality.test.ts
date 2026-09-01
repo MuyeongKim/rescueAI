@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hasSlideSopQualityIssues,
+  isCompatibleSopEvidenceRefresh,
   isCurrentEvidenceRepairSnapshot,
   localQuality,
   normalizedEvidenceIssueIndices,
+  restoreTopicFocusAfterRequestAbort,
+  shouldApplyQualityRepairResponse,
   shouldApplyEvidenceRepairResponse,
   shouldForceLegacySopSlideRecovery,
   slideEvidenceIssueIndices,
+  slideSopIssueIndices,
 } from "@/components/generate/GenerateForm";
 import { focusRequestFingerprint } from "@/lib/generate-focus";
 import type { GeneratedDoc, GeneratedSlideDeck } from "@/lib/generate";
@@ -29,6 +34,31 @@ function planWithSopStatus(status: "not_found" | "degraded"): GeneratedDoc {
 }
 
 describe("편집 후 SOP 상태 경고", () => {
+  it("세부 방향 새로고침 중 조건이 바뀌어도 기존 추천과 선택 상태를 함께 복원한다", () => {
+    const option = {
+      id: "focus-1",
+      title: "야간 조난자 수색구역 설정",
+      description: "수색구역과 위치정보 공유를 실습합니다.",
+      sourceRefs: ["[산악구조 교범 p.12]"],
+    };
+
+    expect(
+      restoreTopicFocusAfterRequestAbort({
+        status: "refreshing",
+        options: [option],
+        warnings: [],
+        recommendedId: option.id,
+        selectedId: option.id,
+        customValue: "",
+        historyCompared: true,
+      })
+    ).toMatchObject({
+      status: "choosing",
+      recommendedId: "focus-1",
+      selectedId: "focus-1",
+    });
+  });
+
   it("선택한 세부 방향만 바뀌어도 새 방향 조회 응답은 폐기하지 않는다", () => {
     const baseRequest = {
       type: "plan",
@@ -130,6 +160,30 @@ describe("슬라이드 근거 보완 프런트 계약", () => {
     expect(normalizedEvidenceIssueIndices([1, 1, 0, -1, 2, "0"], 2)).toEqual([0, 1]);
   });
 
+  it("근거 복구 API가 고치지 않는 시각자료 계약 오류는 자동 근거 복구 대상으로 보내지 않는다", () => {
+    const visualOnlyIssue: GeneratedSlideDeck = {
+      title: "원문 시각자료 설명",
+      mode: "presenter",
+      slides: [
+        {
+          title: "원문 도해에서 차단 위치를 확인합니다",
+          bullets: ["원문 도해의 밸브 위치와 접근 동선을 확인합니다."],
+          notes: "교관이 원문 도해를 가리키며 접근 전 확인 항목과 안전거리를 설명합니다.",
+          layout: "concept",
+          role: "evidence",
+          composition: "visual-explanation",
+          visual: { mode: "source-page", sourceRef: "[화학사고 교재 p.10]" },
+          sourceRefs: ["[화학사고 교재 p.10]"],
+        },
+      ],
+      sources: [{ document_id: 1, doc: "화학사고 교재", page: 10 }],
+      sourceLabels: ["[화학사고 교재 p.10]"],
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    };
+
+    expect(slideEvidenceIssueIndices(visualOnlyIssue, "1시간")).toEqual([]);
+  });
+
   it("실패 응답에 덱이 포함돼도 채택하지 않고 성공 응답만 허용한다", () => {
     const payload = {
       deck,
@@ -160,5 +214,149 @@ describe("슬라이드 근거 보완 프런트 계약", () => {
         currentDeck: { ...deck, title: "사용자가 편집한 제목" },
       })
     ).toBe(false);
+  });
+
+  it("일반 출처 보완은 같은 SOP 상태·라벨 스냅샷만 기존 덱에 적용한다", () => {
+    const found = { status: "found" as const, sourceLabels: ["[SOP B p.2]", "[SOP A p.1]"] };
+
+    expect(
+      isCompatibleSopEvidenceRefresh(found, {
+        status: "found",
+        sourceLabels: ["[SOP A p.1]", "[SOP B p.2]"],
+      })
+    ).toBe(true);
+    expect(
+      isCompatibleSopEvidenceRefresh(found, {
+        status: "not_found",
+        sourceLabels: [],
+      })
+    ).toBe(false);
+    expect(
+      isCompatibleSopEvidenceRefresh(found, {
+        status: "found",
+        sourceLabels: ["[다른 SOP p.3]"],
+      })
+    ).toBe(false);
+    expect(
+      isCompatibleSopEvidenceRefresh(undefined, {
+        status: "not_found",
+        sourceLabels: [],
+      })
+    ).toBe(true);
+  });
+});
+
+describe("슬라이드 SOP 품질 후속 보완 계약", () => {
+  const allowedLabel = "[화학사고 대응 교재 p.10]";
+  const deck: GeneratedSlideDeck = {
+    title: "암모니아 누출 대응",
+    mode: "presenter",
+    slides: [
+      {
+        title: "차단 전에 최신 절차를 확인합니다",
+        bullets: [SOP_NOT_FOUND_DISCLOSURE],
+        notes: "표준작전절차에 따라 차단밸브를 폐쇄합니다.",
+        layout: "safety",
+        role: "safety",
+        composition: "checklist",
+        visual: { mode: "none" },
+        sourceRefs: [allowedLabel],
+      },
+    ],
+    sources: [{ document_id: 1, doc: "화학사고 대응 교재", page: 10 }],
+    sourceLabels: [allowedLabel],
+    sopEvidence: { status: "not_found", sourceLabels: [] },
+  };
+
+  it("확인되지 않은 SOP 단정이 있는 정확한 장만 찾는다", () => {
+    expect(slideSopIssueIndices(deck, "1시간")).toEqual([0]);
+  });
+
+  it("SOP 오류가 네 장 이상이어도 모든 대상 장을 잘라내지 않고 반환한다", () => {
+    const manyIssues: GeneratedSlideDeck = {
+      ...deck,
+      slides: Array.from({ length: 4 }, (_, index) => ({
+        ...deck.slides[0],
+        title: `차단 절차 ${index + 1}`,
+        bullets:
+          index === 0
+            ? [SOP_NOT_FOUND_DISCLOSURE]
+            : [`암모니아 누출 대응 단계 ${index + 1}을 확인합니다.`],
+        notes: `표준작전절차에 따라 차단 단계 ${index + 1}을 수행합니다.`,
+        role: "procedure" as const,
+      })),
+    };
+
+    expect(slideSopIssueIndices(manyIssues, "1시간")).toEqual([0, 1, 2, 3]);
+  });
+
+  it("SOP 장 후보가 없는 덱은 목표·요약 장을 임의 복구 대상으로 고르지 않는다", () => {
+    const noSafeTarget: GeneratedSlideDeck = {
+      ...deck,
+      slides: [
+        {
+          ...deck.slides[0],
+          title: "학습목표를 확인합니다",
+          bullets: ["누출물질 확인 절차를 설명할 수 있습니다."],
+          notes: "교관이 오늘 학습할 내용을 안내합니다.",
+          role: "objectives",
+          composition: "statement",
+        },
+      ],
+    };
+
+    expect(slideSopIssueIndices(noSafeTarget, "1시간")).toEqual([]);
+    expect(hasSlideSopQualityIssues(noSafeTarget, "1시간")).toBe(true);
+  });
+
+  it("전체 덱 SOP 오류는 절차·안전·근거 장 순서로 안전한 복구 대상을 고른다", () => {
+    const deckWideIssue: GeneratedSlideDeck = {
+      ...deck,
+      slides: [
+        {
+          ...deck.slides[0],
+          title: "근거를 확인합니다",
+          bullets: ["교육자료의 근거를 확인합니다."],
+          notes: "관련 출처를 설명합니다.",
+          role: "evidence",
+        },
+        {
+          ...deck.slides[0],
+          title: "안전기준을 확인합니다",
+          bullets: ["대원 안전과 중단 기준을 확인합니다."],
+          notes: "현장 안전기준을 설명합니다.",
+          role: "safety",
+        },
+        {
+          ...deck.slides[0],
+          title: "대응 절차를 수행합니다",
+          bullets: ["물질 확인과 차단 순서를 수행합니다."],
+          notes: "대응 절차를 설명합니다.",
+          role: "procedure",
+        },
+      ],
+      sopEvidence: { status: "found", sourceLabels: [allowedLabel] },
+    };
+
+    expect(slideSopIssueIndices(deckWideIssue, "1시간")).toEqual([2]);
+  });
+
+  it("엄격한 슬라이드와 서버 근거 메타데이터가 모두 있어야 성공 응답을 채택한다", () => {
+    const payload = {
+      ...deck.slides[0],
+      sources: deck.sources,
+      sourceLabels: deck.sourceLabels,
+      sopEvidence: deck.sopEvidence,
+    };
+
+    expect(shouldApplyQualityRepairResponse(true, payload)).toBe(true);
+    expect(shouldApplyQualityRepairResponse(false, payload)).toBe(false);
+    expect(shouldApplyQualityRepairResponse(true, { ...payload, sourceRefs: [] })).toBe(false);
+    expect(shouldApplyQualityRepairResponse(true, { ...payload, sourceLabels: undefined })).toBe(
+      false
+    );
+    expect(shouldApplyQualityRepairResponse(true, { ...payload, sopEvidence: undefined })).toBe(
+      false
+    );
   });
 });

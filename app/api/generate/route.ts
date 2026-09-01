@@ -22,6 +22,7 @@ import {
   type GenerateRequest,
   type GeneratedDoc,
   type GeneratedSlideDeck,
+  type GenerationQualityIssue,
   type GenerationQualityReport,
 } from "@/lib/generate";
 import { DEMO, demoGeneratedDoc, demoGeneratedSlides } from "@/lib/demo";
@@ -122,6 +123,7 @@ type QualityMeta = {
   repaired: boolean;
   errors: string[];
   warnings: string[];
+  issues: GenerationQualityIssue[];
 };
 
 function qualityMeta(
@@ -147,7 +149,7 @@ function qualityMeta(
           : []),
     ]
   );
-  return { checked: true, repaired, ...messages };
+  return { checked: true, repaired, ...messages, issues: report.issues };
 }
 
 // 인덱싱 자료를 근거로 훈련계획/교안을 생성한다. (NotebookLM 프롬프트는 클라이언트에서 조립)
@@ -207,6 +209,7 @@ export async function POST(req: Request) {
           repaired: false,
           errors: [],
           warnings: ["관련 SOP 근거 미확인 — 시행 전 최신 SOP 확인 필요"],
+          issues: [],
         },
       } satisfies GeneratedSlideDeck & { quality: QualityMeta });
     }
@@ -229,6 +232,7 @@ export async function POST(req: Request) {
         repaired: false,
         errors: [],
         warnings: ["관련 SOP 근거 미확인 — 시행 전 최신 SOP 확인 필요"],
+        issues: [],
       },
     } satisfies GeneratedDoc & { quality: QualityMeta });
   }

@@ -41,5 +41,6 @@ describe("데모 세부 훈련 방향 요청", () => {
     expect(payload.scope).toBe("broad");
     expect(payload.options).toHaveLength(4);
     expect(payload.options[0].sourceRefs).toEqual(["[데모 연결 교범 p.1]"]);
+    expect(payload.recommendedId).toBeUndefined();
   });
 });

@@ -141,6 +141,7 @@ describe("POST /api/generate/focus", () => {
     expect(payload.options.map((option: { title: string }) => option.title)).toEqual([
       "급경사 로프 접근과 확보",
     ]);
+    expect(payload.recommendedId).toBe("focus-1");
     expect(payload.warnings).toContain("연결 자료 범위에서 서로 다른 방향을 4개보다 적게 찾았습니다.");
   });
 

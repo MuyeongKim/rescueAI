@@ -88,6 +88,7 @@ export async function POST(request: Request) {
       return Response.json({
         scope: "broad",
         options: demoOptions(parsed.category),
+        // 데모 후보는 고정 예시라 입력 주제에 따른 추천 순위를 단정하지 않는다.
         warnings: [],
         historyBasis: "demo",
       });
@@ -202,6 +203,8 @@ export async function POST(request: Request) {
     return Response.json({
       scope: "broad",
       options,
+      // 프롬프트의 추천 우선순위와 서버의 근거·중복 필터를 모두 통과한 최상위 후보다.
+      recommendedId: options[0].id,
       warnings,
       historyBasis: historyResult.error ? "request-only" : "saved-materials",
     });

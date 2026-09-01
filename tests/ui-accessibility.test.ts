@@ -14,12 +14,23 @@ import {
   verifiedDeckSourceLabels,
 } from "@/components/generate/SlideDeckResult";
 import { DocResult } from "@/components/generate/DocResult";
-import type { EvidenceRepairState } from "@/components/generate/parts";
+import {
+  blockingDeckQualityIssues,
+  blockingSlideQualityIssueGroups,
+  type EvidenceRepairState,
+  type GenerationQuality,
+  type QualityRepairState,
+} from "@/components/generate/parts";
 import { MobileMoreSheet } from "@/components/layout/MobileMoreSheet";
 import { TopicFocusPanel } from "@/components/generate/TopicFocusPanel";
 import { Button } from "@/components/ui/button";
 import { CardTitle } from "@/components/ui/card";
-import type { GeneratedDoc, GeneratedSlide, GeneratedSlideDeck } from "@/lib/generate";
+import type {
+  GeneratedDoc,
+  GeneratedSlide,
+  GeneratedSlideDeck,
+  GenerationQualityIssue,
+} from "@/lib/generate";
 
 const sampleSlide: GeneratedSlide = {
   title: "화학보호복 착용 전 점검",
@@ -57,6 +68,8 @@ function renderSlideDeck({
   saving = false,
   outputBlocked = false,
   evidenceRepair = undefined as EvidenceRepairState | undefined,
+  qualityRepair = undefined as QualityRepairState | undefined,
+  quality = undefined as GenerationQuality | undefined,
   deck = sampleDeck as GeneratedSlideDeck,
 } = {}) {
   return renderToStaticMarkup(
@@ -92,14 +105,16 @@ function renderSlideDeck({
       pptxLoading,
       evidenceRepair,
       onRepairEvidence: () => undefined,
-      quality: outputBlocked
+      qualityRepair,
+      onRepairQuality: () => undefined,
+      quality: quality ?? (outputBlocked
         ? {
             checked: true,
             repaired: true,
             errors: ["교육 시간 합계", "안전·중단 기준"],
             warnings: ["일부 슬라이드 제목 길이"],
           }
-        : undefined,
+        : undefined),
     })
   );
 }
@@ -284,6 +299,115 @@ describe("슬라이드 편집 접근성과 상태", () => {
     expect(html).toContain("편집하거나 해당 부분을 AI로 다시 생성해 주세요.");
   });
 
+  it("차단 오류의 slides.N 경로를 정확한 장·제목·원인·문제 부분으로 안내한다", () => {
+    const blockingIssue: GenerationQualityIssue = {
+      code: "thin_content",
+      path: "slides.0.notes",
+      message: "발표자 노트에 시범 절차와 확인 질문을 더 작성해 주세요.",
+      excerpt: "교관 설명",
+    };
+    const warningIssue: GenerationQualityIssue = {
+      code: "thin_notes",
+      path: "slides.0.notes",
+      message: "이 경고는 차단 오류 상세 목록에 표시하지 않습니다.",
+    };
+    const groups = blockingSlideQualityIssueGroups(
+      [warningIssue, blockingIssue, { ...blockingIssue, path: "slides.9.notes" }],
+      sampleDeck.slides.map((slide) => slide.title)
+    );
+
+    expect(groups).toHaveLength(1);
+    expect(groups[0].index).toBe(0);
+    expect(groups[0].issues).toEqual([blockingIssue]);
+
+    const html = renderSlideDeck({
+      outputBlocked: true,
+      qualityRepair: { status: "idle", issueIndices: [0] },
+      quality: {
+        checked: true,
+        repaired: true,
+        errors: ["일부 내용의 구체성·분량"],
+        warnings: [],
+        issues: [blockingIssue, warningIssue],
+      },
+    });
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain("‘화학보호복 교육’에서 먼저 고칠 슬라이드");
+    expect(html).toContain("슬라이드 1");
+    expect(html).toContain("화학보호복 착용 전 점검");
+    expect(html).toContain(blockingIssue.message);
+    expect(html).toContain("문제 부분: “교관 설명”");
+    expect(html).not.toContain(warningIssue.message);
+    expect(html).toContain(
+      'aria-label="슬라이드 1 화학보호복 착용 전 점검 편집으로 이동"'
+    );
+    expect(html).toContain("min-h-11 shrink-0 bg-background");
+    expect(html).toContain("dark:border-red-900");
+    expect(html).toContain("문제 슬라이드 AI로 보완");
+    expect(html).toContain('id="selected-slide-heading" tabindex="-1"');
+  });
+
+  it("전체 품질 보완과 근거 전용 보완을 서로 다른 동작으로 함께 제공한다", () => {
+    const html = renderSlideDeck({
+      outputBlocked: true,
+      evidenceRepair: { status: "idle", issueIndices: [0] },
+      qualityRepair: {
+        status: "failed",
+        issueIndices: [0],
+        message: "SOP 적용 내용을 자동 보완하지 못했습니다.",
+      },
+    });
+
+    expect(html).toContain("문제 슬라이드 AI로 보완");
+    expect(html).toContain("누락 근거 다시 보완");
+    expect(html).toContain("SOP 적용 내용을 자동 보완하지 못했습니다.");
+    expect(html).toContain('aria-label="근거 확인이 필요한 슬라이드 1 편집"');
+  });
+
+  it("자동으로 고를 안전한 SOP 장이 없으면 이유를 표시하고 무의미한 보완 버튼은 숨긴다", () => {
+    const message =
+      "자동 보완할 SOP 적용 장을 고를 수 없습니다. 위 입력 영역의 ‘슬라이드(PPTX) 만들기’를 다시 눌러 전체 초안을 생성해 주세요.";
+    const deckIssue: GenerationQualityIssue = {
+      code: "missing_sop_application",
+      path: "slides",
+      message: "지정 위치에 [관련 SOP 적용] 표식을 포함해야 합니다.",
+    };
+    const html = renderSlideDeck({
+      outputBlocked: true,
+      qualityRepair: { status: "failed", issueIndices: [], message },
+      quality: {
+        checked: true,
+        repaired: false,
+        errors: ["SOP·표준절차 적용 내용"],
+        warnings: [],
+        issues: [deckIssue],
+      },
+    });
+
+    expect(blockingDeckQualityIssues([deckIssue])).toEqual([deckIssue]);
+    expect(html).toContain(message);
+    expect(html).toContain("전체 구성에서 먼저 고칠 항목");
+    expect(html).toContain(deckIssue.message);
+    expect(html).not.toContain("문제 슬라이드 AI로 보완");
+    expect(html).toContain('role="alert"');
+  });
+
+  it("문제 슬라이드 보완 중에는 진행 상태를 알리고 중복 동작을 잠근다", () => {
+    const html = renderSlideDeck({
+      editing: false,
+      outputBlocked: true,
+      qualityRepair: { status: "repairing", issueIndices: [0] },
+    });
+
+    expect(html).toContain("문제 슬라이드 보완 중");
+    expect(html).toContain("슬라이드 1의 내용과 구성을 다시 점검하고 있습니다");
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('aria-busy="true"');
+    expect(html).toContain("문제 슬라이드 보완 중…");
+  });
+
   it("슬라이드 근거 확인 중에는 대상 장 번호를 알리고 저장·PPTX를 잠근다", () => {
     const html = renderSlideDeck({
       editing: false,
@@ -419,7 +543,14 @@ describe("넓은 훈련 주제 세부 방향", () => {
             description: "수색 구역과 위치정보 공유를 실습합니다.",
             sourceRefs: ["[산악 교범 p.12]"],
           },
+          {
+            id: "focus-2",
+            title: "급경사 로프 접근과 확보",
+            description: "급경사 접근 전 확보 지점과 역할을 확인합니다.",
+            sourceRefs: ["[로프구조 교범 p.8]"],
+          },
         ],
+        recommendedId: "focus-1",
         selectedId: "focus-1",
         customValue: "",
         historyCompared: true,
@@ -439,6 +570,35 @@ describe("넓은 훈련 주제 세부 방향", () => {
     expect(html).toContain("선택됨");
     expect(html).toContain("최근 세부 방향과 겹침 적음");
     expect(html).toContain("SOP·표준절차의 적용 여부와 근거 상태");
+    expect(html.match(/\(추천\)/g)).toHaveLength(1);
+    expect(html).toMatch(/조난자 수색구역 설정[\s\S]*?\(추천\)[\s\S]*?급경사 로프 접근과 확보/);
+  });
+
+  it("API가 추천 순위를 확인하지 않은 선택지에는 추천 표시를 임의로 붙이지 않는다", () => {
+    const html = renderToStaticMarkup(
+      createElement(TopicFocusPanel, {
+        topic: "암모니아 누출 대응훈련",
+        status: "choosing",
+        options: [
+          {
+            id: "focus-1",
+            title: "고정 데모 훈련 방향",
+            description: "입력 주제와의 추천 순위를 확인하지 않은 예시입니다.",
+            sourceRefs: ["[데모 연결 교범 p.1]"],
+          },
+        ],
+        customValue: "",
+        historyCompared: false,
+        warnings: [],
+        headingRef: createRef<HTMLHeadingElement>(),
+        onSelect: () => undefined,
+        onCustomValueChange: () => undefined,
+        onRefresh: () => undefined,
+        onBypass: () => undefined,
+      })
+    );
+
+    expect(html).not.toContain("(추천)");
   });
 });
 

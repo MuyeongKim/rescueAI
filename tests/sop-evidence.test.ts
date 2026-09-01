@@ -107,6 +107,27 @@ describe("inspectSopContract", () => {
     expect(together).toEqual({ ok: true, issues: [] });
   });
 
+  it("확인된 상태의 슬라이드도 근거 없는 SOP 절차 단정 문장을 표시한다", () => {
+    const claim = "표준작전절차에 따라 진입 순서를 적용한다.";
+    const report = inspectSopContract(
+      "slides",
+      {
+        slides: [
+          {
+            title: SOP_APPLICATION_MARKER,
+            bullets: [claim],
+            sourceRefs: [],
+          },
+        ],
+      },
+      evidence("found", [SOP_LABEL])
+    );
+
+    const issue = report.issues.find((candidate) => candidate.code === "unverified_sop_claim");
+    expect(issue?.excerpt).toBe(claim);
+    expect(issue?.path).toBe("slides.0");
+  });
+
   it("허용 목록 밖의 SOP 라벨을 별도로 탐지한다", () => {
     const unknownLabel = "[재난현장 표준작전절차 SOP 999 p.1]";
     const report = inspectSopContract(
@@ -128,7 +149,11 @@ describe("inspectSopContract", () => {
       evidence("found", [SOP_LABEL])
     );
 
-    expect(report.issues.map((issue) => issue.code)).toContain("unverified_sop_claim");
+    const issue = report.issues.find((candidate) => candidate.code === "unverified_sop_claim");
+    expect(issue?.excerpt).toBe("SOP 999에 따라 임의 절차를 반드시 수행한다.");
+    expect(issue?.excerpt).not.toContain(SOP_APPLICATION_MARKER);
+    expect(issue?.excerpt).not.toContain(SOP_LABEL);
+    expect(Array.from(issue?.excerpt ?? "").length).toBeLessThanOrEqual(180);
   });
 
   it("확인된 SOP 번호와 같은 위치의 허용 라벨은 인정한다", () => {
@@ -149,6 +174,35 @@ describe("inspectSopContract", () => {
     );
 
     expect(report.issues.map((issue) => issue.code)).toContain("unverified_sop_claim");
+  });
+
+  it("검색 저하 상태에서도 고정 안내문을 제외한 실제 주장 문장을 제공한다", () => {
+    const claim = "현장활동지침에 따라 진입 순서를 반드시 적용한다.";
+    const report = inspectSopContract(
+      "lesson",
+      lesson(`${SOP_DEGRADED_DISCLOSURE} ${claim}`),
+      evidence("degraded")
+    );
+
+    const issue = report.issues.find((candidate) => candidate.code === "unverified_sop_claim");
+    expect(issue?.excerpt).toBe(claim);
+    expect(issue?.excerpt).not.toContain(SOP_DEGRADED_DISCLOSURE);
+  });
+
+  it("문제 문장 excerpt는 제어문자를 제거하고 180자 이내로 제한한다", () => {
+    const report = inspectSopContract(
+      "plan",
+      plan(
+        `${SOP_NOT_FOUND_DISCLOSURE}\nSOP 325에 따라 ${"매우 긴 임의 절차를 수행한다 ".repeat(20)}\u0000`
+      ),
+      evidence("not_found")
+    );
+
+    const issue = report.issues.find((candidate) => candidate.code === "unverified_sop_claim");
+    expect(issue?.excerpt).toBeDefined();
+    expect(issue?.excerpt).not.toContain("\u0000");
+    expect(Array.from(issue?.excerpt ?? "").length).toBeLessThanOrEqual(180);
+    expect(issue?.excerpt?.endsWith("…")).toBe(true);
   });
 
   it("출처 라벨의 개정년도를 SOP 식별번호로 인정하지 않는다", () => {
@@ -228,7 +282,10 @@ describe("inspectSopContract", () => {
       evidence("not_found")
     );
 
-    expect(report.issues.map((issue) => issue.code)).toContain("unverified_sop_claim");
+    const issue = report.issues.find((candidate) => candidate.code === "unverified_sop_claim");
+    expect(issue?.excerpt).toBe(claim);
+    expect(issue?.excerpt).not.toContain(SOP_NOT_FOUND_DISCLOSURE);
+    expect(Array.from(issue?.excerpt ?? "").length).toBeLessThanOrEqual(180);
   });
 
   it("고정 안내문 자체와 시행 전 SOP 확인 안내는 단정으로 오인하지 않는다", () => {

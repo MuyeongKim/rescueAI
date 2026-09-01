@@ -32,6 +32,8 @@ export type SopQualityIssue = {
   code: SopQualityIssueCode;
   path: string;
   message: string;
+  /** 사용자가 결과에서 직접 확인할 수 있는 실제 문제 문장(최대 180자). */
+  excerpt?: string;
 };
 
 export type SopContractReport = {
@@ -99,6 +101,9 @@ const SOP_PROCEDURE_CLAIM = new RegExp(
   `${PROCEDURE_SOURCE_TERM}(?:에|에서는|상|를|을)?\\s*(?:따라|따르면|근거로|기준으로|규정상|반드시|우선|금지|허용|실시|시행|수행|해야|한다)`,
   "i"
 );
+const MAX_SOP_ISSUE_EXCERPT_CHARS = 180;
+const UNSAFE_EXCERPT_CHARS =
+  /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff]/g;
 
 function uniqueTrimmed(values: readonly string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean)));
@@ -179,16 +184,71 @@ function withoutDisclosure(text: string, disclosure: string): string {
   return text.split(disclosure).join(" ");
 }
 
-function hasUnverifiedSopClaim(text: string, disclosure: string): boolean {
+function claimInspectionText(text: string, disclosure?: string): string {
   // 대괄호 출처는 invalid_sop_reference가 별도로 판정한다. 출처 문서명이나 번호를
   // 본문 절차 단정으로 중복 오인하지 않도록 주장 검사에서는 제거한다.
-  const claimText = withoutDisclosure(text, disclosure)
+  return (disclosure ? withoutDisclosure(text, disclosure) : text)
     .replaceAll(SOP_APPLICATION_MARKER, " ")
     .replace(INLINE_REFERENCE, " ");
-  return (
-    SOP_NUMBER_CLAIM.test(claimText) ||
-    SOP_NAMED_CLAIM.test(claimText) ||
-    SOP_PROCEDURE_CLAIM.test(claimText)
+}
+
+function safeIssueExcerpt(value: string): string {
+  const compact = value.replace(UNSAFE_EXCERPT_CHARS, " ").replace(/\s+/g, " ").trim();
+  const characters = Array.from(compact);
+  if (characters.length <= MAX_SOP_ISSUE_EXCERPT_CHARS) return compact;
+  return `${characters.slice(0, MAX_SOP_ISSUE_EXCERPT_CHARS - 1).join("")}…`;
+}
+
+function excerptAroundMatch(text: string, matchIndex: number): string {
+  const lineStart = text.lastIndexOf("\n", Math.max(0, matchIndex - 1)) + 1;
+  const nextLineBreak = text.indexOf("\n", matchIndex);
+  const lineEnd = nextLineBreak < 0 ? text.length : nextLineBreak;
+  const line = text.slice(lineStart, lineEnd);
+  const matchInLine = Math.max(0, matchIndex - lineStart);
+
+  const sentenceStartMatches = Array.from(
+    line.slice(0, matchInLine).matchAll(/[.!?。！？]\s*/g)
+  );
+  const sentenceStartMatch = sentenceStartMatches[sentenceStartMatches.length - 1];
+  const sentenceStart = sentenceStartMatch?.index;
+  const contentStart =
+    sentenceStart === undefined
+      ? 0
+      : sentenceStart + (sentenceStartMatch?.[0].length ?? 0);
+  const sentenceEndMatch = line.slice(matchInLine).match(/[.!?。！？]/);
+  const contentEnd =
+    sentenceEndMatch?.index === undefined
+      ? line.length
+      : matchInLine + sentenceEndMatch.index + sentenceEndMatch[0].length;
+
+  return safeIssueExcerpt(line.slice(contentStart, contentEnd));
+}
+
+function firstPatternClaimExcerpt(
+  text: string,
+  patterns: readonly RegExp[],
+  disclosure?: string
+): string | undefined {
+  const claimText = claimInspectionText(text, disclosure);
+  const match = patterns
+    .map((template) => {
+      const pattern = new RegExp(template.source, template.flags.replace("g", ""));
+      return pattern.exec(claimText);
+    })
+    .filter((candidate): candidate is RegExpExecArray => candidate !== null)
+    .sort((left, right) => (left.index ?? 0) - (right.index ?? 0))[0];
+  if (!match) return undefined;
+  return excerptAroundMatch(claimText, match.index ?? 0);
+}
+
+function unverifiedSopClaimExcerpt(
+  text: string,
+  disclosure: string
+): string | undefined {
+  return firstPatternClaimExcerpt(
+    text,
+    [SOP_NUMBER_CLAIM, SOP_NAMED_CLAIM, SOP_PROCEDURE_CLAIM],
+    disclosure
   );
 }
 
@@ -215,36 +275,41 @@ function sopIdentifierNumbers(text: string): string[] {
   ).filter(Boolean);
 }
 
-/**
- * 따옴표로 명시한 값만 특정 SOP 명칭 주장으로 본다. `표준작전절차:
- * 재난현장에서 ...한다` 같은 콜론 뒤 설명문은 고유명이 아니므로 제외한다.
- */
-function quotedSopNames(text: string): string[] {
-  return QUOTED_SOP_NAME_VALUES.flatMap((template) => {
-    const pattern = new RegExp(template.source, template.flags);
-    return Array.from(text.matchAll(pattern), (match) => match[1] ?? "");
-  });
-}
-
 /** 확인된 상태에서도 라벨에 없는 SOP 번호·명칭을 진짜 근거처럼 붙이지 못하게 한다. */
-function hasUnverifiedSpecificSopClaim(
+function unverifiedSpecificSopClaimExcerpt(
   text: string,
   allowedLabels: readonly string[]
-): boolean {
+): string | undefined {
   // 대괄호 안 값은 아래 invalid_sop_reference 검사에서 별도로 판정한다. 본문 주장과
   // 출처 라벨을 분리해야, 잘못된 라벨 하나에 같은 오류가 중복으로 표시되지 않는다.
-  const claimText = text.replaceAll(SOP_APPLICATION_MARKER, " ").replace(INLINE_REFERENCE, " ");
+  const claimText = claimInspectionText(text);
   const normalizedLabels = allowedLabels.map(normalizedClaim);
   const allowedNumbers = new Set(allowedLabels.flatMap(sopIdentifierNumbers));
-  for (const number of sopIdentifierNumbers(claimText)) {
-    if (!allowedNumbers.has(number)) return true;
+  const unverifiedMatches: Array<{ index: number; excerpt: string }> = [];
+  const numberPattern = new RegExp(SOP_NUMBER_VALUE.source, SOP_NUMBER_VALUE.flags);
+  for (const match of Array.from(claimText.matchAll(numberPattern))) {
+    const number = normalizedSopNumber(match[1] ?? "");
+    if (!number || allowedNumbers.has(number)) continue;
+    unverifiedMatches.push({
+      index: match.index ?? 0,
+      excerpt: excerptAroundMatch(claimText, match.index ?? 0),
+    });
   }
 
-  for (const claimedName of quotedSopNames(claimText)) {
-    const name = normalizedClaim(claimedName);
-    if (name.length >= 2 && !normalizedLabels.some((label) => label.includes(name))) return true;
+  // 따옴표로 명시한 값만 특정 SOP 명칭 주장으로 본다. 콜론 뒤 설명문은 고유명이 아니다.
+  for (const template of QUOTED_SOP_NAME_VALUES) {
+    const pattern = new RegExp(template.source, template.flags);
+    for (const match of Array.from(claimText.matchAll(pattern))) {
+      const name = normalizedClaim(match[1] ?? "");
+      if (name.length < 2 || normalizedLabels.some((label) => label.includes(name))) continue;
+      unverifiedMatches.push({
+        index: match.index ?? 0,
+        excerpt: excerptAroundMatch(claimText, match.index ?? 0),
+      });
+    }
   }
-  return false;
+
+  return unverifiedMatches.sort((left, right) => left.index - right.index)[0]?.excerpt;
 }
 
 /**
@@ -288,7 +353,11 @@ export function inspectSopContract(
     if (!hasGroundedApplication) {
       issues.push({
         code: "missing_sop_reference",
-        path: applicationTargets[0]?.path ?? designated[0]?.path ?? (type === "slides" ? "slides" : "sections"),
+        // 슬라이드에 적용 표식 자체가 없으면 첫 장을 문제 위치로 오인하지 않는다.
+        // 덱 수준 경로를 남겨 UI가 절차·안전·근거 장 중 안전한 후보를 고르게 한다.
+        path:
+          applicationTargets[0]?.path ??
+          (type === "slides" ? "slides" : designated[0]?.path ?? "sections"),
         message: documentMode
           ? "문서 맨 뒤의 근거 자료 및 출처 목록에 확인된 SOP 출처를 연결해야 합니다."
           : "SOP 적용 표식과 같은 슬라이드의 sourceRefs에 확인된 SOP 출처 라벨을 연결해야 합니다.",
@@ -299,19 +368,22 @@ export function inspectSopContract(
       const hasAllowedReference = target.references.some((reference) =>
         allowedLabels.has(reference)
       );
-      const proceduralClaimWithoutLocalReference =
-        !documentMode && SOP_PROCEDURE_CLAIM.test(target.text) && !hasAllowedReference;
-      if (
-        !proceduralClaimWithoutLocalReference &&
-        !hasUnverifiedSpecificSopClaim(target.text, Array.from(allowedLabels))
-      ) {
-        continue;
-      }
+      const proceduralClaimExcerpt =
+        !documentMode && !hasAllowedReference
+          ? firstPatternClaimExcerpt(target.text, [SOP_PROCEDURE_CLAIM])
+          : undefined;
+      const specificClaimExcerpt = unverifiedSpecificSopClaimExcerpt(
+        target.text,
+        Array.from(allowedLabels)
+      );
+      const excerpt = proceduralClaimExcerpt ?? specificClaimExcerpt;
+      if (!excerpt) continue;
       issues.push({
         code: "unverified_sop_claim",
         path: target.path,
         message:
           "SOP 번호·명칭·절차를 단정한 위치에는 그 주장과 일치하는 확인된 SOP 출처가 필요합니다.",
+        excerpt,
       });
     }
   } else {
@@ -325,11 +397,13 @@ export function inspectSopContract(
     }
 
     for (const target of allTargets) {
-      if (!hasUnverifiedSopClaim(target.text, disclosure)) continue;
+      const excerpt = unverifiedSopClaimExcerpt(target.text, disclosure);
+      if (!excerpt) continue;
       issues.push({
         code: "unverified_sop_claim",
         path: target.path,
         message: "SOP 근거가 확인되지 않은 상태에서 번호·명칭·절차를 단정할 수 없습니다.",
+        excerpt,
       });
     }
   }

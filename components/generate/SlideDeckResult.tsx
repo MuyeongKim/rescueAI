@@ -62,6 +62,7 @@ import {
   type RegenState,
   type EvidenceRepairState,
   type GenerationQuality,
+  type QualityRepairState,
   type ResultChrome,
 } from "@/components/generate/parts";
 
@@ -592,6 +593,8 @@ export function SlideDeckResult({
   quality,
   evidenceRepair,
   onRepairEvidence,
+  qualityRepair,
+  onRepairQuality,
 }: {
   deck: GeneratedSlideDeck;
   chrome: ResultChrome;
@@ -608,12 +611,14 @@ export function SlideDeckResult({
   quality?: GenerationQuality | null;
   evidenceRepair?: EvidenceRepairState & { disabled?: boolean };
   onRepairEvidence?: () => void;
+  qualityRepair?: QualityRepairState & { disabled?: boolean };
+  onRepairQuality?: () => void;
 }) {
   const { accent, editing } = chrome;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const [announcement, setAnnouncement] = useState("");
-  const pendingEvidenceFocusRef = useRef<number | null>(null);
+  const pendingIssueFocusRef = useRef<number | null>(null);
   const selectedSlide = deck.slides[selectedIndex];
   const verifiedSourceLabels = verifiedDeckSourceLabels(deck.sourceLabels);
   const verifiedSourceLabelSet = new Set(verifiedSourceLabels);
@@ -632,6 +637,7 @@ export function SlideDeckResult({
     )
   );
   const evidenceIssueSet = new Set(evidenceRepair?.issueIndices ?? []);
+  const qualityIssueSet = new Set(qualityRepair?.issueIndices ?? []);
   const mode = resolveSlideDeckMode(deck.mode);
   const downloadSlideCount = generatedPptxSlideCount(deck.slides.length, deck.sources.length);
   const editorLocked =
@@ -652,26 +658,26 @@ export function SlideDeckResult({
   }, [deck.slides.length]);
 
   useEffect(() => {
-    const target = pendingEvidenceFocusRef.current;
+    const target = pendingIssueFocusRef.current;
     if (!editing || target === null || selectedIndex !== target) return;
-    pendingEvidenceFocusRef.current = null;
+    pendingIssueFocusRef.current = null;
     requestAnimationFrame(() => {
       document.getElementById("selected-slide-heading")?.focus();
     });
   }, [editing, selectedIndex]);
 
-  function handleSelectEvidenceSlide(index: number) {
+  function handleSelectIssueSlide(index: number) {
     if (index < 0 || index >= deck.slides.length || editorLocked) return;
-    pendingEvidenceFocusRef.current = index;
+    pendingIssueFocusRef.current = index;
     setSelectedIndex(index);
     regen.onClose();
-    setAnnouncement(`근거 확인이 필요한 슬라이드 ${index + 1}을 선택했습니다.`);
+    setAnnouncement(`품질 확인이 필요한 슬라이드 ${index + 1}을 선택했습니다.`);
     if (!editing) {
       chrome.onToggleEdit();
       return;
     }
     requestAnimationFrame(() => {
-      pendingEvidenceFocusRef.current = null;
+      pendingIssueFocusRef.current = null;
       document.getElementById("selected-slide-heading")?.focus();
     });
   }
@@ -800,12 +806,22 @@ export function SlideDeckResult({
           </p>
           <QualityBanner
             quality={quality}
+            deckTitle={deck.title}
+            slideTitles={deck.slides.map((slide) => slide.title)}
+            onSelectSlide={handleSelectIssueSlide}
             evidenceRepair={
               evidenceRepair && onRepairEvidence
                 ? {
                     ...evidenceRepair,
                     onRepair: onRepairEvidence,
-                    onSelectSlide: handleSelectEvidenceSlide,
+                  }
+                : undefined
+            }
+            qualityRepair={
+              qualityRepair && onRepairQuality
+                ? {
+                    ...qualityRepair,
+                    onRepair: onRepairQuality,
                   }
                 : undefined
             }
@@ -847,7 +863,7 @@ export function SlideDeckResult({
                         <button
                           type="button"
                           aria-current={active ? "page" : undefined}
-                          aria-label={`슬라이드 ${index + 1}: ${slide.title || "제목 없음"}${evidenceIssueSet.has(index) ? ", 근거 확인 필요" : ""}`}
+                          aria-label={`슬라이드 ${index + 1}: ${slide.title || "제목 없음"}${qualityIssueSet.has(index) ? ", 품질 확인 필요" : evidenceIssueSet.has(index) ? ", 근거 확인 필요" : ""}`}
                           disabled={editorLocked}
                           onClick={() => {
                             setSelectedIndex(index);
@@ -870,9 +886,9 @@ export function SlideDeckResult({
                             {String(index + 1).padStart(2, "0")}
                           </span>
                           <span className="truncate">{slide.title || "제목 없음"}</span>
-                          {evidenceIssueSet.has(index) && (
+                          {(qualityIssueSet.has(index) || evidenceIssueSet.has(index)) && (
                             <span className="ml-auto shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800 dark:bg-red-950/50 dark:text-red-100">
-                              근거 확인
+                              {qualityIssueSet.has(index) ? "품질 확인" : "근거 확인"}
                             </span>
                           )}
                         </div>

@@ -21,6 +21,7 @@ export function TopicFocusPanel({
   topic,
   status,
   options,
+  recommendedId,
   selectedId,
   customValue,
   historyCompared,
@@ -37,6 +38,7 @@ export function TopicFocusPanel({
   topic: string;
   status: TopicFocusPanelStatus;
   options: readonly TrainingFocusOption[];
+  recommendedId?: string;
   selectedId?: string;
   customValue: string;
   historyCompared: boolean;
@@ -84,7 +86,7 @@ export function TopicFocusPanel({
         </h3>
         <p className="text-sm leading-relaxed text-muted-foreground">
           연결된 교범과 최근 저장 자료를 바탕으로, 겹침이 적고 근거가 확인되는 방향만
-          제안합니다.
+          제안합니다. 추천 순위까지 확인된 경우 가장 잘 맞는 방향을 별도로 표시합니다.
         </p>
       </div>
 
@@ -184,6 +186,8 @@ export function TopicFocusPanel({
                 }
                 const inputId = `topic-focus-${option.id}`;
                 const selected = selectedId === option.id;
+                // 데모·이전 응답처럼 추천 순위를 확인할 수 없는 경우에는 임의 표시하지 않는다.
+                const recommended = recommendedId === option.id;
                 return (
                   <div key={option.id} className="relative">
                     <input
@@ -206,9 +210,16 @@ export function TopicFocusPanel({
                         "peer-checked:border-primary peer-checked:bg-primary/5"
                       )}
                     >
-                      <span className="flex items-start justify-between gap-2">
-                        <span className="text-sm font-semibold leading-snug text-foreground">
-                          {option.title}
+                      <span className="flex flex-col items-start gap-1 sm:flex-row sm:justify-between sm:gap-2">
+                        <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                          <span className="text-sm font-semibold leading-snug text-foreground">
+                            {option.title}
+                          </span>
+                          {recommended && (
+                            <span className="shrink-0 whitespace-nowrap rounded-full border border-primary/25 bg-primary/10 px-2 py-0.5 text-xs font-semibold leading-none text-primary">
+                              (추천)
+                            </span>
+                          )}
                         </span>
                         {selected && (
                           <span className="inline-flex shrink-0 items-center gap-1 text-xs font-semibold text-primary">

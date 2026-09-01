@@ -29,6 +29,7 @@ import {
   type GeneratedSection,
   type GeneratedSlide,
   type GeneratedSlideDeck,
+  type GenerationQualityIssueCode,
   type SavedMaterial,
   type SlideDeckMode,
 } from "@/lib/generate";
@@ -55,6 +56,7 @@ import {
   StepHeader,
   type EvidenceRepairState,
   type GenerationQuality,
+  type QualityRepairState,
   type RegenState,
   type ResultChrome,
 } from "@/components/generate/parts";
@@ -82,6 +84,11 @@ const DEFAULT_TRAINING_TYPE = "이론 + 현장실습";
 const DEFAULT_TRAINING_METHOD = "자체훈련";
 const RETRIEVAL_DEGRADED_WARNING = "자료 검색 일부 기능 제한 — 회수 근거 확인 필요";
 const MODEL_FALLBACK_WARNING = "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨";
+// 같은 일반 계정을 여러 명이 함께 쓰는 시범운영에서 분당 제한을 한 작업이 독점하지 않도록
+// 한 번에 최대 3장만 처리하고, 성공분은 원자적으로 반영한 뒤 남은 장을 이어서 보완하게 한다.
+const SOP_QUALITY_REPAIR_BATCH_SIZE = 3;
+const SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE =
+  "자동 보완할 SOP 적용 장을 고를 수 없습니다. 위 입력 영역의 ‘슬라이드(PPTX) 만들기’를 다시 눌러 전체 초안을 생성해 주세요.";
 
 type TopicFocusState =
   | { status: "idle" }
@@ -90,6 +97,7 @@ type TopicFocusState =
       status: "refreshing";
       options: TrainingFocusOption[];
       warnings: string[];
+      recommendedId?: string;
       selectedId?: string;
       customValue: string;
       historyCompared: boolean;
@@ -98,6 +106,7 @@ type TopicFocusState =
       status: "choosing";
       options: TrainingFocusOption[];
       warnings: string[];
+      recommendedId?: string;
       selectedId?: string;
       customValue: string;
       historyCompared: boolean;
@@ -106,6 +115,24 @@ type TopicFocusState =
   | { status: "error"; message: string }
   | { status: "resolved"; focus: string }
   | { status: "bypassed" };
+
+/** 세부 방향 새로고침이 폼 조건 변경으로 중단되면 마지막으로 확인한 선택 상태를 복원한다. */
+export function restoreTopicFocusAfterRequestAbort(
+  current: TopicFocusState
+): TopicFocusState {
+  if (current.status === "loading") return { status: "idle" };
+  if (current.status !== "refreshing") return current;
+  if (current.options.length === 0) return { status: "idle" };
+  return {
+    status: "choosing",
+    options: current.options,
+    warnings: current.warnings,
+    recommendedId: current.recommendedId,
+    selectedId: current.selectedId,
+    customValue: current.customValue,
+    historyCompared: current.historyCompared,
+  };
+}
 
 type ResultGenerationContext = {
   category: string;
@@ -207,11 +234,16 @@ export function localQuality(
   return {
     checked: true,
     repaired: previous?.repaired ?? false,
+    issues: report.issues,
     ...messages,
   };
 }
 
-const SLIDE_EVIDENCE_ISSUE_CODES = new Set(["missing_source_refs", "invalid_source_ref"]);
+const SLIDE_EVIDENCE_ISSUE_CODES: ReadonlySet<GenerationQualityIssueCode> =
+  new Set<GenerationQualityIssueCode>([
+    "missing_source_refs",
+    "invalid_source_ref",
+  ]);
 const SLIDE_EVIDENCE_PATH = /^slides\.(\d+)\.sourceRefs(?:\.|$)/;
 
 /** 슬라이드별 근거 오류만 0-based 인덱스로 정규화한다. */
@@ -229,6 +261,60 @@ export function slideEvidenceIssueIndices(
     }
   }
   return Array.from(indices).sort((a, b) => a - b);
+}
+
+const SLIDE_SOP_ISSUE_CODES: ReadonlySet<GenerationQualityIssueCode> =
+  new Set<GenerationQualityIssueCode>([
+    "missing_sop_application",
+    "missing_sop_reference",
+    "missing_sop_disclosure",
+    "invalid_sop_reference",
+    "unverified_sop_claim",
+  ]);
+const SLIDE_QUALITY_PATH = /^slides\.(\d+)(?:\.|$)/;
+
+function fallbackSopRepairIndex(deck: GeneratedSlideDeck): number | null {
+  if (deck.slides.length === 0) return null;
+  const preferredRoles = ["procedure", "safety", "evidence"] as const;
+  const roleIndex = preferredRoles
+    .map((role) => deck.slides.findIndex((slide) => slide.role === role))
+    .find((index) => index >= 0);
+  // 목표·요약 장을 임의로 SOP 적용 장으로 바꾸지 않는다. 안전한 후보가 없으면
+  // 정확한 위치를 화면에 남기고 사용자가 장을 고르도록 한다.
+  return roleIndex ?? null;
+}
+
+/** SOP 계약 오류가 있는 장만 후속 부분 재생성 대상으로 고른다. */
+export function slideSopIssueIndices(
+  deck: GeneratedSlideDeck,
+  duration: Duration
+): number[] {
+  const indices = new Set<number>();
+  let needsFallbackTarget = false;
+  for (const issue of inspectCurrentGenerationQuality("slides", deck, duration).issues) {
+    if (!SLIDE_SOP_ISSUE_CODES.has(issue.code)) continue;
+    const match = issue.path.match(SLIDE_QUALITY_PATH);
+    const index = match ? Number(match[1]) : Number.NaN;
+    if (Number.isSafeInteger(index) && index >= 0 && index < deck.slides.length) {
+      indices.add(index);
+    } else {
+      needsFallbackTarget = true;
+    }
+  }
+  if (needsFallbackTarget) {
+    const fallbackIndex = fallbackSopRepairIndex(deck);
+    if (fallbackIndex !== null) indices.add(fallbackIndex);
+  }
+  return Array.from(indices).sort((a, b) => a - b);
+}
+
+export function hasSlideSopQualityIssues(
+  deck: GeneratedSlideDeck,
+  duration: Duration
+): boolean {
+  return inspectCurrentGenerationQuality("slides", deck, duration).issues.some((issue) =>
+    SLIDE_SOP_ISSUE_CODES.has(issue.code)
+  );
 }
 
 /** 서버가 돌려준 인덱스를 현재 덱 범위 안의 중복 없는 0-based 값으로 제한한다. */
@@ -281,6 +367,36 @@ type EvidenceRepairPayload = {
   error?: unknown;
 };
 
+type QualityRepairOperation = EvidenceRepairOperation;
+
+type QualityRepairPayload = Partial<GeneratedSlide> & {
+  sourceLabels?: unknown;
+  sources?: unknown;
+  sopEvidence?: unknown;
+  error?: unknown;
+};
+
+export function shouldApplyQualityRepairResponse(
+  responseOk: boolean,
+  payload: QualityRepairPayload | null
+): payload is GeneratedSlide & QualityRepairPayload {
+  return Boolean(
+    responseOk &&
+      payload &&
+      typeof payload.title === "string" &&
+      Array.isArray(payload.bullets) &&
+      payload.bullets.length > 0 &&
+      payload.bullets.every((bullet) => typeof bullet === "string") &&
+      typeof payload.notes === "string" &&
+      Array.isArray(payload.sourceRefs) &&
+      payload.sourceRefs.length > 0 &&
+      Array.isArray(payload.sourceLabels) &&
+      payload.sourceLabels.every((label) => typeof label === "string") &&
+      Array.isArray(payload.sources) &&
+      normalizedSopEvidence(payload.sopEvidence)
+  );
+}
+
 export function shouldApplyEvidenceRepairResponse(
   responseOk: boolean,
   payload: EvidenceRepairPayload | null
@@ -292,6 +408,23 @@ export function shouldApplyEvidenceRepairResponse(
     Array.isArray(candidate.slides) &&
     candidate.slides.length > 0 &&
     Array.isArray(candidate.sources)
+  );
+}
+
+/**
+ * 근거 보완 중 SOP 조회 결과가 바뀌면 기존 SOP 문장과 새 근거 상태가 어긋날 수 있다.
+ * 레거시 덱처럼 기존 상태가 없을 때만 새 상태를 채택하고, 그 외에는 상태·라벨이 모두
+ * 같은 서버 스냅샷만 허용한다.
+ */
+export function isCompatibleSopEvidenceRefresh(expected: unknown, received: unknown): boolean {
+  const next = normalizedSopEvidence(received);
+  if (!next) return false;
+  const current = normalizedSopEvidence(expected);
+  if (!current) return true;
+  return (
+    current.status === next.status &&
+    JSON.stringify([...current.sourceLabels].sort()) ===
+      JSON.stringify([...next.sourceLabels].sort())
   );
 }
 
@@ -330,6 +463,8 @@ export function GenerateForm({
   const regenRequestRef = useRef<AbortController | null>(null);
   const evidenceRepairRequestRef = useRef<EvidenceRepairOperation | null>(null);
   const evidenceRepairOperationIdRef = useRef(0);
+  const qualityRepairRequestRef = useRef<QualityRepairOperation | null>(null);
+  const qualityRepairOperationIdRef = useRef(0);
   const deckRef = useRef<GeneratedSlideDeck | null>(hydrated.deck);
   const savingRef = useRef(false);
   const exportBusyRef = useRef(false);
@@ -399,6 +534,22 @@ export function GenerateForm({
         : [];
     return { status: "idle", issueIndices };
   });
+  const [qualityRepair, setQualityRepair] = useState<QualityRepairState>(() => {
+    const initialDuration = asDuration(initialMaterial?.duration);
+    if (initialMaterial?.kind !== "slides" || !hydrated.deck) {
+      return { status: "idle", issueIndices: [] };
+    }
+    const issueIndices = slideSopIssueIndices(hydrated.deck, initialDuration);
+    const hasSopIssues = hasSlideSopQualityIssues(hydrated.deck, initialDuration);
+    return {
+      status: hasSopIssues && issueIndices.length === 0 ? "failed" : "idle",
+      issueIndices,
+      message:
+        hasSopIssues && issueIndices.length === 0
+          ? SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE
+          : undefined,
+    };
+  });
   const [localQualityRevision, setLocalQualityRevision] = useState(0);
   const [loadedId, setLoadedId] = useState<number | null>(initialMaterial?.id ?? null); // 재편집 대상 id
   const [loadedRevision, setLoadedRevision] = useState<number | null>(
@@ -451,18 +602,53 @@ export function GenerateForm({
   // 해결한 경우에는 자동 API 호출 없이 차단 상태만 즉시 해제한다.
   useEffect(() => {
     deckRef.current = deck;
-    if (resultKind !== "slides" || !deck || evidenceRepairRequestRef.current) return;
-    const issueIndices = slideEvidenceIssueIndices(deck, resultDuration);
+    if (
+      resultKind !== "slides" ||
+      !deck ||
+      evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current
+    ) {
+      return;
+    }
+    const evidenceIssueIndices = slideEvidenceIssueIndices(deck, resultDuration);
     setEvidenceRepair((current) => {
       const unchanged =
-        current.issueIndices.length === issueIndices.length &&
-        current.issueIndices.every((index, position) => index === issueIndices[position]);
-      const status = issueIndices.length === 0 ? "idle" : current.status;
+        current.issueIndices.length === evidenceIssueIndices.length &&
+        current.issueIndices.every(
+          (index, position) => index === evidenceIssueIndices[position]
+        );
+      const status = evidenceIssueIndices.length === 0 ? "idle" : current.status;
       if (unchanged && status === current.status) return current;
       return {
         status,
-        issueIndices,
-        message: issueIndices.length > 0 ? current.message : undefined,
+        issueIndices: evidenceIssueIndices,
+        message: evidenceIssueIndices.length > 0 ? current.message : undefined,
+      };
+    });
+    const qualityIssueIndices = slideSopIssueIndices(deck, resultDuration);
+    const hasSopIssues = hasSlideSopQualityIssues(deck, resultDuration);
+    setQualityRepair((current) => {
+      const unchanged =
+        current.issueIndices.length === qualityIssueIndices.length &&
+        current.issueIndices.every(
+          (index, position) => index === qualityIssueIndices[position]
+        );
+      const targetUnavailable = hasSopIssues && qualityIssueIndices.length === 0;
+      const status = targetUnavailable
+        ? "failed"
+        : qualityIssueIndices.length === 0
+          ? "idle"
+          : current.status;
+      const message = targetUnavailable
+        ? SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE
+        : qualityIssueIndices.length > 0
+          ? current.message
+          : undefined;
+      if (unchanged && status === current.status && message === current.message) return current;
+      return {
+        status,
+        issueIndices: qualityIssueIndices,
+        message,
       };
     });
   }, [deck, resultDuration, resultKind]);
@@ -473,6 +659,7 @@ export function GenerateForm({
       generationRequestRef.current?.abort();
       regenRequestRef.current?.abort();
       evidenceRepairRequestRef.current?.controller.abort();
+      qualityRepairRequestRef.current?.controller.abort();
     },
     []
   );
@@ -491,19 +678,7 @@ export function GenerateForm({
       focusRequestRef.current.abort();
       focusRequestRef.current = null;
       activeFocusRequestFingerprintRef.current = "";
-      setTopicFocus((current) => {
-        if (current.status === "loading") return { status: "idle" };
-        if (current.status !== "refreshing") return current;
-        if (current.options.length === 0) return { status: "idle" };
-        return {
-          status: "choosing",
-          options: current.options,
-          warnings: current.warnings,
-          selectedId: current.selectedId,
-          customValue: current.customValue,
-          historyCompared: current.historyCompared,
-        };
-      });
+      setTopicFocus(restoreTopicFocusAfterRequestAbort);
     }
   }, [audience, category, conditions, date, duration, place, slideMode, topic, type]);
 
@@ -552,6 +727,7 @@ export function GenerateForm({
       (savingRef.current ||
         regenRequestRef.current ||
         evidenceRepairRequestRef.current ||
+        qualityRepairRequestRef.current ||
         exportBusyRef.current)
     ) {
       return;
@@ -574,6 +750,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current
     ) {
       return;
@@ -603,6 +780,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current
     ) return;
     setSaved(false);
@@ -623,6 +801,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current
     ) return;
     setSaved(false);
@@ -651,6 +830,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current
     ) return;
     setSaved(false);
@@ -679,6 +859,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current
     ) return;
     setSaved(false);
@@ -716,8 +897,11 @@ export function GenerateForm({
   /** 핵심 품질 오류가 남은 초안은 공식 파일·공유 저장본으로 내보내지 않는다. */
   function ensureQualityForOutput(): boolean {
     if (resultKind === "notebooklm") return true;
-    if (resultKind === "slides" && evidenceRepairRequestRef.current) {
-      toast.info("슬라이드 근거를 확인하고 있습니다", {
+    if (
+      resultKind === "slides" &&
+      (evidenceRepairRequestRef.current || qualityRepairRequestRef.current)
+    ) {
+      toast.info("슬라이드 품질을 자동으로 보완하고 있습니다", {
         description: "확인이 끝난 뒤 저장하거나 PPTX로 내보내 주세요.",
       });
       return false;
@@ -752,12 +936,327 @@ export function GenerateForm({
     return false;
   }
 
+  /** SOP 단정·근거 계약 오류가 있는 장만 빠른 모델로 후속 재생성하고 전체 덱을 재검증한다. */
+  async function repairSlideSopQuality(
+    candidateDeck: GeneratedSlideDeck,
+    context: ResultGenerationContext,
+    requestedIndices = slideSopIssueIndices(candidateDeck, context.duration)
+  ) {
+    if (
+      requestedIndices.length === 0 ||
+      qualityRepairRequestRef.current ||
+      evidenceRepairRequestRef.current ||
+      regenRequestRef.current ||
+      savingRef.current ||
+      exportBusyRef.current
+    ) {
+      return;
+    }
+
+    const expectedDeck = stripSlideDeckRuntimeData(candidateDeck);
+    const operation: QualityRepairOperation = {
+      controller: new AbortController(),
+      id: ++qualityRepairOperationIdRef.current,
+      resultRevision: resultRevisionRef.current,
+      deckFingerprint: slideDeckFingerprint(expectedDeck),
+    };
+    qualityRepairRequestRef.current = operation;
+    setQualityRepair({ status: "repairing", issueIndices: requestedIndices });
+
+    const isCurrentOperation = () =>
+      isCurrentEvidenceRepairSnapshot({
+        expectedDeck,
+        currentDeck: deckRef.current,
+        operationId: operation.id,
+        activeOperationId: qualityRepairRequestRef.current?.id ?? null,
+        expectedResultRevision: operation.resultRevision,
+        currentResultRevision: resultRevisionRef.current,
+      }) && slideDeckFingerprint(expectedDeck) === operation.deckFingerprint;
+
+    let workingDeck = candidateDeck;
+    let followUpDeck: GeneratedSlideDeck | null = null;
+    let retrievalDegraded = false;
+    let trustedEvidenceFingerprint: string | null = null;
+    const initialReport = inspectCurrentGenerationQuality(
+      "slides",
+      candidateDeck,
+      context.duration
+    );
+    const initialBlockingKeys = new Set(
+      blockingGenerationQualityIssues(initialReport).map(
+        (issue) => `${issue.code}\u0000${issue.path}`
+      )
+    );
+    const initialSopIssueCount = initialReport.issues.filter((issue) =>
+      SLIDE_SOP_ISSUE_CODES.has(issue.code)
+    ).length;
+    const attempted = new Set<number>();
+    const completed = new Set<number>();
+
+    const unexpectedBlockingIssuesFor = (report: ReturnType<typeof inspectCurrentGenerationQuality>) =>
+      blockingGenerationQualityIssues(report).filter(
+        (issue) =>
+          !initialBlockingKeys.has(`${issue.code}\u0000${issue.path}`) &&
+          !SLIDE_EVIDENCE_ISSUE_CODES.has(issue.code)
+      );
+
+    const applyQualityRepairDeck = (
+      repairedDeck: GeneratedSlideDeck,
+      repairState: QualityRepairState
+    ) => {
+      deckRef.current = repairedDeck;
+      setDeck(repairedDeck);
+      setSaved(false);
+      setQuality((previous) => {
+        const checked = localQuality("slides", repairedDeck, context.duration, previous);
+        return {
+          ...checked,
+          repaired: true,
+          warnings: Array.from(
+            new Set([
+              ...(retrievalDegraded ? [RETRIEVAL_DEGRADED_WARNING] : []),
+              ...checked.warnings,
+            ])
+          ).slice(0, 8),
+        };
+      });
+      setQualityRepair(repairState);
+    };
+
+    try {
+      const pending = normalizedEvidenceIssueIndices(
+        requestedIndices,
+        workingDeck.slides.length
+      );
+
+      while (pending.length > 0 && attempted.size < SOP_QUALITY_REPAIR_BATCH_SIZE) {
+        const index = pending.shift();
+        if (index === undefined || attempted.has(index)) continue;
+        // 앞 장을 고치면서 덱 수준 표식 누락까지 해결된 경우, 더는 문제가 아닌
+        // fallback 장을 불필요하게 다시 생성하지 않는다.
+        if (!slideSopIssueIndices(workingDeck, context.duration).includes(index)) continue;
+        attempted.add(index);
+
+        const requestSnapshot = stripSlideDeckRuntimeData(workingDeck);
+        const current = requestSnapshot.slides[index];
+        if (!current) continue;
+        const currentReport = inspectCurrentGenerationQuality(
+          "slides",
+          workingDeck,
+          context.duration
+        );
+        const issueInstruction = currentReport.issues
+          .filter((issue) => {
+            if (!SLIDE_SOP_ISSUE_CODES.has(issue.code)) return false;
+            const match = issue.path.match(SLIDE_QUALITY_PATH);
+            return !match || Number(match[1]) === index;
+          })
+          .map((issue) => issue.message)
+          .join(" / ")
+          .slice(0, 120);
+        const repairInstruction =
+          `확인되지 않은 SOP 단정과 근거 관계만 수정하세요. 근거 없는 번호·명칭·절차는 삭제하고 현재 SOP 계약을 지키세요.${issueInstruction ? ` ${issueInstruction}` : ""}`.slice(
+            0,
+            200
+          );
+
+        const response = await fetch("/api/generate/section", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          signal: operation.controller.signal,
+          body: JSON.stringify({
+            kind: "slide",
+            category: context.category,
+            audience: context.audience,
+            duration: context.duration,
+            slideMode: resolveSlideDeckMode(workingDeck.mode ?? context.slideMode),
+            topic: context.topic,
+            focus: context.focus || undefined,
+            conditions: context.conditions,
+            // 짧은 후속 복구에서 정밀 모델을 다시 오래 기다리지 않는다.
+            model: model === "gemini-pro" ? "gemini-flash" : model,
+            docTitle: workingDeck.title,
+            outline: workingDeck.slides.map((slide) => slide.title),
+            index,
+            current,
+            sopTarget: true,
+            instruction: repairInstruction,
+          }),
+        });
+        const payload = (await response.json().catch(() => null)) as QualityRepairPayload | null;
+        if (!isCurrentOperation()) return;
+        if (!shouldApplyQualityRepairResponse(response.ok, payload)) {
+          const message =
+            typeof payload?.error === "string"
+              ? payload.error
+              : `슬라이드 ${index + 1}의 SOP 근거를 자동으로 보완하지 못했습니다.`;
+          throw new Error(message);
+        }
+
+        retrievalDegraded ||= response.headers.get("X-RAG-Degraded") === "1";
+        const { sourceLabels, sources, sopEvidence } = payload;
+        const regenerated = { ...payload };
+        delete regenerated.sourceLabels;
+        delete regenerated.sources;
+        delete regenerated.sopEvidence;
+        delete regenerated.error;
+        const verifiedSopEvidence = normalizedSopEvidence(sopEvidence) as SopEvidence;
+        const trustedSourceLabels = mergedSourceLabels(undefined, sourceLabels) ?? [];
+        const trustedSources = mergeGeneratedSources([], sources);
+        const responseEvidenceFingerprint = JSON.stringify({
+          sourceLabels: [...trustedSourceLabels].sort(),
+          sopEvidence: {
+            status: verifiedSopEvidence.status,
+            sourceLabels: [...verifiedSopEvidence.sourceLabels].sort(),
+          },
+        });
+        if (
+          trustedEvidenceFingerprint !== null &&
+          trustedEvidenceFingerprint !== responseEvidenceFingerprint
+        ) {
+          throw new Error(
+            "SOP 근거 상태가 보완 도중 변경되었습니다. 현재 자료를 다시 조회해 시도해 주세요."
+          );
+        }
+        trustedEvidenceFingerprint = responseEvidenceFingerprint;
+        const slides = workingDeck.slides.map((slide, slideIndex) =>
+          slideIndex === index ? (regenerated as GeneratedSlide) : slide
+        );
+        workingDeck = {
+          ...workingDeck,
+          slides,
+          sourceLabels: trustedSourceLabels,
+          sources: trustedSources,
+          sopEvidence: verifiedSopEvidence,
+        };
+        completed.add(index);
+
+        for (const nextIndex of slideSopIssueIndices(workingDeck, context.duration)) {
+          if (!attempted.has(nextIndex) && !pending.includes(nextIndex)) pending.push(nextIndex);
+        }
+      }
+
+      if (!isCurrentOperation()) return;
+      const finalReport = inspectCurrentGenerationQuality(
+        "slides",
+        workingDeck,
+        context.duration
+      );
+      const unresolvedIndices = slideSopIssueIndices(workingDeck, context.duration);
+      const hasUnresolvedSopIssues = hasSlideSopQualityIssues(
+        workingDeck,
+        context.duration
+      );
+      const unexpectedBlockingIssues = unexpectedBlockingIssuesFor(finalReport);
+      if (unexpectedBlockingIssues.length > 0) {
+        throw new Error(
+          `보완 결과에 새로운 핵심 오류가 생겨 원본을 유지했습니다: ${unexpectedBlockingIssues
+            .slice(0, 2)
+            .map((issue) => issue.message)
+            .join(" / ")}`
+        );
+      }
+      if (hasUnresolvedSopIssues) {
+        if (unresolvedIndices.length === 0) {
+          throw new Error(`${SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE} 원본은 그대로 유지했습니다.`);
+        }
+        const remainingSopIssueCount = finalReport.issues.filter((issue) =>
+          SLIDE_SOP_ISSUE_CODES.has(issue.code)
+        ).length;
+        if (
+          completed.size > 0 &&
+          attempted.size >= SOP_QUALITY_REPAIR_BATCH_SIZE &&
+          remainingSopIssueCount < initialSopIssueCount
+        ) {
+          const message = `이번에 ${completed.size}장을 보완했습니다. ${unresolvedIndices
+            .map((index) => index + 1)
+            .join(", ")}번 슬라이드가 남았습니다. ‘문제 슬라이드 AI로 보완’을 다시 눌러 이어서 처리해 주세요.`;
+          applyQualityRepairDeck(workingDeck, {
+            status: "failed",
+            issueIndices: unresolvedIndices,
+            message,
+          });
+          toast.warning("SOP 품질을 일부 보완했습니다", { description: message });
+          return;
+        }
+        throw new Error(
+          `SOP 품질 오류가 ${unresolvedIndices.map((index) => index + 1).join(", ")}번 슬라이드에 남아 원본을 유지했습니다.`
+        );
+      }
+      applyQualityRepairDeck(workingDeck, {
+        status: "idle",
+        issueIndices: [],
+      });
+      followUpDeck = workingDeck;
+      toast.success("SOP 표현과 근거를 자동으로 보완했습니다");
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (!isCurrentOperation()) return;
+      const message =
+        error instanceof Error
+          ? error.message
+          : "잠시 후 다시 시도하거나 문제 슬라이드를 직접 수정해 주세요.";
+      const partialReport = inspectCurrentGenerationQuality(
+        "slides",
+        workingDeck,
+        context.duration
+      );
+      const partialSopIssueCount = partialReport.issues.filter((issue) =>
+        SLIDE_SOP_ISSUE_CODES.has(issue.code)
+      ).length;
+      const partialIndices = slideSopIssueIndices(workingDeck, context.duration);
+      const canKeepPartialProgress =
+        completed.size > 0 &&
+        partialIndices.length > 0 &&
+        partialSopIssueCount < initialSopIssueCount &&
+        unexpectedBlockingIssuesFor(partialReport).length === 0;
+      if (canKeepPartialProgress) {
+        const partialMessage = `앞서 보완한 ${completed.size}장은 유지했습니다. ${partialIndices
+          .map((index) => index + 1)
+          .join(", ")}번 슬라이드는 잠시 후 다시 보완해 주세요. (${message})`;
+        applyQualityRepairDeck(workingDeck, {
+          status: "failed",
+          issueIndices: partialIndices,
+          message: partialMessage,
+        });
+        toast.warning("SOP 품질을 일부 보완했습니다", { description: partialMessage });
+        return;
+      }
+      // 적용할 수 있는 성공분이 없거나 새 핵심 오류가 생긴 경우에만 원본 전체를 유지한다.
+      const unresolvedIndices = slideSopIssueIndices(candidateDeck, context.duration);
+      setQualityRepair({
+        status: "failed",
+        issueIndices: unresolvedIndices.length > 0 ? unresolvedIndices : requestedIndices,
+        message,
+      });
+      toast.error("SOP 품질 자동 보완 중 오류가 발생했습니다", { description: message });
+    } finally {
+      if (qualityRepairRequestRef.current?.id === operation.id) {
+        qualityRepairRequestRef.current = null;
+      }
+    }
+
+    // SOP 장을 먼저 확정한 뒤, 다른 장의 일반 출처 누락만 별도 근거 복구로 처리한다.
+    if (followUpDeck) {
+      const evidenceIndices = slideEvidenceIssueIndices(followUpDeck, context.duration);
+      if (evidenceIndices.length > 0) {
+        void repairSlideEvidence(followUpDeck, context, evidenceIndices);
+      }
+    }
+  }
+
   async function repairSlideEvidence(
     candidateDeck: GeneratedSlideDeck,
     context: ResultGenerationContext,
     requestedIndices = slideEvidenceIssueIndices(candidateDeck, context.duration)
   ) {
-    if (requestedIndices.length === 0 || evidenceRepairRequestRef.current) return;
+    if (
+      requestedIndices.length === 0 ||
+      evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current
+    ) {
+      return;
+    }
 
     const requestDeck = stripSlideDeckRuntimeData(candidateDeck);
     const operation: EvidenceRepairOperation = {
@@ -822,6 +1321,11 @@ export function GenerateForm({
         ...payload.deck,
         mode: resolveSlideDeckMode(payload.deck.mode ?? context.slideMode),
       };
+      if (!isCompatibleSopEvidenceRefresh(requestDeck.sopEvidence, nextDeck.sopEvidence)) {
+        throw new Error(
+          "SOP 근거 상태가 출처 보완 도중 변경되었습니다. 원본을 유지했으니 전체 초안을 다시 생성해 주세요."
+        );
+      }
       const serverUnresolved = normalizedEvidenceIssueIndices(
         payload.unresolvedIndices,
         nextDeck.slides.length
@@ -834,6 +1338,8 @@ export function GenerateForm({
         payload.repairedIndices,
         nextDeck.slides.length
       );
+      const nextSopIssueIndices = slideSopIssueIndices(nextDeck, context.duration);
+      const nextHasSopIssues = hasSlideSopQualityIssues(nextDeck, context.duration);
       const responseWarnings = Array.isArray(payload.warnings)
         ? payload.warnings
             .filter((warning): warning is string => typeof warning === "string")
@@ -860,6 +1366,21 @@ export function GenerateForm({
           unresolvedIndices.length > 0
             ? "자동 보완하지 못한 장은 번호를 선택해 검증된 출처를 직접 연결할 수 있습니다."
             : undefined,
+      });
+      setQualityRepair({
+        status:
+          nextHasSopIssues && nextSopIssueIndices.length === 0
+            ? "failed"
+            : nextSopIssueIndices.length > 0
+              ? "failed"
+              : "idle",
+        issueIndices: nextSopIssueIndices,
+        message:
+          nextHasSopIssues && nextSopIssueIndices.length === 0
+            ? SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE
+            : nextSopIssueIndices.length > 0
+              ? "근거 보완 결과에 SOP 품질 오류가 남았습니다. 문제 슬라이드를 다시 보완해 주세요."
+              : undefined,
       });
       if (unresolvedIndices.length > 0) {
         toast.warning("일부 슬라이드의 근거를 더 확인해 주세요", {
@@ -894,6 +1415,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current ||
       regenLoading !== null
     ) {
@@ -1033,6 +1555,8 @@ export function GenerateForm({
     regenRequestRef.current = null;
     evidenceRepairRequestRef.current?.controller.abort();
     evidenceRepairRequestRef.current = null;
+    qualityRepairRequestRef.current?.controller.abort();
+    qualityRepairRequestRef.current = null;
     resultRevisionRef.current += 1;
     setCopied(false);
     setEditing(false);
@@ -1041,6 +1565,7 @@ export function GenerateForm({
     setSaved(false);
     setQuality(null);
     setEvidenceRepair({ status: "idle", issueIndices: [] });
+    setQualityRepair({ status: "idle", issueIndices: [] });
     setLocalQualityRevision(0);
     setResultKind(null);
     setResultContext(null);
@@ -1059,6 +1584,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current
     ) return;
     const safeFocus = focus?.replace(/\s+/g, " ").trim().slice(0, 100) || undefined;
@@ -1134,15 +1660,37 @@ export function GenerateForm({
           requestContext.duration,
           serverQuality ?? null
         );
-        const issueIndices = slideEvidenceIssueIndices(normalizedDeck, requestContext.duration);
+        const evidenceIssueIndices = slideEvidenceIssueIndices(
+          normalizedDeck,
+          requestContext.duration
+        );
+        const qualityIssueIndices = slideSopIssueIndices(
+          normalizedDeck,
+          requestContext.duration
+        );
+        const hasSopQualityIssues = hasSlideSopQualityIssues(
+          normalizedDeck,
+          requestContext.duration
+        );
         deckRef.current = normalizedDeck;
         setDeck(normalizedDeck);
         setQuality(checkedQuality);
         setResultKind("slides");
         setResultContext(requestContext);
-        setEvidenceRepair({ status: "idle", issueIndices });
-        if (issueIndices.length > 0) {
-          void repairSlideEvidence(normalizedDeck, requestContext, issueIndices);
+        setEvidenceRepair({ status: "idle", issueIndices: evidenceIssueIndices });
+        setQualityRepair({
+          status: hasSopQualityIssues && qualityIssueIndices.length === 0 ? "failed" : "idle",
+          issueIndices: qualityIssueIndices,
+          message:
+            hasSopQualityIssues && qualityIssueIndices.length === 0
+              ? SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE
+              : undefined,
+        });
+        // SOP 문장·근거를 먼저 확정해야 후속 출처 보완이 재생성된 장을 덮지 않는다.
+        if (qualityIssueIndices.length > 0) {
+          void repairSlideSopQuality(normalizedDeck, requestContext, qualityIssueIndices);
+        } else if (!hasSopQualityIssues && evidenceIssueIndices.length > 0) {
+          void repairSlideEvidence(normalizedDeck, requestContext, evidenceIssueIndices);
         }
       } else {
         setQuality(json.quality ?? null);
@@ -1166,6 +1714,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current
     ) return;
     const trimmedTopic = topic.trim();
@@ -1181,6 +1730,7 @@ export function GenerateForm({
         ? {
             options: topicFocus.options,
             warnings: topicFocus.warnings,
+            recommendedId: topicFocus.recommendedId,
             selectedId: topicFocus.selectedId,
             customValue: topicFocus.customValue,
             historyCompared: topicFocus.historyCompared,
@@ -1188,6 +1738,7 @@ export function GenerateForm({
         : {
             options: [] as TrainingFocusOption[],
             warnings: [] as string[],
+            recommendedId: undefined,
             selectedId: undefined,
             customValue: "",
             historyCompared: false,
@@ -1225,6 +1776,7 @@ export function GenerateForm({
         | {
             scope?: "specific" | "broad";
             options?: TrainingFocusOption[];
+            recommendedId?: string;
             warnings?: string[];
             historyBasis?: "demo" | "saved-materials" | "request-only";
             error?: string;
@@ -1275,9 +1827,13 @@ export function GenerateForm({
         return;
       }
       options.forEach((option) => focusHistoryRef.current.add(option.title));
+      const recommendedId = options.some((option) => option.id === payload?.recommendedId)
+        ? payload?.recommendedId
+        : undefined;
       setTopicFocus({
         status: "choosing",
         options,
+        recommendedId,
         warnings: Array.isArray(payload?.warnings) ? payload.warnings : [],
         customValue: "",
         historyCompared:
@@ -1385,6 +1941,7 @@ export function GenerateForm({
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current ||
       exportBusyRef.current ||
       regenLoading !== null
     ) {
@@ -1489,7 +2046,8 @@ export function GenerateForm({
       exportBusyRef.current ||
       savingRef.current ||
       regenRequestRef.current ||
-      evidenceRepairRequestRef.current
+      evidenceRepairRequestRef.current ||
+      qualityRepairRequestRef.current
     ) {
       return;
     }
@@ -1647,11 +2205,21 @@ export function GenerateForm({
   const typeMeta = GEN_TYPES.find((t) => t.key === type)!;
   const focusBusy = topicFocus.status === "loading" || topicFocus.status === "refreshing";
   const evidenceRepairing = evidenceRepair.status === "repairing";
+  const qualityRepairing = qualityRepair.status === "repairing";
   const resultMutationLocked =
-    saving || regenLoading !== null || evidenceRepairing || pptxLoading || docExporting !== null;
+    saving ||
+    regenLoading !== null ||
+    evidenceRepairing ||
+    qualityRepairing ||
+    pptxLoading ||
+    docExporting !== null;
   const outputBlocked =
     (quality?.errors?.length ?? 0) > 0 ||
-    (resultKind === "slides" && (evidenceRepairing || evidenceRepair.issueIndices.length > 0));
+    (resultKind === "slides" &&
+      (evidenceRepairing ||
+        qualityRepairing ||
+        evidenceRepair.issueIndices.length > 0 ||
+        qualityRepair.issueIndices.length > 0));
   // 선택한 분야 색을 페이지 액센트로 흘린다(상단 바·분야 칩·생성 버튼). hex 인라인으로 동적 적용.
   const accent = categoryStyle(category).hex;
   const resultAccent = categoryStyle(resultContext?.category ?? category).hex;
@@ -1665,13 +2233,19 @@ export function GenerateForm({
         saving ||
         regenLoading !== null ||
         evidenceRepairing ||
+        qualityRepairing ||
         pptxLoading ||
         docExporting !== null
       ) return;
       setEditing((v) => !v);
     },
     saving,
-    locked: regenLoading !== null || evidenceRepairing || pptxLoading || docExporting !== null,
+    locked:
+      regenLoading !== null ||
+      evidenceRepairing ||
+      qualityRepairing ||
+      pptxLoading ||
+      docExporting !== null,
     outputBlocked,
     saved,
     loadedId,
@@ -1951,6 +2525,11 @@ export function GenerateForm({
                 topic={topic.trim()}
                 status={topicFocus.status}
                 options={"options" in topicFocus ? topicFocus.options : []}
+                recommendedId={
+                  topicFocus.status === "choosing" || topicFocus.status === "refreshing"
+                    ? topicFocus.recommendedId
+                    : undefined
+                }
                 selectedId={
                   topicFocus.status === "choosing" || topicFocus.status === "refreshing"
                     ? topicFocus.selectedId
@@ -2149,6 +2728,7 @@ export function GenerateForm({
                 focusBusy ||
                 regenLoading !== null ||
                 evidenceRepairing ||
+                qualityRepairing ||
                 saving ||
                 pptxLoading ||
                 docExporting !== null ||
@@ -2195,6 +2775,10 @@ export function GenerateForm({
             ...evidenceRepair,
             disabled: resultMutationLocked,
           }}
+          qualityRepair={{
+            ...qualityRepair,
+            disabled: resultMutationLocked,
+          }}
           onRepairEvidence={() => {
             const currentDeck = deckRef.current;
             if (!currentDeck || !resultContext) return;
@@ -2205,11 +2789,30 @@ export function GenerateForm({
             }
             void repairSlideEvidence(currentDeck, resultContext, issueIndices);
           }}
+          onRepairQuality={() => {
+            const currentDeck = deckRef.current;
+            if (!currentDeck || !resultContext) return;
+            const issueIndices = slideSopIssueIndices(currentDeck, resultContext.duration);
+            if (issueIndices.length === 0) {
+              const hasSopIssues = hasSlideSopQualityIssues(
+                currentDeck,
+                resultContext.duration
+              );
+              setQualityRepair({
+                status: hasSopIssues ? "failed" : "idle",
+                issueIndices: [],
+                message: hasSopIssues ? SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE : undefined,
+              });
+              return;
+            }
+            void repairSlideSopQuality(currentDeck, resultContext, issueIndices);
+          }}
           onTitleChange={(title) => {
             if (
               savingRef.current ||
               regenRequestRef.current ||
               evidenceRepairRequestRef.current ||
+              qualityRepairRequestRef.current ||
               exportBusyRef.current
             ) return;
             setSaved(false);

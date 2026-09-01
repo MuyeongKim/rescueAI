@@ -118,6 +118,8 @@ describe("buildTrainingFocusSuggestionPrompt", () => {
     expect(prompt).toContain("야간 산악 실종자 수색과 위치 확인");
     expect(prompt.match(/\[산악구조 교육교범 p\.12\]/g)).toHaveLength(2);
     expect(prompt).toContain("SOP·안전관리·역할 분담");
+    expect(prompt).toContain("options는 추천 우선순위로 정렬");
+    expect(prompt).toContain("첫 번째 항목은 사용자가 입력한 상위 주제와 직접 관련성이 높고");
   });
 
   it("허용 출처가 없으면 옵션을 반환하지 말도록 지시한다", () => {

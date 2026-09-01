@@ -847,6 +847,7 @@ export type GenerationQualityIssue = {
   code: GenerationQualityIssueCode;
   path: string;
   message: string;
+  excerpt?: string;
 };
 
 export type GenerationQualityReport = {

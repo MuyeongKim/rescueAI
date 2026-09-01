@@ -11,7 +11,12 @@ import {
   TriangleAlert,
 } from "lucide-react";
 
-import { REGEN_INSTRUCTIONS, type GeneratedDocSource } from "@/lib/generate";
+import {
+  BLOCKING_GENERATION_QUALITY_CODES,
+  REGEN_INSTRUCTIONS,
+  type GeneratedDocSource,
+  type GenerationQualityIssue,
+} from "@/lib/generate";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -96,6 +101,8 @@ export type GenerationQuality = {
   /** 저장·공식 파일 내보내기 전에 반드시 해결해야 하는 핵심 오류. */
   errors?: string[];
   warnings: string[];
+  /** 요약 문구로 잃어버린 정확한 위치·원인을 결과 화면에서 안내하기 위한 원본 검사 결과. */
+  issues?: GenerationQualityIssue[];
 };
 
 export type EvidenceRepairStatus = "idle" | "repairing" | "failed";
@@ -110,25 +117,129 @@ export type EvidenceRepairState = {
 export type EvidenceRepairControls = EvidenceRepairState & {
   disabled?: boolean;
   onRepair: () => void;
-  onSelectSlide: (index: number) => void;
 };
+
+export type QualityRepairStatus = "idle" | "repairing" | "failed";
+
+/** 슬라이드 본문·구성 품질 자동 보완 상태. 근거 전용 보완과 독립적으로 관리한다. */
+export type QualityRepairState = {
+  status: QualityRepairStatus;
+  issueIndices: number[];
+  message?: string;
+};
+
+export type QualityRepairControls = QualityRepairState & {
+  disabled?: boolean;
+  onRepair: () => void;
+};
+
+type SlideQualityIssueGroup = {
+  index: number;
+  title: string;
+  issues: GenerationQualityIssue[];
+};
+
+const SLIDE_QUALITY_ISSUE_PATH = /^slides\.(\d+)(?:\.|$)/;
+
+function issueExcerpt(issue: GenerationQualityIssue): string | null {
+  const excerpt = issue.excerpt;
+  return typeof excerpt === "string" && excerpt.trim() ? excerpt.trim() : null;
+}
+
+/** 차단 오류 중 정확한 슬라이드 경로를 가진 항목만 장별로 묶는다. */
+export function blockingSlideQualityIssueGroups(
+  issues: readonly GenerationQualityIssue[] | undefined,
+  slideTitles: readonly string[] | undefined
+): SlideQualityIssueGroup[] {
+  if (!issues?.length || !slideTitles?.length) return [];
+  const groups = new Map<number, SlideQualityIssueGroup>();
+  for (const issue of issues) {
+    if (!BLOCKING_GENERATION_QUALITY_CODES.has(issue.code)) continue;
+    const match = issue.path.match(SLIDE_QUALITY_ISSUE_PATH);
+    const index = match ? Number(match[1]) : Number.NaN;
+    if (!Number.isSafeInteger(index) || index < 0 || index >= slideTitles.length) continue;
+    const current = groups.get(index) ?? {
+      index,
+      title: slideTitles[index]?.trim() || "제목 없음",
+      issues: [],
+    };
+    current.issues.push(issue);
+    groups.set(index, current);
+  }
+  return Array.from(groups.values()).sort((a, b) => a.index - b.index);
+}
+
+/** 특정 장으로 좁힐 수 없는 덱 수준 차단 오류를 별도로 안내한다. */
+export function blockingDeckQualityIssues(
+  issues: readonly GenerationQualityIssue[] | undefined
+): GenerationQualityIssue[] {
+  if (!issues?.length) return [];
+  return issues.filter(
+    (issue) =>
+      BLOCKING_GENERATION_QUALITY_CODES.has(issue.code) &&
+      !SLIDE_QUALITY_ISSUE_PATH.test(issue.path)
+  );
+}
 
 export function QualityBanner({
   quality,
   evidenceRepair,
+  qualityRepair,
+  deckTitle,
+  slideTitles,
+  onSelectSlide,
 }: {
   quality?: GenerationQuality | null;
   evidenceRepair?: EvidenceRepairControls;
+  qualityRepair?: QualityRepairControls;
+  deckTitle?: string;
+  slideTitles?: readonly string[];
+  onSelectSlide?: (index: number) => void;
 }) {
   const evidenceBusy = evidenceRepair?.status === "repairing";
+  const qualityBusy = qualityRepair?.status === "repairing";
+  const repairBusy = evidenceBusy || qualityBusy;
   const evidenceIssues = evidenceRepair?.issueIndices ?? [];
   const hasEvidenceIssues = evidenceIssues.length > 0;
-  if (!quality?.checked && !evidenceBusy && !hasEvidenceIssues) return null;
+  const qualityIssues = qualityRepair?.issueIndices ?? [];
+  const hasQualityRepairTargets = qualityIssues.length > 0;
+  const slideIssueGroups = blockingSlideQualityIssueGroups(quality?.issues, slideTitles);
+  const deckQualityIssues = blockingDeckQualityIssues(quality?.issues);
+  const hasDetailedQualityIssues =
+    hasQualityRepairTargets || slideIssueGroups.length > 0 || deckQualityIssues.length > 0;
+  if (!quality?.checked && !repairBusy && !hasEvidenceIssues && !hasDetailedQualityIssues) {
+    return null;
+  }
 
   const errors = quality?.errors ?? [];
-  const blocked = !evidenceBusy && (errors.length > 0 || hasEvidenceIssues);
+  const blocked =
+    !repairBusy &&
+    (errors.length > 0 || hasEvidenceIssues || hasDetailedQualityIssues);
   const needsReview = (quality?.warnings.length ?? 0) > 0;
   const Icon = blocked || needsReview ? TriangleAlert : CircleCheck;
+  const selectionDisabled =
+    repairBusy || Boolean(evidenceRepair?.disabled) || Boolean(qualityRepair?.disabled);
+  const fallbackErrorLabel =
+    hasEvidenceIssues && !hasQualityRepairTargets
+      ? "슬라이드별 근거 출처"
+      : "슬라이드 품질 오류";
+  let summaryTitle = quality?.repaired
+    ? "초안을 한 번 보완하고 자동 점검했습니다"
+    : "초안 구성을 자동 점검했습니다";
+  let summaryDescription =
+    "필수 구성과 교육 흐름을 확인했습니다. 현장 적용 전 내용과 수치는 최종 검토해 주세요.";
+  if (qualityBusy) {
+    summaryTitle = "문제 슬라이드 보완 중";
+    summaryDescription = `슬라이드 ${qualityIssues.map((index) => index + 1).join(", ")}의 내용과 구성을 다시 점검하고 있습니다. 잠시만 기다려 주세요.`;
+  } else if (evidenceBusy) {
+    summaryTitle = "근거 확인 중";
+    summaryDescription = `슬라이드 ${evidenceIssues.map((index) => index + 1).join(", ")}의 출처를 교육자료와 대조하고 있습니다. 잠시만 기다려 주세요.`;
+  } else if (blocked) {
+    summaryTitle = "핵심 품질 오류가 있어 저장·내보내기가 잠겼습니다";
+    summaryDescription = `먼저 수정할 항목: ${errors.join(" · ") || fallbackErrorLabel}. 편집하거나 해당 부분을 AI로 다시 생성해 주세요.`;
+  } else if (needsReview) {
+    summaryDescription = `최종 확인이 필요한 항목: ${quality?.warnings.join(" · ")}`;
+  }
   return (
     <div
       id="generation-quality-summary"
@@ -139,14 +250,14 @@ export function QualityBanner({
         "flex gap-2.5 border-l-4 px-3 py-3 text-sm",
         blocked
           ? "border-l-red-600 bg-red-50 text-red-950 dark:bg-red-950/30 dark:text-red-100"
-          : evidenceBusy
+          : repairBusy
             ? "border-l-sky-600 bg-sky-50 text-sky-950 dark:bg-sky-950/30 dark:text-sky-100"
           : needsReview
           ? "border-l-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"
           : "border-l-emerald-600 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-100"
       )}
     >
-      {evidenceBusy ? (
+      {repairBusy ? (
         <Loader2
           className="mt-0.5 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none"
           aria-hidden="true"
@@ -155,26 +266,117 @@ export function QualityBanner({
         <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
       )}
       <div className="min-w-0 flex-1">
-        <p className="font-semibold">
-          {evidenceBusy
-            ? "근거 확인 중"
-            : blocked
-            ? "핵심 품질 오류가 있어 저장·내보내기가 잠겼습니다"
-            : quality?.repaired
-              ? "초안을 한 번 보완하고 자동 점검했습니다"
-              : "초안 구성을 자동 점검했습니다"}
-        </p>
-        <p className="mt-0.5 text-sm leading-relaxed opacity-80">
-          {evidenceBusy
-            ? `슬라이드 ${evidenceIssues.map((index) => index + 1).join(", ")}의 출처를 교육자료와 대조하고 있습니다. 잠시만 기다려 주세요.`
-            : blocked
-            ? `먼저 수정할 항목: ${errors.join(" · ") || "슬라이드별 근거 출처"}. 편집하거나 해당 부분을 AI로 다시 생성해 주세요.`
-            : needsReview
-            ? `최종 확인이 필요한 항목: ${quality?.warnings.join(" · ")}`
-            : "필수 구성과 교육 흐름을 확인했습니다. 현장 적용 전 내용과 수치는 최종 검토해 주세요."}
-        </p>
+        <p className="font-semibold">{summaryTitle}</p>
+        <p className="mt-0.5 text-sm leading-relaxed opacity-80">{summaryDescription}</p>
+        {deckQualityIssues.length > 0 && (
+          <section className="mt-3 space-y-2" aria-labelledby="deck-quality-issues-title">
+            <h3 id="deck-quality-issues-title" className="font-semibold">
+              전체 구성에서 먼저 고칠 항목
+            </h3>
+            <ul className="space-y-1.5 rounded-lg border border-red-300/80 bg-background/80 p-3 text-foreground shadow-sm dark:border-red-900 dark:bg-background/60">
+              {deckQualityIssues.map((issue, index) => (
+                <li key={`${issue.code}-${issue.path}-${index}`} className="text-sm leading-relaxed">
+                  {issue.message}
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+        {slideIssueGroups.length > 0 && (
+          <section
+            className="mt-3 space-y-2"
+            aria-labelledby="slide-quality-issues-title"
+          >
+            <h3 id="slide-quality-issues-title" className="font-semibold">
+              {deckTitle?.trim() ? `‘${deckTitle.trim()}’에서 ` : ""}
+              먼저 고칠 슬라이드
+            </h3>
+            <ol className="space-y-2">
+              {slideIssueGroups.map((group) => (
+                <li
+                  key={group.index}
+                  className="rounded-lg border border-red-300/80 bg-background/80 p-3 text-foreground shadow-sm dark:border-red-900 dark:bg-background/60"
+                >
+                  <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                    <div className="min-w-0 space-y-2">
+                      <h4 className="font-semibold leading-snug">
+                        <span className="mr-2 text-red-700 dark:text-red-300">
+                          슬라이드 {group.index + 1}
+                        </span>
+                        <span className="break-words">{group.title}</span>
+                      </h4>
+                      <ul className="space-y-2">
+                        {group.issues.map((issue, issueIndex) => {
+                          const excerpt = issueExcerpt(issue);
+                          return (
+                            <li key={`${issue.code}-${issue.path}-${issueIndex}`}>
+                              <p className="text-sm leading-relaxed">{issue.message}</p>
+                              {excerpt && (
+                                <blockquote className="mt-1 border-l-2 border-red-300 pl-2 text-xs leading-relaxed text-muted-foreground dark:border-red-800">
+                                  문제 부분: “{excerpt}”
+                                </blockquote>
+                              )}
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                    {onSelectSlide && (
+                      <Button
+                        type="button"
+                        variant="outline"
+                        className="min-h-11 shrink-0 bg-background"
+                        onClick={() => onSelectSlide(group.index)}
+                        disabled={selectionDisabled}
+                        aria-label={`슬라이드 ${group.index + 1} ${group.title} 편집으로 이동`}
+                      >
+                        <Pencil className="h-4 w-4" aria-hidden="true" />
+                        편집으로 이동
+                      </Button>
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ol>
+          </section>
+        )}
+        {qualityRepair && hasQualityRepairTargets && (
+          <div className="mt-3 flex flex-col items-start gap-2 border-t border-current/15 pt-3 sm:flex-row sm:items-center sm:justify-between">
+            <div>
+              <p className="text-sm font-medium">문제 장의 내용·구성을 한 번에 다시 점검합니다.</p>
+              {qualityRepair.message && (
+                <p className="mt-0.5 text-xs leading-relaxed opacity-80">
+                  {qualityRepair.message}
+                </p>
+              )}
+            </div>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11 shrink-0 bg-background/80"
+              onClick={qualityRepair.onRepair}
+              disabled={qualityRepair.disabled || qualityBusy || evidenceBusy}
+              aria-busy={qualityBusy}
+            >
+              {qualityBusy ? (
+                <Loader2
+                  className="h-4 w-4 animate-spin motion-reduce:animate-none"
+                  aria-hidden="true"
+                />
+              ) : (
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+              )}
+              {qualityBusy ? "문제 슬라이드 보완 중…" : "문제 슬라이드 AI로 보완"}
+            </Button>
+          </div>
+        )}
+        {qualityRepair?.message && !hasQualityRepairTargets && (
+          <p className="mt-3 border-t border-current/15 pt-3 text-sm leading-relaxed opacity-85">
+            {qualityRepair.message}
+          </p>
+        )}
         {!evidenceBusy && hasEvidenceIssues && evidenceRepair && (
-          <div className="mt-3 space-y-2">
+          <div className="mt-3 space-y-2 border-t border-current/15 pt-3">
             <p className="text-sm font-medium">
               근거 확인이 필요한 슬라이드: {evidenceIssues.map((index) => index + 1).join(", ")}
             </p>
@@ -184,8 +386,8 @@ export function QualityBanner({
                   key={index}
                   type="button"
                   className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-current/30 bg-background/70 px-3 font-semibold tabular-nums transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
-                  onClick={() => evidenceRepair.onSelectSlide(index)}
-                  disabled={evidenceRepair.disabled}
+                  onClick={() => onSelectSlide?.(index)}
+                  disabled={selectionDisabled || !onSelectSlide}
                   aria-label={`근거 확인이 필요한 슬라이드 ${index + 1} 편집`}
                 >
                   {index + 1}
@@ -196,7 +398,7 @@ export function QualityBanner({
                 variant="outline"
                 className="min-h-11 bg-background/80"
                 onClick={evidenceRepair.onRepair}
-                disabled={evidenceRepair.disabled}
+                disabled={evidenceRepair.disabled || qualityBusy}
               >
                 <RefreshCw className="h-4 w-4" aria-hidden="true" />
                 누락 근거 다시 보완
