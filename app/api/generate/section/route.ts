@@ -19,7 +19,7 @@ import {
   MAX_GENERATION_CONDITIONS_CHARS,
   resolveSlideDeckMode,
   regeneratedSectionSchema,
-  regeneratedSlideSchema,
+  strictGeneratedSlideSchemaFor,
   stripSectionInlineSourceRefs,
   type GeneratedDocSource,
   type GeneratedSection,
@@ -231,12 +231,19 @@ export async function POST(req: Request) {
     };
 
     if (kind === "slide") {
+      if (sourceLabels.length === 0) {
+        return Response.json(
+          { error: "슬라이드에 연결할 검증된 근거 출처가 없습니다." },
+          { status: 422 }
+        );
+      }
+      const strictSlideSchema = strictGeneratedSlideSchemaFor(sourceLabels);
       const cur = body.current as GeneratedSlide;
       const generateSlide = (currentSlide: GeneratedSlide, extraInstruction?: string) =>
         withGenerationModel(async (model) => {
         const generated = await generateObject({
           model,
-          schema: regeneratedSlideSchema,
+          schema: strictSlideSchema,
           system,
           prompt: buildSlideRegenPrompt({
             category,

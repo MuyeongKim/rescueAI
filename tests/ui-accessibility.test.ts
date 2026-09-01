@@ -11,8 +11,10 @@ import {
   normalizedCompositionPatch,
   resolvePreviewLayout,
   SlideDeckResult,
+  verifiedDeckSourceLabels,
 } from "@/components/generate/SlideDeckResult";
 import { DocResult } from "@/components/generate/DocResult";
+import type { EvidenceRepairState } from "@/components/generate/parts";
 import { MobileMoreSheet } from "@/components/layout/MobileMoreSheet";
 import { TopicFocusPanel } from "@/components/generate/TopicFocusPanel";
 import { Button } from "@/components/ui/button";
@@ -25,6 +27,7 @@ const sampleSlide: GeneratedSlide = {
   notes: "교관 설명",
   layout: "summary",
   composition: "statement",
+  sourceRefs: ["[교육자료 1 p.1]"],
   visual: {
     mode: "source-page",
     assetId: "source-asset",
@@ -43,6 +46,9 @@ const sampleDeck: GeneratedSlideDeck = {
     doc: `교육자료 ${index + 1}`,
     page: index + 1,
   })),
+  sourceLabels: Array.from({ length: 8 }, (_, index) =>
+    `[교육자료 ${index + 1} p.${index + 1}]`
+  ),
 };
 
 function renderSlideDeck({
@@ -50,10 +56,12 @@ function renderSlideDeck({
   pptxLoading = false,
   saving = false,
   outputBlocked = false,
+  evidenceRepair = undefined as EvidenceRepairState | undefined,
+  deck = sampleDeck as GeneratedSlideDeck,
 } = {}) {
   return renderToStaticMarkup(
     createElement(SlideDeckResult, {
-      deck: sampleDeck,
+      deck,
       chrome: {
         accent: "#b91c1c",
         editing,
@@ -82,6 +90,8 @@ function renderSlideDeck({
       onDeleteSlide: () => undefined,
       onDownloadPptx: () => undefined,
       pptxLoading,
+      evidenceRepair,
+      onRepairEvidence: () => undefined,
       quality: outputBlocked
         ? {
             checked: true,
@@ -272,6 +282,69 @@ describe("슬라이드 편집 접근성과 상태", () => {
     expect(html).toContain("차단하지 않는 추가 검토 항목: 일부 슬라이드 제목 길이");
     expect(html).toMatch(/<button[^>]*disabled=""[^>]*>[^<]*(?:<[^>]+>)*PPTX 다운로드/);
     expect(html).toContain("편집하거나 해당 부분을 AI로 다시 생성해 주세요.");
+  });
+
+  it("슬라이드 근거 확인 중에는 대상 장 번호를 알리고 저장·PPTX를 잠근다", () => {
+    const html = renderSlideDeck({
+      editing: false,
+      outputBlocked: true,
+      evidenceRepair: { status: "repairing", issueIndices: [0] },
+    });
+
+    expect(html).toContain("근거 확인 중");
+    expect(html).toContain("슬라이드 1의 출처를 교육자료와 대조하고 있습니다");
+    expect(html).toContain('role="status"');
+    expect(html).toContain('aria-live="polite"');
+    expect(html).toContain('aria-describedby="generation-quality-summary"');
+    expect(html).not.toContain('title="핵심 품질 오류를 수정한 뒤 내보낼 수 있습니다."');
+  });
+
+  it("미해결 근거 오류는 정확한 장 이동과 44px 이상 재시도 동작을 제공한다", () => {
+    const html = renderSlideDeck({
+      outputBlocked: true,
+      evidenceRepair: {
+        status: "failed",
+        issueIndices: [0],
+        message: "자동 보완하지 못했습니다.",
+      },
+    });
+
+    expect(html).toContain('role="alert"');
+    expect(html).toContain('aria-live="assertive"');
+    expect(html).toContain('aria-label="근거 확인이 필요한 슬라이드 1 편집"');
+    expect(html).toContain("누락 근거 다시 보완");
+    expect(html).toContain("min-h-11 min-w-11");
+    expect(html).toContain('id="selected-slide-heading" tabindex="-1"');
+    expect(html).toContain("focus:ring-2 focus:ring-ring");
+  });
+
+  it("편집 화면에서는 서버가 검증한 출처만 체크박스로 1~4개 선택한다", () => {
+    const html = renderSlideDeck();
+
+    expect(html).toContain("근거 출처 (1~4개)");
+    expect(html).toContain("자유 입력은 지원하지 않습니다.");
+    expect(html).toContain('type="checkbox"');
+    expect(html).toContain("[교육자료 1 p.1]");
+    expect(html).toContain("선택 1/4");
+    expect(html).toContain("근거는 최소 1개를 유지해야 합니다");
+    expect(html).not.toContain('placeholder="출처');
+    expect(verifiedDeckSourceLabels(["임의 표기", "[교육자료 p.1]", "[줄바꿈\n p.2]"])).toEqual([
+      "[교육자료 p.1]",
+    ]);
+  });
+
+  it("근거를 4개 선택하면 나머지 검증 출처는 비활성화하고 교체 방법을 안내한다", () => {
+    const sourceRefs = sampleDeck.sourceLabels?.slice(0, 4) ?? [];
+    const html = renderSlideDeck({
+      deck: {
+        ...sampleDeck,
+        slides: [{ ...sampleSlide, sourceRefs }],
+      },
+    });
+
+    expect(html).toContain("선택 4/4");
+    expect(html).toContain("최대 4개를 선택했습니다");
+    expect(html).toMatch(/id="slide-source-0-4"[^>]*disabled=""/);
   });
 
   it("composition을 우선해 미리보기를 정하고 필요한 항목과 안전한 시각자료를 보정한다", () => {

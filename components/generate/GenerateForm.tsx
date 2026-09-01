@@ -53,6 +53,7 @@ import {
   OptionGroup,
   ResultSkeleton,
   StepHeader,
+  type EvidenceRepairState,
   type GenerationQuality,
   type RegenState,
   type ResultChrome,
@@ -210,6 +211,90 @@ export function localQuality(
   };
 }
 
+const SLIDE_EVIDENCE_ISSUE_CODES = new Set(["missing_source_refs", "invalid_source_ref"]);
+const SLIDE_EVIDENCE_PATH = /^slides\.(\d+)\.sourceRefs(?:\.|$)/;
+
+/** 슬라이드별 근거 오류만 0-based 인덱스로 정규화한다. */
+export function slideEvidenceIssueIndices(
+  deck: GeneratedSlideDeck,
+  duration: Duration
+): number[] {
+  const indices = new Set<number>();
+  for (const issue of inspectCurrentGenerationQuality("slides", deck, duration).issues) {
+    if (!SLIDE_EVIDENCE_ISSUE_CODES.has(issue.code)) continue;
+    const match = issue.path.match(SLIDE_EVIDENCE_PATH);
+    const index = match ? Number(match[1]) : Number.NaN;
+    if (Number.isSafeInteger(index) && index >= 0 && index < deck.slides.length) {
+      indices.add(index);
+    }
+  }
+  return Array.from(indices).sort((a, b) => a - b);
+}
+
+/** 서버가 돌려준 인덱스를 현재 덱 범위 안의 중복 없는 0-based 값으로 제한한다. */
+export function normalizedEvidenceIssueIndices(value: unknown, slideCount: number): number[] {
+  if (!Array.isArray(value)) return [];
+  return Array.from(
+    new Set(
+      value.filter(
+        (index): index is number =>
+          typeof index === "number" &&
+          Number.isSafeInteger(index) &&
+          index >= 0 &&
+          index < slideCount
+      )
+    )
+  ).sort((a, b) => a - b);
+}
+
+function slideDeckFingerprint(deck: GeneratedSlideDeck | null): string {
+  return deck ? JSON.stringify(stripSlideDeckRuntimeData(deck)) : "";
+}
+
+export function isCurrentEvidenceRepairSnapshot(args: {
+  expectedDeck: GeneratedSlideDeck;
+  currentDeck: GeneratedSlideDeck | null;
+  operationId: number;
+  activeOperationId: number | null;
+  expectedResultRevision: number;
+  currentResultRevision: number;
+}): boolean {
+  return (
+    args.activeOperationId === args.operationId &&
+    args.currentResultRevision === args.expectedResultRevision &&
+    slideDeckFingerprint(args.currentDeck) === slideDeckFingerprint(args.expectedDeck)
+  );
+}
+
+type EvidenceRepairOperation = {
+  controller: AbortController;
+  id: number;
+  resultRevision: number;
+  deckFingerprint: string;
+};
+
+type EvidenceRepairPayload = {
+  deck?: unknown;
+  repairedIndices?: unknown;
+  unresolvedIndices?: unknown;
+  warnings?: unknown;
+  error?: unknown;
+};
+
+export function shouldApplyEvidenceRepairResponse(
+  responseOk: boolean,
+  payload: EvidenceRepairPayload | null
+): payload is EvidenceRepairPayload & { deck: GeneratedSlideDeck } {
+  if (!responseOk || !payload?.deck || typeof payload.deck !== "object") return false;
+  const candidate = payload.deck as Partial<GeneratedSlideDeck>;
+  return (
+    typeof candidate.title === "string" &&
+    Array.isArray(candidate.slides) &&
+    candidate.slides.length > 0 &&
+    Array.isArray(candidate.sources)
+  );
+}
+
 export function GenerateForm({
   docsByCategory,
   models = [],
@@ -243,6 +328,9 @@ export function GenerateForm({
   const focusRequestRef = useRef<AbortController | null>(null);
   const generationRequestRef = useRef<AbortController | null>(null);
   const regenRequestRef = useRef<AbortController | null>(null);
+  const evidenceRepairRequestRef = useRef<EvidenceRepairOperation | null>(null);
+  const evidenceRepairOperationIdRef = useRef(0);
+  const deckRef = useRef<GeneratedSlideDeck | null>(hydrated.deck);
   const savingRef = useRef(false);
   const exportBusyRef = useRef(false);
   const resultRevisionRef = useRef(0);
@@ -303,6 +391,14 @@ export function GenerateForm({
     }
     return null;
   });
+  const [evidenceRepair, setEvidenceRepair] = useState<EvidenceRepairState>(() => {
+    const initialDuration = asDuration(initialMaterial?.duration);
+    const issueIndices =
+      initialMaterial?.kind === "slides" && hydrated.deck
+        ? slideEvidenceIssueIndices(hydrated.deck, initialDuration)
+        : [];
+    return { status: "idle", issueIndices };
+  });
   const [localQualityRevision, setLocalQualityRevision] = useState(0);
   const [loadedId, setLoadedId] = useState<number | null>(initialMaterial?.id ?? null); // 재편집 대상 id
   const [loadedRevision, setLoadedRevision] = useState<number | null>(
@@ -351,11 +447,32 @@ export function GenerateForm({
     }
   }, [deck, doc, localQualityRevision, resultDuration, resultKind]);
 
+  // 편집된 최신 덱을 비동기 근거 복구의 스냅샷 검증에 사용한다. 편집 자체가 근거 오류를
+  // 해결한 경우에는 자동 API 호출 없이 차단 상태만 즉시 해제한다.
+  useEffect(() => {
+    deckRef.current = deck;
+    if (resultKind !== "slides" || !deck || evidenceRepairRequestRef.current) return;
+    const issueIndices = slideEvidenceIssueIndices(deck, resultDuration);
+    setEvidenceRepair((current) => {
+      const unchanged =
+        current.issueIndices.length === issueIndices.length &&
+        current.issueIndices.every((index, position) => index === issueIndices[position]);
+      const status = issueIndices.length === 0 ? "idle" : current.status;
+      if (unchanged && status === current.status) return current;
+      return {
+        status,
+        issueIndices,
+        message: issueIndices.length > 0 ? current.message : undefined,
+      };
+    });
+  }, [deck, resultDuration, resultKind]);
+
   useEffect(
     () => () => {
       focusRequestRef.current?.abort();
       generationRequestRef.current?.abort();
       regenRequestRef.current?.abort();
+      evidenceRepairRequestRef.current?.controller.abort();
     },
     []
   );
@@ -406,7 +523,9 @@ export function GenerateForm({
   ) {
     if (
       !fromRegeneration &&
-      (savingRef.current || regenRequestRef.current || exportBusyRef.current)
+      (savingRef.current ||
+        regenRequestRef.current ||
+        exportBusyRef.current)
     ) {
       return;
     }
@@ -430,7 +549,10 @@ export function GenerateForm({
   ) {
     if (
       !fromRegeneration &&
-      (savingRef.current || regenRequestRef.current || exportBusyRef.current)
+      (savingRef.current ||
+        regenRequestRef.current ||
+        evidenceRepairRequestRef.current ||
+        exportBusyRef.current)
     ) {
       return;
     }
@@ -448,7 +570,14 @@ export function GenerateForm({
     setLocalQualityRevision((revision) => revision + 1);
   }
   function patchBullet(slideI: number, bulletI: number, value: string) {
-    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+    if (
+      savingRef.current ||
+      regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
+      exportBusyRef.current
+    ) {
+      return;
+    }
     setSaved(false);
     setDeck((previous) =>
       previous
@@ -470,7 +599,12 @@ export function GenerateForm({
     setLocalQualityRevision((revision) => revision + 1);
   }
   function moveSlide(index: number, direction: -1 | 1) {
-    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+    if (
+      savingRef.current ||
+      regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
+      exportBusyRef.current
+    ) return;
     setSaved(false);
     setRegenIdx(null);
     setDeck((previous) => {
@@ -485,7 +619,12 @@ export function GenerateForm({
   }
 
   function addSlide(afterIndex: number) {
-    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+    if (
+      savingRef.current ||
+      regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
+      exportBusyRef.current
+    ) return;
     setSaved(false);
     setRegenIdx(null);
     setDeck((previous) => {
@@ -508,7 +647,12 @@ export function GenerateForm({
   }
 
   function duplicateSlide(index: number) {
-    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+    if (
+      savingRef.current ||
+      regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
+      exportBusyRef.current
+    ) return;
     setSaved(false);
     setRegenIdx(null);
     setDeck((previous) => {
@@ -531,7 +675,12 @@ export function GenerateForm({
   }
 
   function deleteSlide(index: number) {
-    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+    if (
+      savingRef.current ||
+      regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
+      exportBusyRef.current
+    ) return;
     setSaved(false);
     setRegenIdx(null);
     setDeck((previous) =>
@@ -567,6 +716,12 @@ export function GenerateForm({
   /** 핵심 품질 오류가 남은 초안은 공식 파일·공유 저장본으로 내보내지 않는다. */
   function ensureQualityForOutput(): boolean {
     if (resultKind === "notebooklm") return true;
+    if (resultKind === "slides" && evidenceRepairRequestRef.current) {
+      toast.info("슬라이드 근거를 확인하고 있습니다", {
+        description: "확인이 끝난 뒤 저장하거나 PPTX로 내보내 주세요.",
+      });
+      return false;
+    }
     const kind = resultKind;
     const draft = kind === "slides" ? deck : doc;
     if (!draft || (kind !== "plan" && kind !== "lesson" && kind !== "slides")) return false;
@@ -597,6 +752,138 @@ export function GenerateForm({
     return false;
   }
 
+  async function repairSlideEvidence(
+    candidateDeck: GeneratedSlideDeck,
+    context: ResultGenerationContext,
+    requestedIndices = slideEvidenceIssueIndices(candidateDeck, context.duration)
+  ) {
+    if (requestedIndices.length === 0 || evidenceRepairRequestRef.current) return;
+
+    const requestDeck = stripSlideDeckRuntimeData(candidateDeck);
+    const operation: EvidenceRepairOperation = {
+      controller: new AbortController(),
+      id: ++evidenceRepairOperationIdRef.current,
+      resultRevision: resultRevisionRef.current,
+      deckFingerprint: slideDeckFingerprint(requestDeck),
+    };
+    evidenceRepairRequestRef.current = operation;
+    setEvidenceRepair({ status: "repairing", issueIndices: requestedIndices });
+
+    const isCurrentOperation = () =>
+      isCurrentEvidenceRepairSnapshot({
+        expectedDeck: requestDeck,
+        currentDeck: deckRef.current,
+        operationId: operation.id,
+        activeOperationId: evidenceRepairRequestRef.current?.id ?? null,
+        expectedResultRevision: operation.resultRevision,
+        currentResultRevision: resultRevisionRef.current,
+      }) && slideDeckFingerprint(requestDeck) === operation.deckFingerprint;
+
+    try {
+      const response = await fetch("/api/generate/evidence", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: operation.controller.signal,
+        body: JSON.stringify({
+          category: context.category,
+          audience: context.audience,
+          duration: context.duration,
+          topic: context.topic,
+          focus: context.focus || undefined,
+          conditions: context.conditions || undefined,
+          slideMode: resolveSlideDeckMode(requestDeck.mode ?? context.slideMode),
+          model,
+          deck: requestDeck,
+        }),
+      });
+      const payload = (await response.json().catch(() => null)) as EvidenceRepairPayload | null;
+      if (!isCurrentOperation()) return;
+
+      // 실패 응답에 fresh deck이 실려 있어도 공식 성공 응답이 아니므로 현재 편집본을 보존한다.
+      if (!response.ok) {
+        const unresolved = normalizedEvidenceIssueIndices(
+          payload?.unresolvedIndices,
+          requestDeck.slides.length
+        );
+        const issueIndices = unresolved.length > 0 ? unresolved : requestedIndices;
+        const message =
+          typeof payload?.error === "string"
+            ? payload.error
+            : "교육자료에서 연결할 근거를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.";
+        setEvidenceRepair({ status: "failed", issueIndices, message });
+        toast.error("슬라이드 근거를 보완하지 못했습니다", { description: message });
+        return;
+      }
+      if (!shouldApplyEvidenceRepairResponse(response.ok, payload)) {
+        throw new Error("근거 보완 응답 형식이 올바르지 않습니다.");
+      }
+
+      const nextDeck: GeneratedSlideDeck = {
+        ...payload.deck,
+        mode: resolveSlideDeckMode(payload.deck.mode ?? context.slideMode),
+      };
+      const serverUnresolved = normalizedEvidenceIssueIndices(
+        payload.unresolvedIndices,
+        nextDeck.slides.length
+      );
+      const localUnresolved = slideEvidenceIssueIndices(nextDeck, context.duration);
+      const unresolvedIndices = Array.from(
+        new Set([...serverUnresolved, ...localUnresolved])
+      ).sort((a, b) => a - b);
+      const repairedIndices = normalizedEvidenceIssueIndices(
+        payload.repairedIndices,
+        nextDeck.slides.length
+      );
+      const responseWarnings = Array.isArray(payload.warnings)
+        ? payload.warnings
+            .filter((warning): warning is string => typeof warning === "string")
+            .map((warning) => warning.trim())
+            .filter(Boolean)
+            .slice(0, 5)
+        : [];
+
+      deckRef.current = nextDeck;
+      setDeck(nextDeck);
+      setSaved(false);
+      setQuality((previous) => {
+        const checked = localQuality("slides", nextDeck, context.duration, previous);
+        return {
+          ...checked,
+          repaired: checked.repaired || repairedIndices.length > 0,
+          warnings: Array.from(new Set([...responseWarnings, ...checked.warnings])).slice(0, 8),
+        };
+      });
+      setEvidenceRepair({
+        status: unresolvedIndices.length > 0 ? "failed" : "idle",
+        issueIndices: unresolvedIndices,
+        message:
+          unresolvedIndices.length > 0
+            ? "자동 보완하지 못한 장은 번호를 선택해 검증된 출처를 직접 연결할 수 있습니다."
+            : undefined,
+      });
+      if (unresolvedIndices.length > 0) {
+        toast.warning("일부 슬라이드의 근거를 더 확인해 주세요", {
+          description: `${unresolvedIndices.map((index) => index + 1).join(", ")}번 슬라이드가 남았습니다.`,
+        });
+      } else {
+        toast.success("슬라이드별 근거를 확인해 보완했습니다");
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (!isCurrentOperation()) return;
+      const message =
+        error instanceof Error
+          ? error.message
+          : "잠시 후 다시 시도하거나 검증된 출처를 직접 선택해 주세요.";
+      setEvidenceRepair({ status: "failed", issueIndices: requestedIndices, message });
+      toast.error("슬라이드 근거 보완 중 오류가 발생했습니다", { description: message });
+    } finally {
+      if (evidenceRepairRequestRef.current?.id === operation.id) {
+        evidenceRepairRequestRef.current = null;
+      }
+    }
+  }
+
   // AI 부분 재생성 — 섹션/슬라이드 1개만 다시 생성해 해당 부분만 교체한다.
   async function handleRegen(
     kind: "section" | "slide",
@@ -606,6 +893,7 @@ export function GenerateForm({
     if (
       savingRef.current ||
       regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
       exportBusyRef.current ||
       regenLoading !== null
     ) {
@@ -743,6 +1031,8 @@ export function GenerateForm({
   function clearPreviousResult() {
     regenRequestRef.current?.abort();
     regenRequestRef.current = null;
+    evidenceRepairRequestRef.current?.controller.abort();
+    evidenceRepairRequestRef.current = null;
     resultRevisionRef.current += 1;
     setCopied(false);
     setEditing(false);
@@ -750,12 +1040,14 @@ export function GenerateForm({
     setRegenLoading(null);
     setSaved(false);
     setQuality(null);
+    setEvidenceRepair({ status: "idle", issueIndices: [] });
     setLocalQualityRevision(0);
     setResultKind(null);
     setResultContext(null);
     setLoadedId(null); // 새 생성은 저장 안 된 새 결과
     setLoadedRevision(null);
     setDoc(null);
+    deckRef.current = null;
     setDeck(null);
     setNlmPrompt(null);
   }
@@ -763,7 +1055,12 @@ export function GenerateForm({
   async function runGeneration(focus?: string) {
     // 저장 응답이 돌아오기 전에 결과를 교체하면 이전 행 id가 새 결과에 연결될 수 있다.
     // 저장·부분 재생성 중에는 어떤 진입점(자동 통과·우회 버튼 포함)에서도 전체 생성을 시작하지 않는다.
-    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+    if (
+      savingRef.current ||
+      regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
+      exportBusyRef.current
+    ) return;
     const safeFocus = focus?.replace(/\s+/g, " ").trim().slice(0, 100) || undefined;
     const requestContext: ResultGenerationContext = {
       category,
@@ -824,16 +1121,35 @@ export function GenerateForm({
       const json = (await res.json()) as Record<string, unknown> & {
         quality?: GenerationQuality;
       };
-      setQuality(json.quality ?? null);
       if (type === "slides") {
-        const generatedDeck = json as unknown as GeneratedSlideDeck;
-        setDeck({
+        const { quality: serverQuality, ...generatedResult } = json;
+        const generatedDeck = generatedResult as unknown as GeneratedSlideDeck;
+        const normalizedDeck: GeneratedSlideDeck = {
           ...generatedDeck,
           mode: resolveSlideDeckMode(generatedDeck.mode ?? slideMode),
-        });
-      } else setDoc(json as unknown as GeneratedDoc);
-      setResultKind(type);
-      setResultContext(requestContext);
+        };
+        const checkedQuality = localQuality(
+          "slides",
+          normalizedDeck,
+          requestContext.duration,
+          serverQuality ?? null
+        );
+        const issueIndices = slideEvidenceIssueIndices(normalizedDeck, requestContext.duration);
+        deckRef.current = normalizedDeck;
+        setDeck(normalizedDeck);
+        setQuality(checkedQuality);
+        setResultKind("slides");
+        setResultContext(requestContext);
+        setEvidenceRepair({ status: "idle", issueIndices });
+        if (issueIndices.length > 0) {
+          void repairSlideEvidence(normalizedDeck, requestContext, issueIndices);
+        }
+      } else {
+        setQuality(json.quality ?? null);
+        setDoc(json as unknown as GeneratedDoc);
+        setResultKind(type);
+        setResultContext(requestContext);
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       toast.error("생성 중 오류가 발생했습니다.");
@@ -846,7 +1162,12 @@ export function GenerateForm({
   }
 
   async function requestTrainingFocus(refresh = false) {
-    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+    if (
+      savingRef.current ||
+      regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
+      exportBusyRef.current
+    ) return;
     const trimmedTopic = topic.trim();
     const requestFocusFingerprint = focusRequestFingerprintRef.current;
     const previousResolvedFocus =
@@ -1063,6 +1384,7 @@ export function GenerateForm({
       !resultContext ||
       savingRef.current ||
       regenRequestRef.current ||
+      evidenceRepairRequestRef.current ||
       exportBusyRef.current ||
       regenLoading !== null
     ) {
@@ -1166,7 +1488,8 @@ export function GenerateForm({
       !resultContext ||
       exportBusyRef.current ||
       savingRef.current ||
-      regenRequestRef.current
+      regenRequestRef.current ||
+      evidenceRepairRequestRef.current
     ) {
       return;
     }
@@ -1323,9 +1646,12 @@ export function GenerateForm({
 
   const typeMeta = GEN_TYPES.find((t) => t.key === type)!;
   const focusBusy = topicFocus.status === "loading" || topicFocus.status === "refreshing";
+  const evidenceRepairing = evidenceRepair.status === "repairing";
   const resultMutationLocked =
-    saving || regenLoading !== null || pptxLoading || docExporting !== null;
-  const outputBlocked = (quality?.errors?.length ?? 0) > 0;
+    saving || regenLoading !== null || evidenceRepairing || pptxLoading || docExporting !== null;
+  const outputBlocked =
+    (quality?.errors?.length ?? 0) > 0 ||
+    (resultKind === "slides" && (evidenceRepairing || evidenceRepair.issueIndices.length > 0));
   // 선택한 분야 색을 페이지 액센트로 흘린다(상단 바·분야 칩·생성 버튼). hex 인라인으로 동적 적용.
   const accent = categoryStyle(category).hex;
   const resultAccent = categoryStyle(resultContext?.category ?? category).hex;
@@ -1335,11 +1661,17 @@ export function GenerateForm({
     accent: resultAccent,
     editing,
     onToggleEdit: () => {
-      if (saving || regenLoading !== null || pptxLoading || docExporting !== null) return;
+      if (
+        saving ||
+        regenLoading !== null ||
+        evidenceRepairing ||
+        pptxLoading ||
+        docExporting !== null
+      ) return;
       setEditing((v) => !v);
     },
     saving,
-    locked: regenLoading !== null || pptxLoading || docExporting !== null,
+    locked: regenLoading !== null || evidenceRepairing || pptxLoading || docExporting !== null,
     outputBlocked,
     saved,
     loadedId,
@@ -1816,6 +2148,7 @@ export function GenerateForm({
                 loading ||
                 focusBusy ||
                 regenLoading !== null ||
+                evidenceRepairing ||
                 saving ||
                 pptxLoading ||
                 docExporting !== null ||
@@ -1858,8 +2191,27 @@ export function GenerateForm({
           chrome={chrome}
           regen={makeRegen("slide")}
           quality={quality}
+          evidenceRepair={{
+            ...evidenceRepair,
+            disabled: resultMutationLocked,
+          }}
+          onRepairEvidence={() => {
+            const currentDeck = deckRef.current;
+            if (!currentDeck || !resultContext) return;
+            const issueIndices = slideEvidenceIssueIndices(currentDeck, resultContext.duration);
+            if (issueIndices.length === 0) {
+              setEvidenceRepair({ status: "idle", issueIndices: [] });
+              return;
+            }
+            void repairSlideEvidence(currentDeck, resultContext, issueIndices);
+          }}
           onTitleChange={(title) => {
-            if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+            if (
+              savingRef.current ||
+              regenRequestRef.current ||
+              evidenceRepairRequestRef.current ||
+              exportBusyRef.current
+            ) return;
             setSaved(false);
             setDeck((previous) => (previous ? { ...previous, title } : previous));
             setLocalQualityRevision((revision) => revision + 1);

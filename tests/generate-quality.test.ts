@@ -28,6 +28,8 @@ import {
   stripDocumentInlineSourceRefs,
   stripDocumentInlineSourceRefsFromText,
   stripSectionInlineSourceRefs,
+  strictGeneratedSlideSchemaFor,
+  strictGeneratedSlidesSchemaFor,
   type GenerateRequest,
   type GeneratedDocDraft,
   type GeneratedSlide,
@@ -289,6 +291,29 @@ describe("유형별 생성 스키마", () => {
     const invalid = validSlides();
     invalid.slides[0] = { ...invalid.slides[0], layout: "poster" as GeneratedSlide["layout"] };
     expect(() => generatedSlidesSchema.parse(invalid)).toThrow();
+  });
+
+  it("신규 전체·부분 생성 스키마는 허용된 sourceRefs를 1~4개 반드시 요구한다", () => {
+    const allowed = "[공기호흡기 교육교범 p.3]";
+    const strictDeckSchema = strictGeneratedSlidesSchemaFor([allowed, allowed]);
+    const strictSlideSchema = strictGeneratedSlideSchemaFor([allowed]);
+    const valid = validSlides();
+
+    expect(strictDeckSchema.parse(valid).slides[0].sourceRefs).toEqual([allowed]);
+    expect(strictSlideSchema.parse(valid.slides[0]).sourceRefs).toEqual([allowed]);
+
+    const missing = structuredClone(valid);
+    delete missing.slides[0].sourceRefs;
+    expect(generatedSlidesSchema.safeParse(missing).success).toBe(true);
+    expect(strictDeckSchema.safeParse(missing).success).toBe(false);
+
+    const invented = structuredClone(valid.slides[0]);
+    invented.sourceRefs = ["[만들어낸 교범 p.99]"];
+    expect(strictSlideSchema.safeParse(invented).success).toBe(false);
+    expect(() => strictGeneratedSlidesSchemaFor([])).toThrow("검증된 출처 라벨이 없습니다");
+    expect(() => strictGeneratedSlideSchemaFor([`[${"가".repeat(300)}]`])).toThrow(
+      "검증된 출처 라벨이 없습니다"
+    );
   });
 
   it("비교·흐름·원문 설명 구도를 구조화하고 런타임 이미지는 LLM 스키마에서 제외한다", () => {

@@ -11,7 +11,7 @@ import {
   buildGeneratePrompt,
   buildGenerateSystemPrompt,
   generatedDocSchemaFor,
-  generatedSlidesSchema,
+  strictGeneratedSlidesSchemaFor,
   extractSourceLabels,
   generationQualityMessages,
   inspectCurrentGenerationQuality,
@@ -271,6 +271,12 @@ export async function POST(req: Request) {
   try {
     const system = buildGenerateSystemPrompt(category, contextText, sopEvidence);
     const allowedSourceRefs = extractSourceLabels(contextText);
+    if (type === "slides" && allowedSourceRefs.length === 0) {
+      return Response.json(
+        { error: "슬라이드에 연결할 검증된 근거 출처가 없습니다." },
+        { status: 422 }
+      );
+    }
     let activeModelKey = genReq.model;
     let modelFallbackUsed = false;
     let generationBudgetLimited = false;
@@ -330,11 +336,12 @@ export async function POST(req: Request) {
     };
 
     if (type === "slides") {
+      const strictSlidesSchema = strictGeneratedSlidesSchemaFor(allowedSourceRefs);
       const generateSlides = async (prompt: string) =>
         withGenerationModel(async (model, abortSignal) => {
           const { object } = await generateObject({
             model,
-            schema: generatedSlidesSchema,
+            schema: strictSlidesSchema,
             system,
             prompt,
             temperature: 0.4,
@@ -346,7 +353,7 @@ export async function POST(req: Request) {
         withGenerationModel(async (model, abortSignal) => {
           const { object } = await generateObject({
             model,
-            schema: generatedSlidesSchema,
+            schema: strictSlidesSchema,
             system,
             prompt,
             temperature: 0.4,

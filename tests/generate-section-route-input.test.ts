@@ -73,7 +73,7 @@ function regeneratedSlide(notes: string) {
     role: "summary",
     composition: "statement",
     visual: { mode: "none" },
-    sourceRefs: [],
+    sourceRefs: ["[공기호흡기 교범 p.3]"],
   };
 }
 
@@ -137,6 +137,23 @@ describe("POST /api/generate/section 입력 경계", () => {
     expect(mocks.fetchCategoryContext).not.toHaveBeenCalled();
   });
 
+  it("부분 재생성할 슬라이드의 검증 출처 라벨이 없으면 LLM 호출 전 422를 반환한다", async () => {
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: "출처 라벨 없는 근거 본문",
+      sources: [],
+      bindingSources: [],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+
+    const response = await POST(requestWith(validSlideBody()));
+    const payload = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(payload.error).toContain("검증된 근거 출처");
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
   it("20,000자를 넘는 섹션과 30개를 넘는 목차를 400으로 거절한다", async () => {
     const tooLongContent = await POST(
       requestWith(
@@ -174,6 +191,17 @@ describe("POST /api/generate/section 입력 경계", () => {
 
     expect(response.status).toBe(200);
     expect(mocks.generateObject).toHaveBeenCalledTimes(2);
+    const strictSchema = mocks.generateObject.mock.calls[0][0].schema;
+    expect(
+      strictSchema.safeParse({ ...regeneratedSlide("교관 설명"), sourceRefs: undefined })
+        .success
+    ).toBe(false);
+    expect(
+      strictSchema.safeParse({
+        ...regeneratedSlide("교관 설명"),
+        sourceRefs: ["[만들어낸 교범 p.99]"],
+      }).success
+    ).toBe(false);
     expect(mocks.generateObject.mock.calls[0][0].prompt).toContain(
       "이 장은 SOP 적용 근거 장입니다."
     );

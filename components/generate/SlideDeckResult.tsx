@@ -1,7 +1,7 @@
 "use client";
 
 // 슬라이드(PPTX) 결과 카드 — 16:9 미리보기 · 항목 편집 · 항목별 AI 재생성 · PPTX 다운로드.
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Image from "next/image";
 import {
   ArrowDown,
@@ -60,6 +60,7 @@ import {
   SaveButton,
   SourceBadges,
   type RegenState,
+  type EvidenceRepairState,
   type GenerationQuality,
   type ResultChrome,
 } from "@/components/generate/parts";
@@ -73,6 +74,24 @@ const LAYOUT_META: Record<SlideLayoutType, { label: string; eyebrow: string }> =
   safety: { label: "안전 수칙", eyebrow: "현장 확인 체크" },
   summary: { label: "핵심 정리", eyebrow: "교육 핵심 정리" },
 };
+
+/** 서버가 덱에 보관한 출처 라벨 중 수동 선택에 안전한 형식만 노출한다. */
+export function verifiedDeckSourceLabels(labels: readonly string[] | undefined): string[] {
+  return Array.from(
+    new Set(
+      (labels ?? [])
+        .map((label) => label.trim())
+        .filter(
+          (label) =>
+            label.length >= 4 &&
+            label.length <= 300 &&
+            label.startsWith("[") &&
+            label.endsWith("]") &&
+            !/[\r\n]/.test(label)
+        )
+    )
+  ).slice(0, 80);
+}
 
 /** 과거 저장본처럼 layout이 없는 경우에도 미리보기의 의미 구조를 유지한다. */
 export function resolvePreviewLayout(slide: GeneratedSlide): SlideLayoutType {
@@ -571,6 +590,8 @@ export function SlideDeckResult({
   onDownloadPptx,
   pptxLoading,
   quality,
+  evidenceRepair,
+  onRepairEvidence,
 }: {
   deck: GeneratedSlideDeck;
   chrome: ResultChrome;
@@ -585,12 +606,32 @@ export function SlideDeckResult({
   onDownloadPptx: () => void;
   pptxLoading: boolean;
   quality?: GenerationQuality | null;
+  evidenceRepair?: EvidenceRepairState & { disabled?: boolean };
+  onRepairEvidence?: () => void;
 }) {
   const { accent, editing } = chrome;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
   const [announcement, setAnnouncement] = useState("");
+  const pendingEvidenceFocusRef = useRef<number | null>(null);
   const selectedSlide = deck.slides[selectedIndex];
+  const verifiedSourceLabels = verifiedDeckSourceLabels(deck.sourceLabels);
+  const verifiedSourceLabelSet = new Set(verifiedSourceLabels);
+  const selectedVerifiedSourceRefs = Array.from(
+    new Set(
+      (selectedSlide?.sourceRefs ?? [])
+        .map((label) => label.trim())
+        .filter((label) => verifiedSourceLabelSet.has(label))
+    )
+  ).slice(0, 4);
+  const invalidSourceRefs = Array.from(
+    new Set(
+      (selectedSlide?.sourceRefs ?? [])
+        .map((label) => label.trim())
+        .filter((label) => label && !verifiedSourceLabelSet.has(label))
+    )
+  );
+  const evidenceIssueSet = new Set(evidenceRepair?.issueIndices ?? []);
   const mode = resolveSlideDeckMode(deck.mode);
   const downloadSlideCount = generatedPptxSlideCount(deck.slides.length, deck.sources.length);
   const editorLocked =
@@ -609,6 +650,31 @@ export function SlideDeckResult({
       Math.min(Math.max(current, 0), Math.max(deck.slides.length - 1, 0))
     );
   }, [deck.slides.length]);
+
+  useEffect(() => {
+    const target = pendingEvidenceFocusRef.current;
+    if (!editing || target === null || selectedIndex !== target) return;
+    pendingEvidenceFocusRef.current = null;
+    requestAnimationFrame(() => {
+      document.getElementById("selected-slide-heading")?.focus();
+    });
+  }, [editing, selectedIndex]);
+
+  function handleSelectEvidenceSlide(index: number) {
+    if (index < 0 || index >= deck.slides.length || editorLocked) return;
+    pendingEvidenceFocusRef.current = index;
+    setSelectedIndex(index);
+    regen.onClose();
+    setAnnouncement(`근거 확인이 필요한 슬라이드 ${index + 1}을 선택했습니다.`);
+    if (!editing) {
+      chrome.onToggleEdit();
+      return;
+    }
+    requestAnimationFrame(() => {
+      pendingEvidenceFocusRef.current = null;
+      document.getElementById("selected-slide-heading")?.focus();
+    });
+  }
 
   function handleMoveSelected(direction: -1 | 1) {
     const target = selectedIndex + direction;
@@ -666,6 +732,28 @@ export function SlideDeckResult({
     );
   }
 
+  function handleSourceRefChange(label: string, checked: boolean) {
+    if (!selectedSlide || editorLocked || !verifiedSourceLabelSet.has(label)) return;
+    let sourceRefs = selectedVerifiedSourceRefs;
+    if (checked) {
+      if (sourceRefs.includes(label) || sourceRefs.length >= 4) return;
+      sourceRefs = [...sourceRefs, label];
+    } else {
+      if (!sourceRefs.includes(label) || sourceRefs.length <= 1) return;
+      sourceRefs = sourceRefs.filter((sourceRef) => sourceRef !== label);
+    }
+    onPatchSlide(selectedIndex, { sourceRefs });
+    setAnnouncement(
+      `슬라이드 ${selectedIndex + 1}에 검증된 근거 ${sourceRefs.length}개를 연결했습니다.`
+    );
+  }
+
+  function handleRemoveInvalidSourceRefs() {
+    if (!selectedSlide || editorLocked || selectedVerifiedSourceRefs.length === 0) return;
+    onPatchSlide(selectedIndex, { sourceRefs: selectedVerifiedSourceRefs });
+    setAnnouncement(`슬라이드 ${selectedIndex + 1}의 검증되지 않은 출처 표기를 제거했습니다.`);
+  }
+
   return (
     <>
       <Card
@@ -710,7 +798,18 @@ export function SlideDeckResult({
           <p role="status" aria-live="polite" aria-atomic="true" className="sr-only">
             {statusMessage}
           </p>
-          <QualityBanner quality={quality} />
+          <QualityBanner
+            quality={quality}
+            evidenceRepair={
+              evidenceRepair && onRepairEvidence
+                ? {
+                    ...evidenceRepair,
+                    onRepair: onRepairEvidence,
+                    onSelectSlide: handleSelectEvidenceSlide,
+                  }
+                : undefined
+            }
+          />
 
           {editing ? (
             <fieldset
@@ -748,7 +847,7 @@ export function SlideDeckResult({
                         <button
                           type="button"
                           aria-current={active ? "page" : undefined}
-                          aria-label={`슬라이드 ${index + 1}: ${slide.title || "제목 없음"}`}
+                          aria-label={`슬라이드 ${index + 1}: ${slide.title || "제목 없음"}${evidenceIssueSet.has(index) ? ", 근거 확인 필요" : ""}`}
                           disabled={editorLocked}
                           onClick={() => {
                             setSelectedIndex(index);
@@ -771,6 +870,11 @@ export function SlideDeckResult({
                             {String(index + 1).padStart(2, "0")}
                           </span>
                           <span className="truncate">{slide.title || "제목 없음"}</span>
+                          {evidenceIssueSet.has(index) && (
+                            <span className="ml-auto shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800 dark:bg-red-950/50 dark:text-red-100">
+                              근거 확인
+                            </span>
+                          )}
                         </div>
                       </div>
                     );
@@ -797,7 +901,11 @@ export function SlideDeckResult({
                       <p className="text-xs font-medium text-muted-foreground">
                         슬라이드 {selectedIndex + 1}
                       </p>
-                      <h3 id="selected-slide-heading" className="truncate text-base font-semibold">
+                      <h3
+                        id="selected-slide-heading"
+                        tabIndex={-1}
+                        className="scroll-mt-4 truncate rounded-sm text-base font-semibold focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2"
+                      >
                         {selectedSlide.title || "제목 없음"}
                       </h3>
                     </div>
@@ -1000,6 +1108,94 @@ export function SlideDeckResult({
                             placeholder="교관이 설명할 내용과 확인 질문"
                           />
                         </div>
+
+                        <fieldset className="space-y-2 rounded-lg border border-border/70 bg-muted/20 p-3">
+                          <legend className="px-1 text-sm font-semibold">근거 출처 (1~4개)</legend>
+                          <div className="flex justify-end">
+                            <span className="text-xs font-medium tabular-nums text-muted-foreground">
+                              선택 {selectedVerifiedSourceRefs.length}/4
+                            </span>
+                          </div>
+                          <p
+                            id={`slide-source-help-${selectedIndex}`}
+                            className="text-xs leading-relaxed text-muted-foreground"
+                          >
+                            생성 시 서버가 확인한 출처만 선택할 수 있습니다. 자유 입력은 지원하지 않습니다.
+                          </p>
+                          {verifiedSourceLabels.length > 0 ? (
+                            <div className="max-h-64 space-y-1.5 overflow-y-auto pr-1">
+                              {verifiedSourceLabels.map((label, labelIndex) => {
+                                const checked = selectedVerifiedSourceRefs.includes(label);
+                                const selectionLimitReached =
+                                  (!checked && selectedVerifiedSourceRefs.length >= 4) ||
+                                  (checked && selectedVerifiedSourceRefs.length <= 1);
+                                const inputId = `slide-source-${selectedIndex}-${labelIndex}`;
+                                return (
+                                  <label
+                                    key={label}
+                                    htmlFor={inputId}
+                                    className={cn(
+                                      "flex min-h-11 cursor-pointer items-center gap-3 rounded-md border bg-background px-3 py-2 text-sm transition-colors",
+                                      checked && "border-primary/50 bg-primary/5",
+                                      selectionLimitReached && "cursor-not-allowed opacity-60"
+                                    )}
+                                  >
+                                    <input
+                                      id={inputId}
+                                      type="checkbox"
+                                      checked={checked}
+                                      disabled={selectionLimitReached}
+                                      aria-describedby={`slide-source-help-${selectedIndex}`}
+                                      onChange={(event) =>
+                                        handleSourceRefChange(label, event.target.checked)
+                                      }
+                                      className="h-5 w-5 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+                                    />
+                                    <span className="min-w-0 break-words leading-relaxed">{label}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                          ) : (
+                            <p
+                              role="alert"
+                              className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm leading-relaxed text-amber-950 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-100"
+                            >
+                              검증된 출처 목록이 없습니다. ‘누락 근거 다시 보완’을 실행해 주세요.
+                            </p>
+                          )}
+                          {invalidSourceRefs.length > 0 && (
+                            <div
+                              role="alert"
+                              className="space-y-2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-950 dark:border-red-900 dark:bg-red-950/30 dark:text-red-100"
+                            >
+                              <p className="leading-relaxed">
+                                검증되지 않은 기존 출처 {invalidSourceRefs.length}개가 있습니다. 검증된 출처를
+                                선택해 교체해 주세요.
+                              </p>
+                              {selectedVerifiedSourceRefs.length > 0 && (
+                                <Button
+                                  type="button"
+                                  variant="outline"
+                                  className="min-h-11 bg-background/80"
+                                  onClick={handleRemoveInvalidSourceRefs}
+                                >
+                                  검증되지 않은 표기 제거
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                          {selectedVerifiedSourceRefs.length >= 4 && (
+                            <p className="text-xs text-muted-foreground">
+                              최대 4개를 선택했습니다. 다른 출처를 고르려면 기존 선택을 먼저 해제하세요.
+                            </p>
+                          )}
+                          {selectedVerifiedSourceRefs.length === 1 && (
+                            <p className="text-xs text-muted-foreground">
+                              근거는 최소 1개를 유지해야 합니다. 교체하려면 새 출처를 먼저 추가하세요.
+                            </p>
+                          )}
+                        </fieldset>
                         <RegenControls index={selectedIndex} regen={regen} />
                       </div>
                     </div>
@@ -1040,8 +1236,8 @@ export function SlideDeckResult({
             className="h-12 w-full gap-2 text-base"
             onClick={onDownloadPptx}
             disabled={pptxLoading || editorLocked || outputBlocked}
-            title={outputBlocked ? "핵심 품질 오류를 수정한 뒤 내보낼 수 있습니다." : undefined}
             aria-busy={pptxLoading}
+            aria-describedby={outputBlocked ? "generation-quality-summary" : undefined}
           >
             {pptxLoading ? (
               <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />

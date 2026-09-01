@@ -159,6 +159,23 @@ describe("POST /api/generate 입력 경계", () => {
     expect(mocks.fetchCategoryContext).not.toHaveBeenCalled();
   });
 
+  it("슬라이드용 검증 출처 라벨이 없으면 LLM 호출 전 422를 반환한다", async () => {
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: "출처 라벨 없이 전달된 근거 본문",
+      sources: [],
+      bindingSources: [],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+
+    const response = await POST(requestWith(validBody({ type: "slides" })));
+    const payload = await response.json();
+
+    expect(response.status).toBe(422);
+    expect(payload.error).toContain("검증된 근거 출처");
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
   it("문서 생성 응답은 화면 표시 한도를 넘어선 전체 바인딩 출처를 보존한다", async () => {
     const bindingSources = Array.from({ length: 7 }, (_, index) => ({
       document_id: index + 1,

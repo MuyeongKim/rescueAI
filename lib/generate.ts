@@ -348,6 +348,52 @@ export const generatedSlidesSchema = z.object({
   slides: z.array(generatedSlideSchema).min(6).max(20),
 });
 
+/**
+ * 신규 전체 생성·부분 재생성에서만 사용할 엄격한 슬라이드 스키마.
+ *
+ * `generatedSlideSchema`의 optional `sourceRefs`는 과거 저장본 호환을 위해
+ * 유지하되, LLM 신규 출력은 서버가 재조회한 허용 라벨만 1~4개
+ * 반드시 넣도록 동적 enum으로 제한한다.
+ */
+export function strictGeneratedSlideSchemaFor(
+  allowedSourceLabels: readonly string[]
+) {
+  const labels = Array.from(
+    new Set(
+      allowedSourceLabels
+        .map((label) => label.trim())
+        .filter(
+          (label) =>
+            label.length >= 4 &&
+            label.length <= 300 &&
+            label.startsWith("[") &&
+            label.endsWith("]") &&
+            !/[\r\n]/.test(label)
+        )
+    )
+  ).slice(0, 80);
+  if (labels.length === 0) {
+    throw new Error("슬라이드 생성에 사용할 검증된 출처 라벨이 없습니다.");
+  }
+  const allowedLabelSchema = z.enum(labels as [string, ...string[]]);
+  return generatedSlideSchema.extend({
+    sourceRefs: z
+      .array(allowedLabelSchema)
+      .min(1)
+      .max(4)
+      .describe("서버가 허용한 정확한 출처 라벨 1~4개. 임의 라벨 생성 금지"),
+  });
+}
+
+/** 신규 전체 PPT 생성용. 덱의 모든 장에 검증된 sourceRefs를 강제한다. */
+export function strictGeneratedSlidesSchemaFor(
+  allowedSourceLabels: readonly string[]
+) {
+  return generatedSlidesSchema.extend({
+    slides: z.array(strictGeneratedSlideSchemaFor(allowedSourceLabels)).min(6).max(20),
+  });
+}
+
 type GeneratedSlideSchemaOutput = z.infer<typeof generatedSlideSchema>;
 export type GeneratedSlide = Omit<GeneratedSlideSchemaOutput, "visual"> & {
   visual?: GeneratedSlideVisual;

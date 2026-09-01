@@ -98,44 +98,118 @@ export type GenerationQuality = {
   warnings: string[];
 };
 
-export function QualityBanner({ quality }: { quality?: GenerationQuality | null }) {
-  if (!quality?.checked) return null;
+export type EvidenceRepairStatus = "idle" | "repairing" | "failed";
 
-  const errors = quality.errors ?? [];
-  const blocked = errors.length > 0;
-  const needsReview = quality.warnings.length > 0;
+/** 슬라이드별 근거 자동 보완 상태. issueIndices는 API와 동일한 0-based 인덱스다. */
+export type EvidenceRepairState = {
+  status: EvidenceRepairStatus;
+  issueIndices: number[];
+  message?: string;
+};
+
+export type EvidenceRepairControls = EvidenceRepairState & {
+  disabled?: boolean;
+  onRepair: () => void;
+  onSelectSlide: (index: number) => void;
+};
+
+export function QualityBanner({
+  quality,
+  evidenceRepair,
+}: {
+  quality?: GenerationQuality | null;
+  evidenceRepair?: EvidenceRepairControls;
+}) {
+  const evidenceBusy = evidenceRepair?.status === "repairing";
+  const evidenceIssues = evidenceRepair?.issueIndices ?? [];
+  const hasEvidenceIssues = evidenceIssues.length > 0;
+  if (!quality?.checked && !evidenceBusy && !hasEvidenceIssues) return null;
+
+  const errors = quality?.errors ?? [];
+  const blocked = !evidenceBusy && (errors.length > 0 || hasEvidenceIssues);
+  const needsReview = (quality?.warnings.length ?? 0) > 0;
   const Icon = blocked || needsReview ? TriangleAlert : CircleCheck;
   return (
     <div
+      id="generation-quality-summary"
       role={blocked ? "alert" : "status"}
+      aria-live={blocked ? "assertive" : "polite"}
+      aria-atomic="true"
       className={cn(
-        "flex gap-2.5 border-l-4 px-3 py-2.5 text-sm",
+        "flex gap-2.5 border-l-4 px-3 py-3 text-sm",
         blocked
           ? "border-l-red-600 bg-red-50 text-red-950 dark:bg-red-950/30 dark:text-red-100"
+          : evidenceBusy
+            ? "border-l-sky-600 bg-sky-50 text-sky-950 dark:bg-sky-950/30 dark:text-sky-100"
           : needsReview
           ? "border-l-amber-500 bg-amber-50 text-amber-950 dark:bg-amber-950/30 dark:text-amber-100"
           : "border-l-emerald-600 bg-emerald-50 text-emerald-950 dark:bg-emerald-950/30 dark:text-emerald-100"
       )}
     >
-      <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
-      <div className="min-w-0">
+      {evidenceBusy ? (
+        <Loader2
+          className="mt-0.5 h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none"
+          aria-hidden="true"
+        />
+      ) : (
+        <Icon className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+      )}
+      <div className="min-w-0 flex-1">
         <p className="font-semibold">
-          {blocked
+          {evidenceBusy
+            ? "근거 확인 중"
+            : blocked
             ? "핵심 품질 오류가 있어 저장·내보내기가 잠겼습니다"
-            : quality.repaired
+            : quality?.repaired
               ? "초안을 한 번 보완하고 자동 점검했습니다"
               : "초안 구성을 자동 점검했습니다"}
         </p>
         <p className="mt-0.5 text-sm leading-relaxed opacity-80">
-          {blocked
-            ? `먼저 수정할 항목: ${errors.join(" · ")}. 편집하거나 해당 부분을 AI로 다시 생성해 주세요.`
+          {evidenceBusy
+            ? `슬라이드 ${evidenceIssues.map((index) => index + 1).join(", ")}의 출처를 교육자료와 대조하고 있습니다. 잠시만 기다려 주세요.`
+            : blocked
+            ? `먼저 수정할 항목: ${errors.join(" · ") || "슬라이드별 근거 출처"}. 편집하거나 해당 부분을 AI로 다시 생성해 주세요.`
             : needsReview
-            ? `최종 확인이 필요한 항목: ${quality.warnings.join(" · ")}`
+            ? `최종 확인이 필요한 항목: ${quality?.warnings.join(" · ")}`
             : "필수 구성과 교육 흐름을 확인했습니다. 현장 적용 전 내용과 수치는 최종 검토해 주세요."}
         </p>
+        {!evidenceBusy && hasEvidenceIssues && evidenceRepair && (
+          <div className="mt-3 space-y-2">
+            <p className="text-sm font-medium">
+              근거 확인이 필요한 슬라이드: {evidenceIssues.map((index) => index + 1).join(", ")}
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {evidenceIssues.map((index) => (
+                <button
+                  key={index}
+                  type="button"
+                  className="inline-flex min-h-11 min-w-11 items-center justify-center rounded-md border border-current/30 bg-background/70 px-3 font-semibold tabular-nums transition-colors hover:bg-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={() => evidenceRepair.onSelectSlide(index)}
+                  disabled={evidenceRepair.disabled}
+                  aria-label={`근거 확인이 필요한 슬라이드 ${index + 1} 편집`}
+                >
+                  {index + 1}
+                </button>
+              ))}
+              <Button
+                type="button"
+                variant="outline"
+                className="min-h-11 bg-background/80"
+                onClick={evidenceRepair.onRepair}
+                disabled={evidenceRepair.disabled}
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                누락 근거 다시 보완
+              </Button>
+            </div>
+            {evidenceRepair.message && (
+              <p className="text-xs leading-relaxed opacity-80">{evidenceRepair.message}</p>
+            )}
+          </div>
+        )}
         {blocked && needsReview && (
           <p className="mt-1 text-xs leading-relaxed opacity-75">
-            차단하지 않는 추가 검토 항목: {quality.warnings.join(" · ")}
+            차단하지 않는 추가 검토 항목: {quality?.warnings.join(" · ")}
           </p>
         )}
       </div>
@@ -154,7 +228,7 @@ export function SaveButton({ chrome }: { chrome: ResultChrome }) {
       disabled={saving || locked || outputBlocked || saved}
       onClick={onSave}
       aria-busy={saving}
-      title={outputBlocked ? "핵심 품질 오류를 수정한 뒤 저장할 수 있습니다." : undefined}
+      aria-describedby={outputBlocked ? "generation-quality-summary" : undefined}
     >
       {saved ? (
         <Check className="h-4 w-4" aria-hidden="true" />
