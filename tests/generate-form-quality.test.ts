@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  activeSavedCategory,
+  hasCategoryRecommendationForTopic,
   hasSlideSopQualityIssues,
+  isConfirmedCategorySelection,
   isCompatibleSopEvidenceRefresh,
   isCurrentEvidenceRepairSnapshot,
   localQuality,
   normalizedEvidenceIssueIndices,
   restoreTopicFocusAfterRequestAbort,
+  safeCategoryRecommendationResponse,
+  shouldAutoConfirmCategoryRecommendation,
   safeSimilarTrainingMaterials,
   shouldApplyQualityRepairResponse,
   shouldApplyEvidenceRepairResponse,
@@ -35,6 +40,93 @@ function planWithSopStatus(status: "not_found" | "degraded"): GeneratedDoc {
 }
 
 describe("편집 후 SOP 상태 경고", () => {
+  it("현재 활성 교범에 있는 저장 분야만 새 생성 입력으로 복원한다", () => {
+    expect(activeSavedCategory("화재", ["산악", "화재"])).toBe("화재");
+    expect(activeSavedCategory("폐기된 분야", ["산악", "화재"])).toBe("");
+    expect(activeSavedCategory(undefined, ["산악", "화재"])).toBe("");
+  });
+
+  it("같은 주제의 완료된 추천은 blur로 다시 요청하지 않고 확정 상태를 일관되게 판정한다", () => {
+    const manualRecommendation = {
+      status: "ready" as const,
+      topic: "급류 수난사고 구조",
+      category: "수난",
+      confidence: "high" as const,
+      alternatives: [],
+      source: "manual" as const,
+      confirmed: true,
+    };
+
+    expect(
+      hasCategoryRecommendationForTopic(manualRecommendation, " 급류 수난사고 구조 ")
+    ).toBe(true);
+    expect(
+      isConfirmedCategorySelection(
+        manualRecommendation,
+        "수난",
+        "급류 수난사고 구조"
+      )
+    ).toBe(true);
+    expect(
+      hasCategoryRecommendationForTopic(manualRecommendation, "산악사고 대비 훈련")
+    ).toBe(false);
+    expect(
+      isConfirmedCategorySelection(manualRecommendation, "화재", "급류 수난사고 구조")
+    ).toBe(false);
+  });
+
+  it("분야 추천 응답을 현재 활성 분야 목록으로 다시 제한한다", () => {
+    const categories = ["화재", "화학사고", "일반구조"];
+
+    expect(
+      safeCategoryRecommendationResponse(
+        {
+          category: "화학사고",
+          confidence: "medium",
+          alternatives: ["화재", "관리자", "화재"],
+          source: "model",
+          warning: " 확인 필요 ",
+        },
+        categories
+      )
+    ).toEqual({
+      category: "화학사고",
+      confidence: "medium",
+      alternatives: ["화재"],
+      source: "model",
+      warning: "확인 필요",
+    });
+    expect(
+      safeCategoryRecommendationResponse(
+        {
+          category: "관리자",
+          confidence: "high",
+          alternatives: [],
+          source: "model",
+        },
+        categories
+      )
+    ).toBeNull();
+  });
+
+  it("명확한 규칙 판정만 자동 확정하고 모델 추천은 사용자가 확인한다", () => {
+    expect(
+      shouldAutoConfirmCategoryRecommendation({
+        confidence: "high",
+        source: "deterministic",
+      })
+    ).toBe(true);
+    expect(
+      shouldAutoConfirmCategoryRecommendation({ confidence: "high", source: "model" })
+    ).toBe(false);
+    expect(
+      shouldAutoConfirmCategoryRecommendation({
+        confidence: "low",
+        source: "deterministic",
+      })
+    ).toBe(false);
+  });
+
   it("세부 방향 새로고침 중 조건이 바뀌어도 기존 추천과 선택 상태를 함께 복원한다", () => {
     const option = {
       id: "focus-1",

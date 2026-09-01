@@ -103,6 +103,7 @@ export default async function GeneratePage({
         </p>
       ) : (
         <GenerateForm
+          key={initialMaterial ? `material-${initialMaterial.id}` : "new"}
           docsByCategory={docsByCategory}
           models={models}
           initialMaterial={initialMaterial}

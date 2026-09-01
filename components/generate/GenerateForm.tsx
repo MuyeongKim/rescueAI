@@ -65,6 +65,10 @@ import { NotebookLmResult } from "@/components/generate/NotebookLmResult";
 import { SlideDeckResult } from "@/components/generate/SlideDeckResult";
 import { TopicFocusPanel } from "@/components/generate/TopicFocusPanel";
 import {
+  CategoryRecommendationPanel,
+  type CategoryRecommendationSource,
+} from "@/components/generate/CategoryRecommendationPanel";
+import {
   focusRequestFingerprint,
   isLikelyBroadTrainingTopic,
   type SimilarTrainingMaterial,
@@ -80,6 +84,12 @@ const TOPIC_SUGGESTIONS: Record<string, readonly string[]> = {
   "현장지휘·공통": ["구조현장 지휘체계", "대원 안전관리와 위험성 평가", "현장 통신과 상황보고"],
   화학사고: ["화학사고 초동대응", "보호복 착용과 오염통제", "누출물질 확인과 안전구역 설정"],
 };
+
+const FALLBACK_TOPIC_SUGGESTIONS = [
+  "공기호흡기 점검과 착용",
+  "암모니아 누출 초동대응",
+  "산악사고 대비 구조훈련",
+] as const;
 
 const DEFAULT_TRAINING_TYPE = "이론 + 현장실습";
 const DEFAULT_TRAINING_METHOD = "자체훈련";
@@ -126,6 +136,101 @@ type TopicFocusState =
     }
   | { status: "resolved"; focus: string }
   | { status: "bypassed" };
+
+type CategoryRecommendationConfidence = "high" | "medium" | "low";
+
+type SafeCategoryRecommendation = {
+  category: string;
+  confidence: CategoryRecommendationConfidence;
+  alternatives: string[];
+  source: "deterministic" | "model";
+  warning?: string;
+};
+
+type CategoryRecommendationState =
+  | { status: "idle" }
+  | { status: "loading"; topic: string }
+  | ({
+      status: "ready";
+      topic: string;
+      confirmed: boolean;
+      source: CategoryRecommendationSource;
+    } & Omit<SafeCategoryRecommendation, "source">)
+  | { status: "error"; topic: string; message: string };
+
+/** 저장 당시 분야가 현재 활성 교범에도 있을 때만 새 생성 입력으로 복원한다. */
+export function activeSavedCategory(
+  savedCategory: string | null | undefined,
+  categories: readonly string[]
+): string {
+  return savedCategory && categories.includes(savedCategory) ? savedCategory : "";
+}
+
+/** 같은 주제의 판정이 이미 끝났다면 단순 포커스 이동으로 다시 덮어쓰지 않는다. */
+export function hasCategoryRecommendationForTopic(
+  recommendation: CategoryRecommendationState,
+  topic: string
+): boolean {
+  return (
+    recommendation.status === "ready" && recommendation.topic === topic.trim()
+  );
+}
+
+export function isConfirmedCategorySelection(
+  recommendation: CategoryRecommendationState,
+  category: string,
+  topic: string
+): boolean {
+  return (
+    recommendation.status === "ready" &&
+    recommendation.confirmed &&
+    recommendation.category === category &&
+    recommendation.topic === topic.trim()
+  );
+}
+
+/** API 응답은 브라우저에서도 활성 분야 목록으로 다시 제한한다. */
+export function safeCategoryRecommendationResponse(
+  value: unknown,
+  categories: readonly string[]
+): SafeCategoryRecommendation | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const category =
+    typeof candidate.category === "string"
+      ? categories.find((item) => item === candidate.category)
+      : undefined;
+  const confidence = candidate.confidence;
+  const source = candidate.source;
+  if (
+    !category ||
+    (confidence !== "high" && confidence !== "medium" && confidence !== "low") ||
+    (source !== "deterministic" && source !== "model")
+  ) {
+    return null;
+  }
+  const alternatives = Array.isArray(candidate.alternatives)
+    ? Array.from(
+        new Set(
+          candidate.alternatives.filter(
+            (item): item is string =>
+              typeof item === "string" && item !== category && categories.includes(item)
+          )
+        )
+      ).slice(0, 2)
+    : [];
+  const warning =
+    typeof candidate.warning === "string" && candidate.warning.trim()
+      ? candidate.warning.trim().slice(0, 240)
+      : undefined;
+  return { category, confidence, alternatives, source, warning };
+}
+
+export function shouldAutoConfirmCategoryRecommendation(
+  recommendation: Pick<SafeCategoryRecommendation, "confidence" | "source">
+): boolean {
+  return recommendation.source === "deterministic" && recommendation.confidence === "high";
+}
 
 /** 세부 방향 새로고침이 폼 조건 변경으로 중단되면 마지막으로 확인한 선택 상태를 복원한다. */
 export function restoreTopicFocusAfterRequestAbort(
@@ -490,9 +595,23 @@ export function GenerateForm({
   const hydrated = hydrateMaterial(initialMaterial);
   // 과거 NotebookLM 저장본은 결과만 호환하고, 새 자료 입력은 지원하는 세 유형 중 계획으로 연다.
   const [type, setType] = useState<GenType>(initialGenerationType(initialMaterial?.kind));
-  const [category, setCategory] = useState<string>(
-    initialMaterial?.category ?? categories[0] ?? ""
-  );
+  const initialCategory = activeSavedCategory(initialMaterial?.category, categories);
+  const [category, setCategory] = useState<string>(initialCategory);
+  const [categoryRecommendation, setCategoryRecommendation] =
+    useState<CategoryRecommendationState>(() =>
+      initialCategory
+        ? {
+            status: "ready",
+            topic: initialMaterial?.topic?.trim() ?? "",
+            category: initialCategory,
+            confidence: "high",
+            alternatives: [],
+            source: "saved",
+            confirmed: true,
+          }
+        : { status: "idle" }
+    );
+  const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
   const [audience, setAudience] = useState<Audience>(asAudience(initialMaterial?.audience));
   const [duration, setDuration] = useState<Duration>(asDuration(initialMaterial?.duration));
   const [slideMode, setSlideMode] = useState<SlideDeckMode>(
@@ -507,6 +626,13 @@ export function GenerateForm({
   );
   const [focusSelectionError, setFocusSelectionError] = useState("");
   const focusHistoryRef = useRef(new Set<string>(hydrated.focus ? [hydrated.focus] : []));
+  const topicRef = useRef(initialMaterial?.topic ?? "");
+  const categoryRequestRef = useRef<AbortController | null>(null);
+  const categoryRequestFingerprintRef = useRef("");
+  const categoryDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const categoryRecommendationCacheRef = useRef(new Map<string, SafeCategoryRecommendation>());
+  const pendingGenerateAfterCategoryRef = useRef<string | null>(null);
+  const continueGenerationAfterCategoryRef = useRef<() => Promise<void>>(async () => undefined);
   const focusRequestRef = useRef<AbortController | null>(null);
   const generationRequestRef = useRef<AbortController | null>(null);
   const regenRequestRef = useRef<AbortController | null>(null);
@@ -546,7 +672,7 @@ export function GenerateForm({
   const [resultContext, setResultContext] = useState<ResultGenerationContext | null>(() =>
     initialMaterial
       ? {
-          category: initialMaterial.category ?? categories[0] ?? "",
+          category: initialMaterial.category ?? "",
           audience: asAudience(initialMaterial.audience),
           duration: asDuration(initialMaterial.duration),
           slideMode: resolveSlideDeckMode(hydrated.deck?.mode ?? DEFAULT_SLIDE_DECK_MODE),
@@ -608,6 +734,12 @@ export function GenerateForm({
   const resolvedFocus = topicFocus.status === "resolved" ? topicFocus.focus : "";
   const resultDuration = resultContext?.duration ?? duration;
   const broadTopic = isLikelyBroadTrainingTopic(topic);
+  topicRef.current = topic;
+  const categoryConfirmed = isConfirmedCategorySelection(
+    categoryRecommendation,
+    category,
+    topic
+  );
 
   const genReq = {
     type,
@@ -623,6 +755,10 @@ export function GenerateForm({
     model,
   };
   generationFingerprintRef.current = JSON.stringify(genReq);
+  const categoryIndependentGenerationFingerprint = JSON.stringify({
+    ...genReq,
+    category: "",
+  });
   // 세부 방향 선택 상태 자체(resolved -> refreshing)는 요청을 무효화하면 안 된다.
   // 폼 조건만 따로 지문화해 실제 입력이 바뀐 경우에만 이전 응답을 폐기한다.
   focusRequestFingerprintRef.current = focusRequestFingerprint(genReq);
@@ -630,9 +766,18 @@ export function GenerateForm({
     ? `대상: ${resultContext.audience} · 교육 시간: ${resultContext.duration}${resultKind === "plan" && resultContext.date ? ` · ${resultContext.date}` : ""}`
     : "";
   const connectedDocs = docsByCategory[category]?.length ?? 0;
-  const suggestions =
-    TOPIC_SUGGESTIONS[category] ??
-    ([`${category} 핵심 절차`, `${category} 장비 점검`, `${category} 안전수칙`] as const);
+  const initialSuggestions = categories
+    .flatMap((item) => TOPIC_SUGGESTIONS[item]?.slice(0, 1) ?? [`${item} 핵심 절차`])
+    .slice(0, 3);
+  const suggestions = categoryConfirmed && category
+    ? (TOPIC_SUGGESTIONS[category] ?? [
+        `${category} 핵심 절차`,
+        `${category} 장비 점검`,
+        `${category} 안전수칙`,
+      ])
+    : initialSuggestions.length > 0
+      ? initialSuggestions
+      : FALLBACK_TOPIC_SUGGESTIONS;
 
   // 사용자 편집은 함수형 상태 갱신으로 합치고, 최종 상태가 렌더된 뒤 한 번만 품질을 계산한다.
   // 비동기 부분 재생성 중 다른 입력을 고쳐도 이전 스냅샷이 최신 편집을 덮지 않게 한다.
@@ -704,6 +849,8 @@ export function GenerateForm({
 
   useEffect(
     () => () => {
+      if (categoryDebounceRef.current) clearTimeout(categoryDebounceRef.current);
+      categoryRequestRef.current?.abort();
       focusRequestRef.current?.abort();
       generationRequestRef.current?.abort();
       regenRequestRef.current?.abort();
@@ -737,6 +884,215 @@ export function GenerateForm({
     focusHistoryRef.current.clear();
     setTopicFocus({ status: "idle" });
     setFocusSelectionError("");
+  }
+
+  async function requestCategoryRecommendation(topicOverride?: string) {
+    const trimmedTopic = (topicOverride ?? topicRef.current).trim();
+    if (trimmedTopic.length < 2 || topicRef.current.trim() !== trimmedTopic) return;
+
+    const candidates = categories
+      .map((name) => ({
+        name,
+        sourceTitles: (docsByCategory[name] ?? []).slice(0, 5),
+      }))
+      .sort((left, right) => left.name.localeCompare(right.name, "ko"));
+    if (candidates.length === 0) {
+      setCategory("");
+      setCategoryRecommendation({
+        status: "error",
+        topic: trimmedTopic,
+        message: "연결된 교범 분야가 없어 자동으로 정할 수 없습니다.",
+      });
+      setCategoryPickerOpen(true);
+      return;
+    }
+
+    const requestFingerprint = JSON.stringify({ topic: trimmedTopic, categories: candidates });
+    if (
+      categoryRequestRef.current &&
+      categoryRequestFingerprintRef.current === requestFingerprint
+    ) {
+      return;
+    }
+
+    const applyRecommendation = (recommendation: SafeCategoryRecommendation) => {
+      if (topicRef.current.trim() !== trimmedTopic) return;
+      // 핵심어가 명확한 규칙 판정만 자동 확정한다. 모델 경로는 애매한 주제에만 쓰므로
+      // confidence 표기와 무관하게 사용자가 한 번 확인해야 잘못된 RAG 분야로 진행되지 않는다.
+      const confirmed = shouldAutoConfirmCategoryRecommendation(recommendation);
+      setCategory(recommendation.category);
+      setCategoryRecommendation({
+        status: "ready",
+        topic: trimmedTopic,
+        ...recommendation,
+        confirmed,
+      });
+      setCategoryPickerOpen(!confirmed);
+      setSaved(false);
+      resetTopicFocus();
+    };
+
+    const cached = categoryRecommendationCacheRef.current.get(requestFingerprint);
+    if (cached) {
+      applyRecommendation(cached);
+      return;
+    }
+
+    if (candidates.length === 1) {
+      const onlyCategory: SafeCategoryRecommendation = {
+        category: candidates[0].name,
+        confidence: "high",
+        alternatives: [],
+        source: "deterministic",
+      };
+      categoryRecommendationCacheRef.current.set(requestFingerprint, onlyCategory);
+      applyRecommendation(onlyCategory);
+      return;
+    }
+
+    categoryRequestRef.current?.abort();
+    const controller = new AbortController();
+    categoryRequestRef.current = controller;
+    categoryRequestFingerprintRef.current = requestFingerprint;
+    setCategory("");
+    setCategoryRecommendation({ status: "loading", topic: trimmedTopic });
+    setCategoryPickerOpen(false);
+
+    try {
+      const response = await fetch("/api/generate/category", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        signal: controller.signal,
+        body: JSON.stringify({ topic: trimmedTopic, categories: candidates }),
+      });
+      const payload = (await response.json().catch(() => null)) as
+        | Record<string, unknown>
+        | null;
+      if (
+        categoryRequestRef.current !== controller ||
+        categoryRequestFingerprintRef.current !== requestFingerprint ||
+        topicRef.current.trim() !== trimmedTopic
+      ) {
+        return;
+      }
+      if (!response.ok) {
+        const retryAfter = Number(response.headers.get("Retry-After"));
+        const message =
+          response.status === 429 && Number.isFinite(retryAfter) && retryAfter > 0
+            ? `요청이 잠시 몰렸습니다. ${Math.ceil(retryAfter)}초 후 다시 확인해 주세요.`
+            : typeof payload?.error === "string"
+              ? payload.error.slice(0, 200)
+              : "분야를 자동으로 확인하지 못했습니다.";
+        setCategoryRecommendation({ status: "error", topic: trimmedTopic, message });
+        setCategoryPickerOpen(true);
+        return;
+      }
+
+      const recommendation = safeCategoryRecommendationResponse(payload, categories);
+      if (!recommendation) {
+        setCategoryRecommendation({
+          status: "error",
+          topic: trimmedTopic,
+          message: "분야 확인 결과가 현재 교범 분야와 맞지 않습니다.",
+        });
+        setCategoryPickerOpen(true);
+        return;
+      }
+      categoryRecommendationCacheRef.current.set(requestFingerprint, recommendation);
+      applyRecommendation(recommendation);
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      if (
+        categoryRequestRef.current !== controller ||
+        topicRef.current.trim() !== trimmedTopic
+      ) {
+        return;
+      }
+      setCategoryRecommendation({
+        status: "error",
+        topic: trimmedTopic,
+        message: "네트워크 연결을 확인한 뒤 다시 시도하거나 분야를 직접 골라 주세요.",
+      });
+      setCategoryPickerOpen(true);
+    } finally {
+      if (categoryRequestRef.current === controller) {
+        categoryRequestRef.current = null;
+        categoryRequestFingerprintRef.current = "";
+      }
+    }
+  }
+
+  function handleTopicChange(nextTopic: string, immediate = false) {
+    topicRef.current = nextTopic;
+    setTopic(nextTopic);
+    setSaved(false);
+    setCategory("");
+    setCategoryRecommendation({ status: "idle" });
+    setCategoryPickerOpen(false);
+    pendingGenerateAfterCategoryRef.current = null;
+    categoryRequestRef.current?.abort();
+    categoryRequestRef.current = null;
+    categoryRequestFingerprintRef.current = "";
+    if (categoryDebounceRef.current) clearTimeout(categoryDebounceRef.current);
+    categoryDebounceRef.current = null;
+    resetTopicFocus();
+
+    const trimmedTopic = nextTopic.trim();
+    if (trimmedTopic.length >= 2) {
+      setTopicError(false);
+      if (immediate) {
+        void requestCategoryRecommendation(nextTopic);
+      } else {
+        categoryDebounceRef.current = setTimeout(() => {
+          categoryDebounceRef.current = null;
+          void requestCategoryRecommendation(nextTopic);
+        }, 650);
+      }
+    }
+  }
+
+  function handleTopicBlur() {
+    const trimmedTopic = topicRef.current.trim();
+    if (trimmedTopic.length < 2) return;
+    if (categoryDebounceRef.current) clearTimeout(categoryDebounceRef.current);
+    categoryDebounceRef.current = null;
+    if (hasCategoryRecommendationForTopic(categoryRecommendation, trimmedTopic)) return;
+    void requestCategoryRecommendation(trimmedTopic);
+  }
+
+  function handleCategoryConfirm() {
+    setCategoryRecommendation((current) =>
+      current.status === "ready" ? { ...current, confirmed: true } : current
+    );
+    setCategoryPickerOpen(false);
+    requestAnimationFrame(() => {
+      document.getElementById("category-recommendation-change")?.focus();
+    });
+  }
+
+  function handleCategorySelect(nextCategory: string) {
+    if (!categories.includes(nextCategory)) return;
+    categoryRequestRef.current?.abort();
+    categoryRequestRef.current = null;
+    categoryRequestFingerprintRef.current = "";
+    if (categoryDebounceRef.current) clearTimeout(categoryDebounceRef.current);
+    categoryDebounceRef.current = null;
+    setCategory(nextCategory);
+    setCategoryRecommendation({
+      status: "ready",
+      topic: topicRef.current.trim(),
+      category: nextCategory,
+      confidence: "high",
+      alternatives: [],
+      source: "manual",
+      confirmed: true,
+    });
+    setCategoryPickerOpen(false);
+    setSaved(false);
+    resetTopicFocus();
+    requestAnimationFrame(() => {
+      document.getElementById("category-recommendation-change")?.focus();
+    });
   }
 
   // 결과 부분 편집 — 편집 내용은 그대로 다운로드/복사에 반영된다(빌더가 state를 받음).
@@ -1630,6 +1986,8 @@ export function GenerateForm({
     // 저장 응답이 돌아오기 전에 결과를 교체하면 이전 행 id가 새 결과에 연결될 수 있다.
     // 저장·부분 재생성 중에는 어떤 진입점(자동 통과·우회 버튼 포함)에서도 전체 생성을 시작하지 않는다.
     if (
+      !category ||
+      !categoryConfirmed ||
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
@@ -1760,6 +2118,8 @@ export function GenerateForm({
 
   async function requestTrainingFocus(refresh = false) {
     if (
+      !category ||
+      !categoryConfirmed ||
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
@@ -1939,19 +2299,8 @@ export function GenerateForm({
     }
   }
 
-  async function handleGenerate() {
-    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+  async function continueGenerationAfterCategory() {
     const trimmedTopic = topic.trim();
-    if (trimmedTopic.length < 2) {
-      setTopicError(true);
-      document.getElementById("topic")?.focus();
-      toast.error("자료 주제를 입력해 주세요", {
-        description: "구체적인 주제가 있어야 관련 교범을 정확히 찾아 좋은 자료를 만들 수 있습니다.",
-      });
-      return;
-    }
-
-    setTopicError(false);
     if (!isLikelyBroadTrainingTopic(trimmedTopic)) {
       await runGeneration();
       return;
@@ -1992,6 +2341,57 @@ export function GenerateForm({
     }
     await requestTrainingFocus(false);
   }
+
+  async function handleGenerate() {
+    if (savingRef.current || regenRequestRef.current || exportBusyRef.current) return;
+    const trimmedTopic = topic.trim();
+    if (trimmedTopic.length < 2) {
+      setTopicError(true);
+      document.getElementById("topic")?.focus();
+      toast.error("자료 주제를 입력해 주세요", {
+        description: "구체적인 주제가 있어야 관련 교범을 정확히 찾아 좋은 자료를 만들 수 있습니다.",
+      });
+      return;
+    }
+
+    setTopicError(false);
+    if (!categoryConfirmed) {
+      if (categoryDebounceRef.current) clearTimeout(categoryDebounceRef.current);
+      categoryDebounceRef.current = null;
+      pendingGenerateAfterCategoryRef.current = categoryIndependentGenerationFingerprint;
+      if (
+        categoryRecommendation.status === "ready" &&
+        categoryRecommendation.topic === trimmedTopic
+      ) {
+        setCategoryPickerOpen(true);
+        requestAnimationFrame(() => {
+          document.getElementById("category-recommendation-confirm")?.focus();
+        });
+        return;
+      }
+      if (
+        categoryRecommendation.status !== "loading" ||
+        categoryRecommendation.topic !== trimmedTopic
+      ) {
+        await requestCategoryRecommendation(trimmedTopic);
+      }
+      return;
+    }
+
+    pendingGenerateAfterCategoryRef.current = null;
+    await continueGenerationAfterCategory();
+  }
+
+  continueGenerationAfterCategoryRef.current = continueGenerationAfterCategory;
+
+  // setCategory 직후에는 이전 렌더의 빈 분야가 남아 있으므로, 다음 렌더에서 생성 의도를 잇는다.
+  useEffect(() => {
+    const pendingFingerprint = pendingGenerateAfterCategoryRef.current;
+    if (!pendingFingerprint || !categoryConfirmed || !category) return;
+    pendingGenerateAfterCategoryRef.current = null;
+    if (pendingFingerprint !== categoryIndependentGenerationFingerprint) return;
+    void continueGenerationAfterCategoryRef.current();
+  }, [category, categoryConfirmed, categoryIndependentGenerationFingerprint]);
 
   // 생성물 저장 — 현재 결과(편집 반영분)를 개인 이력에 저장.
   async function handleSave() {
@@ -2263,6 +2663,7 @@ export function GenerateForm({
   }
 
   const typeMeta = GEN_TYPES.find((t) => t.key === type)!;
+  const categoryBusy = categoryRecommendation.status === "loading";
   const focusBusy = topicFocus.status === "loading" || topicFocus.status === "refreshing";
   const evidenceRepairing = evidenceRepair.status === "repairing";
   const qualityRepairing = qualityRepair.status === "repairing";
@@ -2281,7 +2682,7 @@ export function GenerateForm({
         evidenceRepair.issueIndices.length > 0 ||
         qualityRepair.issueIndices.length > 0));
   // 선택한 분야 색을 페이지 액센트로 흘린다(상단 바·분야 칩·생성 버튼). hex 인라인으로 동적 적용.
-  const accent = categoryStyle(category).hex;
+  const accent = categoryStyle(categoryConfirmed ? category : "").hex;
   const resultAccent = categoryStyle(resultContext?.category ?? category).hex;
 
   // 결과 카드 3종이 공유하는 상단 컨트롤(저장·편집)과 항목별 재생성 상태.
@@ -2420,79 +2821,12 @@ export function GenerateForm({
 
           <div className="h-px bg-border/60" />
 
-          {/* STEP 02 — 분야·대상·시간 */}
+          {/* STEP 02 — 주제 입력 뒤 분야를 자동으로 추천 */}
           <section
             className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none"
             style={{ animationDelay: "70ms", animationFillMode: "backwards" }}
           >
-            <StepHeader n="02" title="분야 · 대상 · 시간" />
-            {/* 분야 — 선택 시 분야 색으로 강조 */}
-            <div className="space-y-2.5">
-              <Label className="text-xs font-semibold uppercase text-muted-foreground">
-                분야
-              </Label>
-              <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="분야">
-                {categories.map((c) => {
-                  const st = categoryStyle(c);
-                  const active = category === c;
-                  return (
-                    <button
-                      key={c}
-                      type="button"
-                      role="radio"
-                      aria-checked={active}
-                      onClick={() => {
-                        setCategory(c);
-                        setSaved(false);
-                        resetTopicFocus();
-                      }}
-                      style={
-                        active
-                          ? { borderColor: st.hex, color: st.hex, backgroundColor: `${st.hex}14` }
-                          : undefined
-                      }
-                      className={cn(
-                        "inline-flex h-12 items-center gap-2 rounded-full border px-4 text-sm font-medium transition-all duration-200 motion-reduce:transition-none md:h-10",
-                        "hover:-translate-y-0.5 motion-reduce:hover:translate-y-0",
-                        active ? "shadow-sm" : "border-border hover:bg-accent/40"
-                      )}
-                    >
-                      <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: st.hex }} />
-                      {c}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-            <OptionGroup
-              label="대상"
-              options={AUDIENCES}
-              value={audience}
-              onChange={(value) => {
-                setAudience(value);
-                setSaved(false);
-              }}
-            />
-            <OptionGroup
-              label="교육 시간"
-              options={DURATIONS}
-              value={duration}
-              onChange={(value) => {
-                setDuration(value);
-                setSaved(false);
-                setLocalQualityRevision((revision) => revision + 1);
-              }}
-            />
-          </section>
-
-          <div className="h-px bg-border/60" />
-
-          {/* STEP 03 — 검색 품질을 좌우하는 주제와 세부 설정 */}
-          <section
-            className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none"
-            style={{ animationDelay: "140ms", animationFillMode: "backwards" }}
-          >
-            <StepHeader n="03" title="무엇을 훈련할까요" hint="주제는 필수예요" />
+            <StepHeader n="02" title="무엇을 훈련할까요" hint="주제는 필수예요" />
             <div
               className="border-l-4 bg-muted/45 px-3 py-2.5"
               style={{ borderLeftColor: accent }}
@@ -2501,10 +2835,11 @@ export function GenerateForm({
                 주제가 구체적일수록 교범의 정확한 절차를 찾습니다.
               </p>
               <p className="mt-0.5 text-xs leading-relaxed text-muted-foreground">
-                현재 {category} 분야 자료 {connectedDocs}개 연결 · 목표, 절차, 장비, 안전사항을 함께
-                점검해 구성합니다.
+                {categoryConfirmed
+                  ? `현재 ${category} 분야 자료 ${connectedDocs}개 연결 · 목표, 절차, 장비, 안전사항을 함께 점검해 구성합니다.`
+                  : "주제를 입력하면 연결된 교범을 기준으로 분야를 자동 추천합니다. 추천 결과는 언제든 바꿀 수 있습니다."}
               </p>
-              {connectedDocs === 1 && (
+              {categoryConfirmed && connectedDocs === 1 && (
                 <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
                   연결 자료가 1개라 해당 교범 범위 안에서만 작성됩니다.
                 </p>
@@ -2518,15 +2853,11 @@ export function GenerateForm({
                 id="topic"
                 placeholder="예: 공기호흡기 점검 절차"
                 value={topic}
-                onChange={(e) => {
-                  setTopic(e.target.value);
-                  setSaved(false);
-                  resetTopicFocus();
-                  if (e.target.value.trim().length >= 2) setTopicError(false);
-                }}
+                onChange={(event) => handleTopicChange(event.target.value)}
+                onBlur={handleTopicBlur}
                 maxLength={100}
                 aria-invalid={topicError}
-                aria-describedby="topic-help"
+                aria-describedby="topic-help category-recommendation-heading"
                 className={cn("h-12 text-base md:h-10", topicError && "border-destructive")}
               />
               <p
@@ -2549,10 +2880,7 @@ export function GenerateForm({
                     onClick={(event) => {
                       // 상위 폼 구조가 바뀌어도 추천 선택이 제출로 이어져 유형·입력값을 초기화하지 않게 한다.
                       event.preventDefault();
-                      setTopic(suggestion);
-                      setTopicError(false);
-                      setSaved(false);
-                      resetTopicFocus();
+                      handleTopicChange(suggestion, true);
                     }}
                     className={cn(
                       "min-h-12 rounded-full border bg-background px-3 text-left text-sm font-medium transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
@@ -2567,7 +2895,50 @@ export function GenerateForm({
               </div>
             </div>
 
-            {broadTopic && topicFocus.status === "idle" && (
+            <CategoryRecommendationPanel
+              topic={topic}
+              status={categoryRecommendation.status}
+              category={
+                categoryRecommendation.status === "ready"
+                  ? categoryRecommendation.category
+                  : undefined
+              }
+              confidence={
+                categoryRecommendation.status === "ready"
+                  ? categoryRecommendation.confidence
+                  : undefined
+              }
+              source={
+                categoryRecommendation.status === "ready"
+                  ? categoryRecommendation.source
+                  : undefined
+              }
+              confirmed={categoryConfirmed}
+              alternatives={
+                categoryRecommendation.status === "ready"
+                  ? categoryRecommendation.alternatives
+                  : []
+              }
+              warning={
+                categoryRecommendation.status === "ready"
+                  ? categoryRecommendation.warning
+                  : undefined
+              }
+              error={
+                categoryRecommendation.status === "error"
+                  ? categoryRecommendation.message
+                  : undefined
+              }
+              categories={categories}
+              pickerOpen={categoryPickerOpen}
+              disabled={resultMutationLocked || loading || focusBusy}
+              onConfirm={handleCategoryConfirm}
+              onTogglePicker={() => setCategoryPickerOpen((open) => !open)}
+              onSelect={handleCategorySelect}
+              onRetry={() => void requestCategoryRecommendation()}
+            />
+
+            {categoryConfirmed && broadTopic && topicFocus.status === "idle" && (
               <div className="rounded-lg border border-amber-300/60 bg-amber-50/70 px-3 py-2.5 text-sm leading-relaxed text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/20 dark:text-amber-100">
                 <p className="font-semibold">이 주제는 여러 훈련 방향으로 나눌 수 있습니다.</p>
                 <p className="mt-0.5">
@@ -2673,6 +3044,35 @@ export function GenerateForm({
                 </Button>
               </div>
             )}
+          </section>
+
+          <div className="h-px bg-border/60" />
+
+          {/* STEP 03 — 운영 조건은 추천 분야가 정해진 뒤 보완 */}
+          <section
+            className="animate-in fade-in slide-in-from-bottom-2 space-y-3 duration-500 motion-reduce:animate-none"
+            style={{ animationDelay: "140ms", animationFillMode: "backwards" }}
+          >
+            <StepHeader n="03" title="대상 · 시간 · 현장 조건" />
+            <OptionGroup
+              label="대상"
+              options={AUDIENCES}
+              value={audience}
+              onChange={(value) => {
+                setAudience(value);
+                setSaved(false);
+              }}
+            />
+            <OptionGroup
+              label="교육 시간"
+              options={DURATIONS}
+              value={duration}
+              onChange={(value) => {
+                setDuration(value);
+                setSaved(false);
+                setLocalQualityRevision((revision) => revision + 1);
+              }}
+            />
 
             <div className="space-y-1.5">
               <Label htmlFor="conditions" className="text-sm font-medium">
@@ -2759,7 +3159,7 @@ export function GenerateForm({
               <Badge variant="secondary" className="font-normal">
                 {typeMeta.label}
               </Badge>
-              {category && (
+              {categoryConfirmed && category && (
                 <Badge variant="secondary" className="gap-1 font-normal">
                   <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: accent }} />
                   {category}
@@ -2784,7 +3184,7 @@ export function GenerateForm({
             </div>
             <Button
               className="h-12 w-full gap-2 text-base font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md hover:brightness-105 active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100"
-              style={category ? { backgroundColor: accent } : undefined}
+              style={categoryConfirmed ? { backgroundColor: accent } : undefined}
               onClick={handleGenerate}
               disabled={
                 loading ||
@@ -2794,22 +3194,25 @@ export function GenerateForm({
                 qualityRepairing ||
                 saving ||
                 pptxLoading ||
-                docExporting !== null ||
-                !category
+                docExporting !== null
               }
             >
-              {loading || focusBusy ? (
+              {loading || focusBusy || categoryBusy ? (
                 <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" />
               ) : (
                 <Wand2 className="h-5 w-5" />
               )}
               {loading
                 ? "자료를 찾고 초안을 점검하는 중…"
-                : focusBusy
-                  ? "세부 훈련 방향을 찾는 중…"
-                  : topicFocus.status === "choosing"
-                    ? `선택한 방향으로 ${typeMeta.label} 만들기`
-                    : `${typeMeta.label} 만들기`}
+                : categoryBusy
+                  ? "주제에 맞는 분야를 확인하는 중…"
+                  : focusBusy
+                    ? "세부 훈련 방향을 찾는 중…"
+                    : categoryRecommendation.status === "ready" && !categoryConfirmed
+                      ? `추천 분야 확인 후 ${typeMeta.label} 만들기`
+                      : topicFocus.status === "choosing"
+                        ? `선택한 방향으로 ${typeMeta.label} 만들기`
+                        : `${typeMeta.label} 만들기`}
             </Button>
           </div>
         </CardContent>
