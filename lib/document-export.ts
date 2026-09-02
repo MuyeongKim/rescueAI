@@ -4,7 +4,7 @@ import type { GeneratedDoc, GeneratedDocSource } from "@/lib/generate";
 // 명시된 일반적인 인라인 인용은 별도로 인식한다. 시간·SOP 적용 표식 등 다른
 // 대괄호 표기는 p.페이지 형식이 아니므로 보존된다.
 const PAGED_INLINE_SOURCE_REF =
-  /\[\s*(?:(?:근거|출처)\s*[:：]\s*)?[^\[\]\r\n]*?\bp\s*\.?\s*\d+(?:\s*[-–~,]\s*\d+)?[^\[\]\r\n]*?\]/gi;
+  /\[\s*(?:(?:근거|출처)\s*[:：]\s*)?[^\[\]\r\n]*?\bp\s*\.?\s*(?:\d+|-)(?:\s*[-–~,]\s*\d+)?[^\[\]\r\n]*?\]/gi;
 
 export const DOCUMENT_SOURCE_SECTION_TITLE = "근거 자료 및 출처";
 

@@ -58,7 +58,7 @@ async function loadFireContext(): Promise<{ contextText: string; rowCount: numbe
 describe.skipIf(process.env.RUN_GENERATION_INTEGRATION !== "1")(
   "현재 LLM 자료제작 스모크",
   () => {
-    it("실제 근거로 튜터가 구체적인 절차·안전사항·출처를 답한다", async () => {
+    it("실제 근거로 튜터가 본문 인용 없이 구체적인 절차·안전사항을 답한다", async () => {
       loadEnv();
       const { contextText, rowCount } = await loadFireContext();
       const { getChatModel } = await import("@/lib/llm");
@@ -78,13 +78,13 @@ describe.skipIf(process.env.RUN_GENERATION_INTEGRATION !== "1")(
         model: process.env.GEMINI_MODEL ?? "default",
         contextRows: rowCount,
         chars: compact.length,
-        hasCitation: /\[[^\]\r\n]+ p\.\d+\]/.test(text),
+        hasInlineCitation: /\[[^\]\r\n]+ p\.\d+\]/.test(text),
         hasNumberedSteps: /(?:^|\n)\s*1[.)]/m.test(text) && /(?:^|\n)\s*2[.)]/m.test(text),
         hasSafetyCue: /안전|위험|중단|보고|이상/.test(text),
       });
 
       expect(compact.length).toBeGreaterThanOrEqual(450);
-      expect(text).toMatch(/\[[^\]\r\n]+ p\.\d+\]/);
+      expect(text).not.toMatch(/\[[^\]\r\n]+ p\.\d+\]/);
       expect(text).toMatch(/(?:^|\n)\s*1[.)]/m);
       expect(text).toMatch(/(?:^|\n)\s*2[.)]/m);
       expect(text).toMatch(/안전|위험|중단|보고|이상/);

@@ -42,7 +42,17 @@ describe("buildSystemPrompt (환각 가드레일)", () => {
     expect(prompt).toContain("세부 설명");
     expect(prompt).toContain("현장 확인사항");
     expect(prompt).toContain("안전 유의사항");
-    expect(prompt).toContain("문서명과 페이지");
+    expect(prompt).toContain("문서명·페이지");
+  });
+
+  it("본문 인라인 출처를 금지하고 검증 출처는 마지막 영역에 한 번만 맡긴다", () => {
+    const prompt = buildSystemPrompt("자료");
+
+    expect(prompt).toContain("출처 라벨이나 문서명·페이지를 직접 쓰지 마세요");
+    expect(prompt).toContain("답변 맨 아래의 '근거 자료' 영역");
+    expect(prompt).toContain("중복 없이 한 번만 자동 표시");
+    expect(prompt).toContain("별도의 출처 목록도 작성하지 말고");
+    expect(prompt).not.toContain("핵심 주장이나 절차 뒤에는");
   });
 
   it("답변 분량을 늘리더라도 근거 밖 내용을 보태지 못하게 한다", () => {

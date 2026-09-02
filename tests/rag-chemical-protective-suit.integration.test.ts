@@ -172,7 +172,7 @@ describe.skipIf(process.env.RUN_CHEMICAL_GENERATION_INTEGRATION !== "1")(
 
     afterAll(() => restoreTestEnv(envSnapshot));
 
-    it("튜터가 착용 전 점검부터 탈의·제독까지 출처와 함께 설명한다", async () => {
+    it("튜터가 본문 인용 없이 착용 전 점검부터 탈의·제독까지 설명한다", async () => {
       const { buildSystemPrompt } = await import("@/lib/rag");
       const { getChatModel } = await import("@/lib/llm");
       const { text } = await generateText({
@@ -189,12 +189,11 @@ describe.skipIf(process.env.RUN_CHEMICAL_GENERATION_INTEGRATION !== "1")(
       expect(text).toMatch(/외부\s*제독/);
       expect(text).toMatch(/상의.*속장갑.*헬멧.*면체/s);
       expect(text).toMatch(/오염도.*검사/s);
-      expect(text).toMatch(/p\.41/);
-      expect(text).toMatch(/p\.58/);
+      expect(text).not.toMatch(/\[[^\]\r\n]+ p\.\d+\]/);
       expectNoCrossTopicScenario(text);
       console.log("[rag-chemical:answer]", {
         chars: text.replace(/\s+/g, " ").trim().length,
-        citations: Array.from(text.matchAll(/p\.(\d+)/g), (match) => match[1]),
+        hasInlineCitation: /\[[^\]\r\n]+ p\.\d+\]/.test(text),
       });
     }, 180_000);
 

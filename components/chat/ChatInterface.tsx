@@ -301,8 +301,8 @@ export function ChatInterface({
                   </p>
                   <h2 className="mt-2 text-2xl font-extrabold">무엇을 도와드릴까요?</h2>
                   <p className="mt-2 text-base leading-6 text-muted-foreground sm:text-sm">
-                    교육자료에 근거해 출처와 함께 답합니다. 근거가 없으면 추측하지
-                    않습니다.
+                    교육자료에 근거해 답하고, 출처는 답변 마지막에 모아 보여드립니다.
+                    근거가 없으면 추측하지 않습니다.
                   </p>
                 </div>
                 <span className="flex min-h-10 shrink-0 items-center gap-2 self-start border border-slate-300 bg-white px-3 text-xs font-semibold text-emerald-700 dark:border-slate-700 dark:bg-slate-900 dark:text-emerald-400">

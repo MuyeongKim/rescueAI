@@ -8,6 +8,7 @@ import {
 } from "ai";
 import { createClient } from "@/lib/supabase/server";
 import { requireApiUser } from "@/lib/auth";
+import { prepareChatAnswerText, uniqueChatSources } from "@/lib/chat-answer";
 import { trimChatHistory } from "@/lib/chat-history";
 import { searchContext, buildSystemPrompt, NOT_FOUND_MESSAGE } from "@/lib/rag";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
@@ -59,7 +60,11 @@ export async function POST(req: Request) {
 
   // 클라이언트가 주입한 system/tool 메시지 제거 + 개수·길이 상한 (lib/chat-history.ts).
   // 환각 가드레일(§9.2)은 서버(buildSystemPrompt)가 단독으로 넣는다.
-  const messages: Message[] = trimChatHistory<Message>(body.messages);
+  const messages: Message[] = trimChatHistory<Message>(body.messages).map((message) =>
+    message.role === "assistant"
+      ? { ...message, content: prepareChatAnswerText(String(message.content ?? "")) }
+      : message
+  );
   const category: string | null = body.category ?? null;
   const modelKey: string | undefined = body.model || undefined;
 
@@ -130,9 +135,12 @@ export async function POST(req: Request) {
         temperature: 0.2,
         onFinish: async ({ text }) => {
           const latencyMs = Date.now() - startedAt;
+          const answerText = prepareChatAnswerText(text);
           // "확인되지 않습니다" 답변에는 출처를 붙이지 않는다(검색됐지만 무관한 출처가
           // 근거 없음 답변과 모순되어 보이는 문제 방지).
-          const effectiveSources = text.includes(NOT_FOUND_MESSAGE) ? [] : sources;
+          const effectiveSources = answerText.includes(NOT_FOUND_MESSAGE)
+            ? []
+            : uniqueChatSources(sources);
           let saved: { id: number } | null = null;
           if (!ephemeral) {
             const { data, error } = await supabase
@@ -140,7 +148,7 @@ export async function POST(req: Request) {
               .insert({
                 conversation_id: convId,
                 role: "assistant",
-                content: text,
+                content: answerText,
                 sources: effectiveSources.length > 0 ? effectiveSources : null,
                 latency_ms: latencyMs,
               })
