@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { kstDate, kstDateStr, kstMonthStartStr } from "@/lib/kst";
+import {
+  kstDate,
+  kstDateStr,
+  kstMonthStartStr,
+  secondsUntilNextKstDay,
+} from "@/lib/kst";
 
 // 한국은 고정 UTC+9(서머타임 없음). 실행 환경 TZ 와 무관하게 KST 벽시계가 나와야 한다.
 describe("kst 헬퍼", () => {
@@ -19,5 +24,14 @@ describe("kst 헬퍼", () => {
 
   it("요일을 KST 로 계산한다(2026-07-08 KST = 수요일)", () => {
     expect(kstDate(new Date("2026-07-08T03:00:00Z")).getUTCDay()).toBe(3);
+  });
+
+  it("다음 KST 자정까지만 일일 집계 쿠키를 유지한다", () => {
+    // 2026-07-08 14:59:59Z = KST 23:59:59
+    expect(secondsUntilNextKstDay(new Date("2026-07-08T14:59:59Z"))).toBe(1);
+    // 2026-07-08 15:00:00Z = KST 07-09 00:00:00
+    expect(secondsUntilNextKstDay(new Date("2026-07-08T15:00:00Z"))).toBe(
+      24 * 60 * 60
+    );
   });
 });

@@ -1,6 +1,12 @@
 import { type NextRequest, NextResponse } from "next/server";
 import { createServerClient, type CookieOptions } from "@supabase/ssr";
 import { DEMO } from "@/lib/demo-flag";
+import {
+  LOGIN_ACCESS_COOKIE,
+  loginAccessCookieMaxAge,
+  loginAccessDay,
+  shouldRecordLoginAccess,
+} from "@/lib/login-access";
 
 const PROTECTED_PREFIXES = [
   "/home",
@@ -33,7 +39,8 @@ export async function middleware(request: NextRequest) {
           return request.cookies.getAll();
         },
         setAll(
-          cookiesToSet: { name: string; value: string; options: CookieOptions }[]
+          cookiesToSet: { name: string; value: string; options: CookieOptions }[],
+          headersToSet: Record<string, string>
         ) {
           cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
@@ -41,6 +48,9 @@ export async function middleware(request: NextRequest) {
           supabaseResponse = NextResponse.next({ request });
           cookiesToSet.forEach(({ name, value, options }) =>
             supabaseResponse.cookies.set(name, value, options)
+          );
+          Object.entries(headersToSet).forEach(([name, value]) =>
+            supabaseResponse.headers.set(name, value)
           );
         },
       },
@@ -71,6 +81,40 @@ export async function middleware(request: NextRequest) {
     url.pathname = "/home";
     url.search = "";
     return NextResponse.redirect(url);
+  }
+
+  // 로그인 화면 조회가 아니라 인증 후 보호 화면에 실제 진입했을 때만 집계한다.
+  // Supabase session_id가 DB의 1차 중복 방지 수단이고, HttpOnly 일일 쿠키는 같은
+  // 브라우저의 새로고침·재로그인에서 불필요한 RPC 호출까지 줄인다.
+  const now = new Date();
+  if (
+    user &&
+    isProtected &&
+    shouldRecordLoginAccess(
+      request.cookies.get(LOGIN_ACCESS_COOKIE)?.value,
+      now
+    )
+  ) {
+    try {
+      const { error } = await supabase
+        .rpc("record_daily_login_access")
+        .abortSignal(AbortSignal.timeout(1_200));
+      if (!error) {
+        supabaseResponse.cookies.set(
+          LOGIN_ACCESS_COOKIE,
+          loginAccessDay(now),
+          {
+            httpOnly: true,
+            sameSite: "lax",
+            secure: request.nextUrl.protocol === "https:",
+            path: "/",
+            maxAge: loginAccessCookieMaxAge(now),
+          }
+        );
+      }
+    } catch {
+      // 이용 통계 장애가 인증·서비스 접근을 막아서는 안 된다. 다음 요청에서 재시도한다.
+    }
   }
 
   // 첫 로그인 비번 변경 강제는 getUserAndProfile(레이아웃이 이미 profile 조회)에서 처리한다.

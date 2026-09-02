@@ -244,3 +244,34 @@
     .anim-rise { opacity: 1; animation: none; }
   }
 }
+
+/* 폭은 넓지만 높이가 짧은 태블릿·노트북 창에서도 로그인 CTA를 먼저 보여준다. */
+@media (min-width: 768px) and (max-height: 600px) {
+  .login-hero,
+  .login-panel {
+    padding-block: 1rem;
+  }
+
+  .login-panel {
+    align-items: flex-start;
+    overflow-y: auto;
+  }
+
+  .login-hero-copy {
+    padding-block: 1rem;
+  }
+
+  .login-hero-detail,
+  .login-hero-footer {
+    display: none;
+  }
+
+  .login-form-heading {
+    margin-bottom: 1rem;
+    padding-bottom: 0.75rem;
+  }
+
+  .login-form-fields > :not([hidden]) ~ :not([hidden]) {
+    margin-top: 0.75rem;
+  }
+}

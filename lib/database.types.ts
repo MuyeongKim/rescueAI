@@ -343,6 +343,14 @@ export interface Database {
         Args: { days?: number; min_count?: number; max_rows?: number };
         Returns: { question: string; cnt: number }[];
       };
+      record_daily_login_access: {
+        Args: Record<string, never>;
+        Returns: boolean;
+      };
+      get_login_access_stats: {
+        Args: Record<string, never>;
+        Returns: { today_access: number; total_access: number }[];
+      };
       // 관리자 대시보드 집계(service role 전용) — jsonb 한 덩어리로 반환.
       // 필드 구성은 app/admin/page.tsx 의 AdminStats 와 1:1.
       admin_dashboard_stats: {

@@ -21,3 +21,18 @@ export function kstDateStr(base: Date = new Date()): string {
 export function kstMonthStartStr(base: Date = new Date()): string {
   return kstDateStr(base).slice(0, 7) + "-01";
 }
+
+/** 다음 KST 자정까지 남은 초. 일일 접속 집계 쿠키의 수명에 사용한다. */
+export function secondsUntilNextKstDay(base: Date = new Date()): number {
+  const shifted = kstDate(base);
+  const nextMidnight = Date.UTC(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate() + 1
+  );
+
+  return Math.max(
+    1,
+    Math.ceil((nextMidnight - shifted.getTime()) / 1000)
+  );
+}
