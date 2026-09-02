@@ -10,13 +10,3 @@ reason = "응답은 설정된 Anthropic, Google, OpenAI provider에서만 오며
 id = "GHSA-rwvc-j5jr-mgvh"
 ignoreUntil = 2026-10-15
 reason = "서버가 클라이언트 메시지를 role과 일반 문자열 content만 남기도록 정규화해 AI SDK에 파일 파트를 전달하지 않는다."
-
-[[IgnoredVulns]]
-id = "GHSA-5p2g-fcmc-qvqq"
-ignoreUntil = 2026-10-15
-reason = "PPTX 입력 이미지는 브라우저 canvas가 만든 크기 제한 JPEG이며 JXL과 HEIF 파서는 호출되지 않는다. upstream 패치가 아직 없다."
-
-[[IgnoredVulns]]
-id = "GHSA-w3rx-r6r6-pgpr"
-ignoreUntil = 2026-10-15
-reason = "PPTX 입력 이미지는 브라우저 canvas가 만든 크기 제한 JPEG이며 ICNS 파서는 호출되지 않는다. upstream 패치가 아직 없다."
