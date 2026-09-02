@@ -1,9 +1,12 @@
+import { loginAccessTrackingStartLabel } from "@/lib/login-access";
+
 type LoginAccessStatsProps = {
   today: number | null;
   total: number | null;
 };
 
 const countFormatter = new Intl.NumberFormat("ko-KR");
+const trackingStartLabel = loginAccessTrackingStartLabel();
 
 function formatCount(value: number | null): string {
   return value === null ? "—" : countFormatter.format(value);
@@ -13,26 +16,27 @@ export function LoginAccessStats({ today, total }: LoginAccessStatsProps) {
   return (
     <section
       aria-labelledby="login-access-stats-title"
-      className="mt-5 border border-slate-200 bg-slate-50/80 px-4 py-3.5 dark:border-slate-800 dark:bg-slate-900/50"
+      aria-describedby="login-access-stats-note"
+      className="mt-4 border border-slate-200 bg-slate-50/80 px-4 py-2.5 dark:border-slate-800 dark:bg-slate-900/50"
     >
       <div className="flex items-center justify-between gap-3">
         <h2
           id="login-access-stats-title"
-          className="text-sm font-bold text-slate-800 dark:text-slate-200"
+          className="text-xs font-bold text-slate-800 dark:text-slate-200"
         >
           시범운영 접속 현황
         </h2>
-        <span className="text-xs font-semibold text-muted-foreground">
-          KST 기준
+        <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+          {trackingStartLabel} 시작 · KST
         </span>
       </div>
 
-      <dl className="mt-3 grid grid-cols-2 divide-x divide-slate-200 dark:divide-slate-700">
+      <dl className="mt-2 grid grid-cols-2 divide-x divide-slate-200 dark:divide-slate-700">
         <div className="pr-4">
           <dt className="text-xs font-medium text-muted-foreground">
             오늘 접속
           </dt>
-          <dd className="mt-1 tabular-nums text-xl font-black text-slate-950 dark:text-slate-50">
+          <dd className="mt-0.5 tabular-nums text-lg font-black text-slate-950 dark:text-slate-50">
             {formatCount(today)}
             {today !== null ? (
               <span className="ml-1 text-xs font-semibold text-muted-foreground">
@@ -45,7 +49,7 @@ export function LoginAccessStats({ today, total }: LoginAccessStatsProps) {
           <dt className="text-xs font-medium text-muted-foreground">
             시범운영 누적
           </dt>
-          <dd className="mt-1 tabular-nums text-xl font-black text-slate-950 dark:text-slate-50">
+          <dd className="mt-0.5 tabular-nums text-lg font-black text-slate-950 dark:text-slate-50">
             {formatCount(total)}
             {total !== null ? (
               <span className="ml-1 text-xs font-semibold text-muted-foreground">
@@ -56,9 +60,63 @@ export function LoginAccessStats({ today, total }: LoginAccessStatsProps) {
         </div>
       </dl>
 
-      <p className="mt-3 border-t border-slate-200 pt-3 text-xs leading-5 text-muted-foreground dark:border-slate-800">
-        로그인 후 서비스 화면에 들어온 브라우저를 하루 한 번 집계하며, 실제
-        인원수와 다를 수 있습니다.
+      <p id="login-access-stats-note" className="sr-only">
+        로그인 세션을 KST 날짜별로 한 번 집계하며, 실제 이용 인원과 다를 수
+        있습니다.
+      </p>
+    </section>
+  );
+}
+
+export function SidebarAccessStats({ today, total }: LoginAccessStatsProps) {
+  return (
+    <section
+      aria-labelledby="sidebar-access-stats-title"
+      aria-describedby="sidebar-access-stats-note"
+      className="sidebar-access-stats mb-2 border border-slate-700 bg-ops-navy-deep px-3 py-2"
+    >
+      <div className="flex items-center justify-between gap-2">
+        <h2
+          id="sidebar-access-stats-title"
+          className="text-xs font-semibold text-slate-200"
+        >
+          접속 현황
+        </h2>
+        <span className="sidebar-access-stats-date whitespace-nowrap text-xs text-slate-400">
+          {trackingStartLabel} 시작
+        </span>
+      </div>
+
+      <dl className="sidebar-access-stats-values mt-1.5 grid grid-cols-2 divide-x divide-slate-700">
+        <div className="flex items-baseline justify-between gap-1 pr-2">
+          <dt className="text-xs text-slate-400">오늘</dt>
+          <dd className="tabular-nums text-base font-bold text-white">
+            {formatCount(today)}
+            {today !== null ? (
+              <span className="ml-0.5 text-xs font-medium text-slate-400">
+                회
+              </span>
+            ) : null}
+          </dd>
+        </div>
+        <div className="flex items-baseline justify-between gap-1 pl-2">
+          <dt className="text-xs text-slate-400">누적</dt>
+          <dd className="tabular-nums text-base font-bold text-white">
+            {formatCount(total)}
+            {total !== null ? (
+              <span className="ml-0.5 text-xs font-medium text-slate-400">
+                회
+              </span>
+            ) : null}
+          </dd>
+        </div>
+      </dl>
+
+      <p id="sidebar-access-stats-note" className="sr-only">
+        KST 기준 로그인 세션 접속 횟수입니다.
+        {today === null || total === null
+          ? " 집계 정보를 불러오지 못했습니다."
+          : ""}
       </p>
     </section>
   );

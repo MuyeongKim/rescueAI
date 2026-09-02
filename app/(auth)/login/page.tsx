@@ -9,37 +9,13 @@ import {
 } from "lucide-react";
 
 import { LoginAccessStats } from "@/components/auth/LoginAccessStats";
-import { DEMO } from "@/lib/demo-flag";
-import { createClient } from "@/lib/supabase/server";
+import { getLoginAccessStats } from "@/lib/login-access-stats";
 
 import LoginForm from "./login-form";
 
 async function LoginAccessStatsFromServer() {
-  if (DEMO) {
-    return <LoginAccessStats today={null} total={null} />;
-  }
-
-  try {
-    const supabase = await createClient();
-    const { data, error } = await supabase
-      .rpc("get_login_access_stats")
-      .abortSignal(AbortSignal.timeout(1_200));
-    const stats = data?.[0];
-
-    if (error || !stats) {
-      return <LoginAccessStats today={null} total={null} />;
-    }
-
-    return (
-      <LoginAccessStats
-        today={Math.max(0, stats.today_access)}
-        total={Math.max(0, stats.total_access)}
-      />
-    );
-  } catch {
-    // 공개 통계가 일시적으로 실패해도 로그인 화면과 인증 기능은 그대로 제공한다.
-    return <LoginAccessStats today={null} total={null} />;
-  }
+  const stats = await getLoginAccessStats();
+  return <LoginAccessStats today={stats.today} total={stats.total} />;
 }
 
 function LoginStatsFallback() {

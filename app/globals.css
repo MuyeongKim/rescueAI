@@ -274,4 +274,25 @@
   .login-form-fields > :not([hidden]) ~ :not([hidden]) {
     margin-top: 0.75rem;
   }
+
+  /* 짧은 가로 화면에서는 핵심 메뉴·접속 숫자·로그아웃을 우선한다. */
+  .app-sidebar-footer {
+    padding: 0.5rem;
+  }
+
+  .sidebar-access-stats {
+    margin-bottom: 0.25rem;
+    padding-block: 0.375rem;
+  }
+
+  .sidebar-access-stats-values {
+    margin-top: 0.25rem;
+  }
+
+  .sidebar-access-stats-date,
+  .sidebar-evidence-mode,
+  .sidebar-user-email,
+  .sidebar-theme-toggle {
+    display: none;
+  }
 }

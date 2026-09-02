@@ -13,9 +13,11 @@ import {
   Wand2,
 } from "lucide-react";
 
-import { ThemeToggle } from "@/components/layout/ThemeToggle";
+import { SidebarAccessStats } from "@/components/auth/LoginAccessStats";
 import { MobileMoreSheet } from "@/components/layout/MobileMoreSheet";
+import { ThemeToggle } from "@/components/layout/ThemeToggle";
 import { ADMIN_NAV_ITEMS } from "@/components/layout/admin-nav-items";
+import { getLoginAccessStats } from "@/lib/login-access-stats";
 import { cn } from "@/lib/utils";
 import { hasRecentNotice } from "@/lib/notices";
 
@@ -63,7 +65,10 @@ export async function AppSidebar({
   active?: NavKey;
 }) {
   const mobileItems = NAV_ITEMS.filter((item) => item.mobile);
-  const newNotice = await hasRecentNotice();
+  const [newNotice, accessStats] = await Promise.all([
+    hasRecentNotice(),
+    getLoginAccessStats(),
+  ]);
 
   const renderItem = (item: {
     key: string;
@@ -145,13 +150,21 @@ export async function AppSidebar({
           )}
         </nav>
 
-        <footer className="border-t border-slate-700/70 p-3">
-          <div className="mb-2 flex min-h-10 items-center gap-2 border border-slate-700 bg-ops-navy-deep px-3 text-xs text-slate-300">
+        <footer className="app-sidebar-footer border-t border-slate-700/70 p-3">
+          <SidebarAccessStats
+            today={accessStats.today}
+            total={accessStats.total}
+          />
+          <div className="sidebar-evidence-mode mb-2 flex min-h-10 items-center gap-2 border border-slate-700 bg-ops-navy-deep px-3 text-xs text-slate-300">
             <ShieldCheck className="h-4 w-4 text-ops-signal-soft" aria-hidden />
             교육자료 기반 모드
           </div>
-          {email && <p className="truncate px-3 py-1 text-xs text-slate-400">{email}</p>}
-          <ThemeToggle className="h-11 w-full justify-start gap-3 px-3 text-sm text-slate-400 hover:bg-ops-panel-hover hover:text-white" />
+          {email && (
+            <p className="sidebar-user-email truncate px-3 py-1 text-xs text-slate-400">
+              {email}
+            </p>
+          )}
+          <ThemeToggle className="sidebar-theme-toggle h-11 w-full justify-start gap-3 px-3 text-sm text-slate-400 hover:bg-ops-panel-hover hover:text-white" />
           <form action="/auth/signout" method="post">
             <button
               type="submit"
