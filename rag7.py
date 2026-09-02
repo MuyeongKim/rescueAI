@@ -746,7 +746,8 @@ class GoogleGenAIEmbeddings:
                 ]
             }
             res = self.session.post(
-                f"{self.BASE}/{model_path}:batchEmbedContents?key={self.api_key}",
+                f"{self.BASE}/{model_path}:batchEmbedContents",
+                headers={"x-goog-api-key": self.api_key},
                 json=payload,
                 timeout=self.timeout,
             )

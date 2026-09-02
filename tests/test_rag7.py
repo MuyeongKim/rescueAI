@@ -50,6 +50,33 @@ class StubResponse:
         return self.payload
 
 
+def test_google_embeddings_keeps_api_key_out_of_request_url(monkeypatch):
+    rag7 = load_rag7(monkeypatch)
+    client = rag7.GoogleGenAIEmbeddings(
+        api_key="secret-google-key",
+        output_dim=2,
+    )
+    captured = {}
+
+    def fake_post(url, *, headers, json, timeout):
+        captured.update(
+            url=url,
+            headers=headers,
+            payload=json,
+            timeout=timeout,
+        )
+        return types.SimpleNamespace(
+            status_code=200,
+            json=lambda: {"embeddings": [{"values": [0.1, 0.2]}]},
+        )
+
+    monkeypatch.setattr(client.session, "post", fake_post)
+
+    assert client.embed_documents(["구조 교육 자료"]) == [[0.1, 0.2]]
+    assert "secret-google-key" not in captured["url"]
+    assert captured["headers"] == {"x-goog-api-key": "secret-google-key"}
+
+
 def test_resolve_ollama_base_url_prefers_local_when_model_exists(monkeypatch):
     rag7 = load_rag7(monkeypatch)
     monkeypatch.setenv("EMBEDDING_PREFER_LOCAL", "1")
