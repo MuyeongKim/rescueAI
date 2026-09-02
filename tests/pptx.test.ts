@@ -1,4 +1,11 @@
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import {
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import JSZip from "jszip";
@@ -10,8 +17,8 @@ import type {
   SlideLayoutType,
 } from "@/lib/generate";
 import {
+  buildPptxBytes,
   buildSpeakerNotes,
-  downloadPptx,
   formatDeckSources,
   isSafeSlideImageData,
   MIN_BODY_FONT_SIZE,
@@ -37,6 +44,7 @@ function slide(
 const deckSources: GeneratedDocSource[] = [
   { document_id: 1, doc: "구조대원 교육교범", page: 3 },
   { document_id: 2, doc: "현장 안전관리 지침", page: null },
+  { document_id: 3, doc: "재난현장 표준작전절차(SOP)", page: 5 },
 ];
 
 describe("PPTX 장수 계산", () => {
@@ -136,6 +144,7 @@ describe("PPTX 발표자 노트 출처", () => {
     expect(formatDeckSources([...deckSources, deckSources[0]])).toEqual([
       "구조대원 교육교범 (p.3)",
       "현장 안전관리 지침",
+      "재난현장 표준작전절차(SOP) (p.5)",
     ]);
   });
 });
@@ -146,7 +155,6 @@ describe("PPTX 실제 파일 생성", () => {
     const requestedOutput = process.env.PPTX_QA_OUTPUT_DIR;
     const workDir = requestedOutput ?? mkdtempSync(join(tmpdir(), "rescueai-pptx-test-"));
     if (requestedOutput) mkdirSync(workDir, { recursive: true });
-    const previousCwd = process.cwd();
     const layouts: SlideLayoutType[] = [
       "objectives",
       "concept",
@@ -156,8 +164,9 @@ describe("PPTX 실제 파일 생성", () => {
       "safety",
       "summary",
     ];
-    const sourceImageData =
-      "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=";
+    const sourceImageData = `data:image/png;base64,${readFileSync(
+      join(process.cwd(), "public/logo-jbfire.png")
+    ).toString("base64")}`;
     const enhancedSlides: GeneratedSlide[] = [
       slide("정상 상태와 이상 상태를 나란히 구분합니다", {
         role: "comparison",
@@ -170,7 +179,7 @@ describe("PPTX 실제 파일 생성", () => {
           "원인이 해소되기 전에는 장비를 다시 사용하지 않습니다",
         ],
       }),
-      slide("훈련은 준비부터 결과 보고까지 시간 순서로 이어집니다", {
+      slide("훈련은 사전 준비와 교관 시범부터 대원 실습 및 결과 보고까지 이어집니다", {
         role: "timeline",
         composition: "timeline",
         steps: ["사전 준비", "교관 시범", "대원 실습", "결과 보고"],
@@ -197,8 +206,8 @@ describe("PPTX 실제 파일 생성", () => {
           documentId: 1,
           page: 12,
           sourceRef: "[구조대원 교육교범 p.12]",
-          altText: "구조대원 교육교범의 장비 점검 위치 그림",
-          caption: "교범 원문 장비 점검 위치",
+          altText: "교범 원문 시각자료 레이아웃 검증 이미지",
+          caption: "교범 원문 시각자료 자리 검증",
           fit: "contain",
           imageData: sourceImageData,
         },
@@ -225,7 +234,10 @@ describe("PPTX 실제 파일 생성", () => {
           notes:
             "교관은 먼저 이 행동이 필요한 이유를 설명합니다. 정상 상태와 이상 상태를 직접 비교해 보여 줍니다. 대원에게 다음 행동을 질문하여 이해 여부를 확인합니다. 실습에서는 한 번에 한 가지 행동만 피드백합니다. 이상이 발견되면 즉시 중단하고 안전담당자에게 보고하도록 강조합니다.",
           layout,
-          sourceRefs: ["[구조대원 교육교범 p.12]"],
+          sourceRefs:
+            layout === "process"
+              ? ["[재난현장 표준작전절차(SOP) p.5]"]
+              : [`[구조대원 교육교범 p.${index + 1}]`],
         })),
         ...enhancedSlides,
       ],
@@ -233,40 +245,191 @@ describe("PPTX 실제 파일 생성", () => {
     };
 
     try {
-      process.chdir(workDir);
-      await downloadPptx(deck, "화재", "대상: 일반 대원 · 교육 시간: 1시간");
+      const bytes = await buildPptxBytes(
+        deck,
+        "화재",
+        "대상: 일반 대원 · 교육 시간: 1시간"
+      );
+      writeFileSync(join(workDir, `${deck.title}.pptx`), bytes);
       const files = readdirSync(workDir).filter((name) => name.endsWith(".pptx"));
       expect(files).toHaveLength(1);
 
       const zip = await JSZip.loadAsync(readFileSync(join(workDir, files[0])));
-      const notePaths = Object.keys(zip.files).filter((name) =>
-        /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name)
+      const byNumber = (left: string, right: string) => {
+        const leftNumber = Number(left.match(/(\d+)\.xml$/)?.[1] ?? 0);
+        const rightNumber = Number(right.match(/(\d+)\.xml$/)?.[1] ?? 0);
+        return leftNumber - rightNumber;
+      };
+      const slidePaths = Object.keys(zip.files)
+        .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
+        .sort(byNumber);
+      const notePaths = Object.keys(zip.files)
+        .filter((name) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name))
+        .sort(byNumber);
+      const expectedTotal = generatedPptxSlideCount(deck.slides.length, deck.sources.length);
+      expect(slidePaths).toHaveLength(expectedTotal);
+      expect(notePaths).toHaveLength(expectedTotal);
+
+      const noteXmls = await Promise.all(
+        notePaths.map((name) => zip.files[name].async("string"))
       );
-      expect(notePaths.length).toBeGreaterThanOrEqual(deck.slides.length);
-      const notesXml = (
-        await Promise.all(notePaths.map((name) => zip.files[name].async("string")))
-      ).join("\n");
+      noteXmls.forEach((notesXml) => {
+        expect(notesXml.match(/\[Sources\]/g)).toHaveLength(1);
+      });
+      const notesXml = noteXmls.join("\n");
       expect(notesXml).toContain("[Sources]");
       expect(notesXml).toContain("[구조대원 교육교범 p.12]");
 
-      const slideXml = (
+      const slideXmls = await Promise.all(
+        slidePaths.map((name) => zip.files[name].async("string"))
+      );
+      const slideXml = slideXmls.join("\n");
+
+      const layoutPaths = Object.keys(zip.files).filter((name) =>
+        /^ppt\/slideLayouts\/slideLayout\d+\.xml$/.test(name)
+      );
+      const layoutXmlByPath = new Map<string, string>(
         await Promise.all(
-          Object.keys(zip.files)
-            .filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))
-            .map((name) => zip.files[name].async("string"))
+          layoutPaths.map(
+            async (name) => [name, await zip.files[name].async("string")] as const
+          )
         )
-      ).join("\n");
+      );
+      const layoutNameByPath = new Map<string, string>();
+      layoutXmlByPath.forEach((xml, path) => {
+        const name = xml.match(/<p:cSld\s+name="([^"]+)"/)?.[1];
+        if (name) layoutNameByPath.set(path, name);
+      });
+      const expectedLayoutNames = [
+        "JBFD_COVER",
+        "JBFD_OBJECTIVES",
+        "JBFD_PROCESS",
+        "JBFD_CHECKLIST",
+        "JBFD_CHECKLIST_FEATURED",
+        "JBFD_SCENARIO",
+        "JBFD_COMPARISON",
+        "JBFD_TIMELINE",
+        "JBFD_DECISION",
+        "JBFD_VISUAL_EVIDENCE",
+        "JBFD_SUMMARY",
+        "JBFD_CONTENT",
+        "JBFD_CONTENT_MIRROR",
+        "JBFD_SOURCES",
+      ].sort();
+      const layoutNames = Array.from(layoutNameByPath.values()).sort();
+      expect(layoutNames.filter((name) => name !== "DEFAULT")).toEqual(
+        expectedLayoutNames
+      );
+      expect(layoutNames).toContain("DEFAULT");
+      // PptxGenJS는 실제 slideMaster 1개 아래 DEFAULT + named layout을 생성한다.
+      expect(layoutPaths).toHaveLength(expectedLayoutNames.length + 1);
+      const slideMasterPaths = Object.keys(zip.files).filter((name) =>
+        /^ppt\/slideMasters\/slideMaster\d+\.xml$/.test(name)
+      );
+      expect(slideMasterPaths).toHaveLength(1);
+      const contentTypesXml = await zip.files["[Content_Types].xml"].async("string");
+      const masterOverrides = Array.from(
+        contentTypesXml.matchAll(
+          /PartName="(\/ppt\/slideMasters\/slideMaster\d+\.xml)"/g
+        ),
+        (match) => match[1]
+      ).sort();
+      expect(masterOverrides).toEqual(
+        slideMasterPaths.map((path) => `/${path}`).sort()
+      );
+
+      const slideLayoutNames = await Promise.all(
+        slidePaths.map(async (slidePath) => {
+          const slideNumber = slidePath.match(/slide(\d+)\.xml$/)?.[1];
+          const relPath = `ppt/slides/_rels/slide${slideNumber}.xml.rels`;
+          const relXml = await zip.files[relPath].async("string");
+          const relationship = (relXml.match(/<Relationship\b[^>]*\/>/g) ?? []).find(
+            (entry) => entry.includes("/relationships/slideLayout")
+          );
+          const target = relationship?.match(/\bTarget="([^"]+)"/)?.[1];
+          const targetName = target?.split("/").pop();
+          return targetName
+            ? layoutNameByPath.get(`ppt/slideLayouts/${targetName}`)
+            : undefined;
+        })
+      );
+      expect(slideLayoutNames).toEqual([
+        "JBFD_COVER",
+        "JBFD_OBJECTIVES",
+        "JBFD_CONTENT",
+        "JBFD_PROCESS",
+        "JBFD_CHECKLIST",
+        "JBFD_SCENARIO",
+        "JBFD_CHECKLIST_FEATURED",
+        "JBFD_SUMMARY",
+        "JBFD_COMPARISON",
+        "JBFD_TIMELINE",
+        "JBFD_DECISION",
+        "JBFD_VISUAL_EVIDENCE",
+        "JBFD_SOURCES",
+      ]);
+
+      const objectivesLayoutPath = Array.from(layoutNameByPath.entries()).find(
+        ([, name]) => name === "JBFD_OBJECTIVES"
+      )?.[0];
+      expect(objectivesLayoutPath).toBeDefined();
+      const objectivesLayoutXml = layoutXmlByPath.get(objectivesLayoutPath ?? "") ?? "";
+      expect(objectivesLayoutXml).toContain("전북특별자치도 소방본부");
+      expect(objectivesLayoutXml).toContain("오늘 교육이 끝나면");
+      expect(objectivesLayoutXml).toContain('type="title"');
+      expect(slideXmls[1]).not.toContain("전북특별자치도 소방본부");
+      expect(slideXmls[1]).not.toContain("오늘 교육이 끝나면");
+      expect(slideXmls[1]).toContain('type="title"');
+      expect(slideXmls[0]).toContain("PPTX 다중 레이아웃 현장 교육 검증");
+      expect(slideXmls[0]).toContain('type="title"');
+      expect(slideXmls[1]).toContain("1번째 핵심 행동을 현장에서 확인합니다");
+      slideXmls.forEach((xml) => {
+        const titleShape = (xml.match(/<p:sp>[\s\S]*?<\/p:sp>/g) ?? []).find(
+          (shapeXml) => shapeXml.includes('type="title"')
+        );
+        expect(titleShape).toBeDefined();
+        expect(titleShape).not.toContain("<a:normAutofit");
+      });
+      const longTimelineTitleShape = (
+        slideXmls[9].match(/<p:sp>[\s\S]*?<\/p:sp>/g) ?? []
+      ).find((shapeXml) => shapeXml.includes('type="title"'));
+      expect(longTimelineTitleShape).toContain('sz="2900"');
+
+      await Promise.all(
+        slidePaths.map(async (slidePath, slideIndex) => {
+          const slideNumber = slidePath.match(/slide(\d+)\.xml$/)?.[1];
+          const relPath = `ppt/slides/_rels/slide${slideNumber}.xml.rels`;
+          const relXml = await zip.files[relPath].async("string");
+          const noteRelationships = (relXml.match(/<Relationship\b[^>]*\/>/g) ?? []).filter(
+            (entry) => entry.includes("/relationships/notesSlide")
+          );
+          expect(noteRelationships).toHaveLength(1);
+          const noteTarget = noteRelationships[0].match(/\bTarget="([^"]+)"/)?.[1];
+          const noteName = noteTarget?.split("/").pop();
+          const mappedNotesXml = noteName
+            ? await zip.files[`ppt/notesSlides/${noteName}`].async("string")
+            : "";
+          if (slideIndex >= 1 && slideIndex <= layouts.length) {
+            const bodyIndex = slideIndex - 1;
+            const expectedRef =
+              layouts[bodyIndex] === "process"
+                ? "[재난현장 표준작전절차(SOP) p.5]"
+                : `[구조대원 교육교범 p.${bodyIndex + 1}]`;
+            expect(mappedNotesXml).toContain(expectedRef);
+          }
+        })
+      );
+
       // 번호·출처 같은 본문 보조 요소도 13~14pt 대신 16pt 기준을 사용한다.
       expect(slideXml).not.toContain('sz="1300"');
       expect(slideXml).not.toContain('sz="1400"');
       expect(slideXml).toContain("상세형 교육자료");
-      expect(slideXml).toContain("구조대원 교육교범의 장비 점검 위치 그림");
+      expect(slideXml).toContain("교범 원문 시각자료 레이아웃 검증 이미지");
       const mediaPaths = Object.keys(zip.files).filter((name) =>
         /^ppt\/media\/image[-\d]+\./.test(name)
       );
       expect(mediaPaths.length).toBeGreaterThanOrEqual(1);
     } finally {
-      process.chdir(previousCwd);
       if (!requestedOutput) rmSync(workDir, { recursive: true, force: true });
     }
   }, 30_000);
