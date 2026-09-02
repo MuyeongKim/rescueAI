@@ -5,3 +5,11 @@ requests==2.34.2
 tqdm==4.70.0
 pypdf==6.16.2
 docling[easyocr]==2.123.0
+
+# OSV가 범위형 전이 의존성의 오래된 최소 버전을 선택하지 않도록, 실제 재인덱싱
+# 검증 환경에서 함께 확인한 보안 버전을 명시한다.
+torch==2.13.0
+torchvision==0.28.0
+Pillow==12.3.0
+idna==3.19
+filelock==3.32.4

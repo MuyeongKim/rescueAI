@@ -34,7 +34,7 @@
     "docx": "^9.7.1",
     "jszip": "^3.10.1",
     "lucide-react": "^1.17.0",
-    "next": "14.2.35",
+    "next": "15.5.25",
     "next-themes": "^0.4.6",
     "openai": "^4.104.0",
     "pptxgenjs": "^4.0.1",
@@ -57,21 +57,28 @@
     "@types/react": "^18",
     "@types/react-dom": "^18",
     "eslint": "^8",
-    "eslint-config-next": "14.2.35",
-    "postcss": "^8",
+    "eslint-config-next": "15.5.25",
+    "postcss": "8.5.26",
     "tailwindcss": "^4.3.0",
     "typescript": "^5",
     "vitest": "^4.1.7"
   },
   "overrides": {
-    "@workflow/core": {
-      "nanoid": "5.1.16"
-    },
     "@workflow/world-local": {
       "undici": "7.29.0"
     },
     "@workflow/world-vercel": {
       "undici": "7.29.0"
-    }
+    },
+    "brace-expansion@1.x": "1.1.18",
+    "brace-expansion@2.x": "2.1.4",
+    "brace-expansion@5.x": "5.0.9",
+    "form-data": "4.0.6",
+    "js-yaml": "4.3.2",
+    "jsondiffpatch": "0.7.6",
+    "nanoid@3.x": "3.3.18",
+    "nanoid@5.x": "5.1.16",
+    "postcss": "$postcss",
+    "vite": "8.2.2"
   }
 }

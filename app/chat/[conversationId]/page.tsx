@@ -16,9 +16,9 @@ export const dynamic = "force-dynamic";
 export default async function ConversationPage({
   params,
 }: {
-  params: { conversationId: string };
+  params: Promise<{ conversationId: string }>;
 }) {
-  const conversationId = params.conversationId;
+  const { conversationId } = await params;
 
   if (DEMO) {
     const conv = demoConversations.find((c) => c.id === conversationId);

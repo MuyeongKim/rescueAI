@@ -7,7 +7,7 @@
 ---
 
 ## 0. 준비물
-- Node.js 18+ (권장 20), npm
+- Node.js 20.19 이상, npm
 - Python 3.11 (인덱서)
 - Supabase 계정, Anthropic API 키, OpenAI API 키(임베딩 기본값)
 

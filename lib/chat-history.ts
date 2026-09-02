@@ -36,7 +36,9 @@ export function trimChatHistory<T extends WithRoleAndContent>(messages: unknown)
     // 최신 메시지 하나는 총량을 넘겨도 반드시 남긴다 — 질문 자체가 사라지면 안 된다.
     if (total + content.length > MAX_TOTAL_CHARS && kept.length > 0) break;
     total += content.length;
-    kept.unshift({ ...m, content });
+    // id·첨부·parts·tool/provider 옵션 등 클라이언트가 덧붙인 필드는 전달하지 않는다.
+    // AI SDK에는 역할과 일반 문자열 본문만 넘겨 파일/도구 입력 경계를 서버가 소유한다.
+    kept.unshift({ role: m.role, content } as T);
   }
 
   return kept;

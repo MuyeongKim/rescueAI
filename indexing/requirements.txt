@@ -1,8 +1,10 @@
 # 전북소방 구조 AI — 인덱싱 파이프라인 의존성 (Python 3.11 권장)
 pymupdf>=1.24            # PDF 텍스트 추출
 python-pptx>=0.6.23      # PPTX 슬라이드/노트 추출
+Pillow>=12.3.0           # python-pptx 이미지 처리 보안 하한
 supabase>=2.7            # documents/chunks 적재 (service role)
-python-dotenv>=1.0       # ../.env.local 로드
+python-dotenv==1.2.3     # ../.env.local 로드
+idna==3.19               # HTTP 클라이언트 보안 하한 고정
 
 # 임베딩 제공자: openai (기본)
 openai>=1.40

@@ -10,7 +10,7 @@
 ※ 학습/진도/이수(레슨) 기능은 2026-06-18 제거됨(퀴즈 없는 읽음표시라 가치 낮음·이수 보고 불필요).
 
 ## 기술 스택
-- **Next.js 14** (App Router, TypeScript) + **Tailwind CSS v4**(`@tailwindcss/postcss`, 설정은
+- **Next.js 15** (App Router, TypeScript) + **Tailwind CSS v4**(`@tailwindcss/postcss`, 설정은
   `app/globals.css`의 `@theme` — `tailwind.config.ts` 없음) + **shadcn/ui**(Radix 기반, classic)
 - **Vercel AI SDK v4** (`ai`, `@ai-sdk/anthropic`) — `useChat` / `streamText` 스트리밍
 - **Anthropic Claude** (`ANTHROPIC_MODEL`, 기본 `claude-sonnet-4-5`)

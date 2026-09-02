@@ -76,7 +76,7 @@ rag7.py GUI -> 문서 변환·OCR -> 페이지 보존 청킹 -> 1024차원 임�
 
 | 구분 | 구성 |
 | --- | --- |
-| 웹 | Next.js 14 App Router, React 18, TypeScript |
+| 웹 | Next.js 15 App Router, React 18, TypeScript |
 | UI | Tailwind CSS v4, shadcn/ui, Radix UI, Pretendard |
 | AI | Vercel AI SDK v4, Claude·Gemini·OpenAI 호환 LLM 선택 |
 | 데이터 | Supabase PostgreSQL, pgvector, Auth, 비공개 Storage, RLS |
@@ -96,7 +96,7 @@ LLM은 `LLM_PROVIDER=claude|gemini|openai-compat`, 임베딩은
 
 ### 준비물
 
-- Node.js 18 이상, 권장 버전 20
+- Node.js 20.19 이상
 - npm
 - Supabase 프로젝트
 - 사용할 LLM 및 임베딩 제공자의 API 키

@@ -20,9 +20,10 @@ export const maxDuration = 100;
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  const parsedId = jobIdSchema.safeParse(params.id);
+  const { id } = await params;
+  const parsedId = jobIdSchema.safeParse(id);
   if (!parsedId.success) {
     return Response.json({ error: "올바르지 않은 작업 번호입니다." }, { status: 400 });
   }

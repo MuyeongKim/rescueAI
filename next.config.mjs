@@ -72,7 +72,7 @@ const nextConfig = {
 
 const workflowConfig = withWorkflow(nextConfig);
 
-// Workflow adapter는 Next 16용 `turbopack` 키도 함께 주입한다. 이 프로젝트는 Next 14의
+// Workflow adapter는 Next 16용 `turbopack` 키도 함께 주입한다. 이 프로젝트는 Next 15의
 // webpack 빌드를 사용하므로 adapter가 loader/build를 구성한 뒤 미지원 키만 제거한다.
 export default async function configuredNext(phase, context) {
   const config = await workflowConfig(phase, context);

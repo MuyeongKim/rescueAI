@@ -1,0 +1,22 @@
+# 패치가 없거나 현재 AI SDK 주버전에서 올릴 수 없는 항목만 실제 호출 경계를 근거로
+# 기한부 예외 처리한다. 나머지 항목은 package-lock.json에서 보안 버전으로 강제한다.
+
+[[IgnoredVulns]]
+id = "GHSA-866g-f22w-33x8"
+ignoreUntil = 2026-10-15
+reason = "응답은 설정된 Anthropic, Google, OpenAI provider에서만 오며 사용자가 provider URL이나 원시 응답을 주입할 수 없다. 호환 패치가 없어 AI SDK 6 전환을 별도 검증한다."
+
+[[IgnoredVulns]]
+id = "GHSA-rwvc-j5jr-mgvh"
+ignoreUntil = 2026-10-15
+reason = "서버가 클라이언트 메시지를 role과 일반 문자열 content만 남기도록 정규화해 AI SDK에 파일 파트를 전달하지 않는다."
+
+[[IgnoredVulns]]
+id = "GHSA-5p2g-fcmc-qvqq"
+ignoreUntil = 2026-10-15
+reason = "PPTX 입력 이미지는 브라우저 canvas가 만든 크기 제한 JPEG이며 JXL과 HEIF 파서는 호출되지 않는다. upstream 패치가 아직 없다."
+
+[[IgnoredVulns]]
+id = "GHSA-w3rx-r6r6-pgpr"
+ignoreUntil = 2026-10-15
+reason = "PPTX 입력 이미지는 브라우저 canvas가 만든 크기 제한 JPEG이며 ICNS 파서는 호출되지 않는다. upstream 패치가 아직 없다."

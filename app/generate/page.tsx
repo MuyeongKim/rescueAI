@@ -107,15 +107,16 @@ async function loadDocsByCategory(): Promise<Record<string, string[]>> {
 export default async function GeneratePage({
   searchParams,
 }: {
-  searchParams: { m?: string; j?: string };
+  searchParams: Promise<{ m?: string; j?: string }>;
 }) {
+  const resolvedSearchParams = await searchParams;
   const docsByCategory = await loadDocsByCategory();
   const categories = Object.keys(docsByCategory);
   const models = availableModels();
-  const requestedJobId = DEMO ? undefined : validGenerationJobId(searchParams?.j);
+  const requestedJobId = DEMO ? undefined : validGenerationJobId(resolvedSearchParams.j);
   const [initialMaterial, initialJob] = await Promise.all([
-    loadMaterial(searchParams?.m),
-    loadGenerationJob(searchParams?.j),
+    loadMaterial(resolvedSearchParams.m),
+    loadGenerationJob(resolvedSearchParams.j),
   ]);
   // 두 쿼리가 함께 들어오면 영속 작업 주소를 우선해 서로 다른 결과가 한 화면에 섞이지 않게 한다.
   const editableMaterial = requestedJobId ? undefined : initialMaterial;

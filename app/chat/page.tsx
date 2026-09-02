@@ -10,15 +10,16 @@ export const dynamic = "force-dynamic";
 export default async function ChatPage({
   searchParams,
 }: {
-  searchParams?: { q?: string };
+  searchParams: Promise<{ q?: string }>;
 }) {
+  const resolvedSearchParams = await searchParams;
   const [categories, popular] = await Promise.all([
     listChatCategories(),
     getPopularQuestions(),
   ]);
   return (
     <ChatInterface
-      initialInput={searchParams?.q?.slice(0, 200)}
+      initialInput={resolvedSearchParams.q?.slice(0, 200)}
       categories={categories}
       models={availableModels()}
       popular={popular}

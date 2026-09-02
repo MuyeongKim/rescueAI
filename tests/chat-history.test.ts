@@ -44,7 +44,23 @@ describe("trimChatHistory", () => {
     const total = out.reduce((s, m) => s + String(m.content).length, 0);
     expect(total).toBeLessThanOrEqual(MAX_TOTAL_CHARS);
     // 남은 것은 항상 최신 쪽
-    expect(out[out.length - 1].id).toBe("m9");
+    expect(out[out.length - 1].content).toBe(chunk);
+  });
+
+  it("첨부·parts·도구·provider 필드를 제거하고 일반 문자열만 전달한다", () => {
+    const out = trimChatHistory([
+      {
+        id: "client-message-id",
+        role: "user",
+        content: "질문",
+        experimental_attachments: [{ url: "data:image/png;base64,AAAA" }],
+        parts: [{ type: "file", data: "AAAA" }],
+        toolInvocations: [{ toolName: "unsafe" }],
+        providerOptions: { arbitrary: true },
+      },
+    ]);
+
+    expect(out).toEqual([{ role: "user", content: "질문" }]);
   });
 
   it("최신 메시지 하나는 총량을 넘겨도 반드시 남긴다 (질문이 사라지면 안 됨)", () => {

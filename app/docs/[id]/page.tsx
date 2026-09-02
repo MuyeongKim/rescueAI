@@ -9,14 +9,15 @@ export default async function DocViewerPage({
   params,
   searchParams,
 }: {
-  params: { id: string };
-  searchParams: { page?: string };
+  params: Promise<{ id: string }>;
+  searchParams: Promise<{ page?: string }>;
 }) {
-  const id = Number(params.id);
+  const [{ id: rawId }, resolvedSearchParams] = await Promise.all([params, searchParams]);
+  const id = Number(rawId);
   if (!Number.isFinite(id)) notFound();
 
-  const initialPage = searchParams.page
-    ? Math.max(1, parseInt(searchParams.page, 10) || 1)
+  const initialPage = resolvedSearchParams.page
+    ? Math.max(1, parseInt(resolvedSearchParams.page, 10) || 1)
     : 1;
 
   if (DEMO) {

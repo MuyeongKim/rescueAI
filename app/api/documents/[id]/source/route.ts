@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic";
 
 export async function GET(
   _request: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
   if (DEMO) {
     return Response.json(
@@ -18,7 +18,8 @@ export async function GET(
     );
   }
 
-  const documentId = Number(params.id);
+  const { id } = await params;
+  const documentId = Number(id);
   if (!Number.isSafeInteger(documentId) || documentId <= 0) {
     return Response.json(
       { error: "올바른 자료 번호가 아닙니다." },
