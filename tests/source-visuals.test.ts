@@ -4,7 +4,10 @@ import type { GeneratedSlide, GeneratedSlideDeck } from "@/lib/generate";
 import {
   autoAssignDeckSourceVisuals,
   exactPdfPageNumber,
+  fallbackSourceVisualSlide,
+  isUsefulSourcePageVisual,
   planSourceVisualRequests,
+  sourcePageVisualScore,
 } from "@/lib/source-visuals";
 
 function sourceSlide(index: number, overrides: Partial<GeneratedSlide> = {}): GeneratedSlide {
@@ -91,7 +94,7 @@ describe("원문 시각자료 자동 보강", () => {
     expect(assigned.every((slide) => slide.visual?.fit === "contain")).toBe(true);
   });
 
-  it("기존 원문 선택이 하나라도 있으면 덱을 그대로 두고 기본 다이어그램도 덮어쓰지 않는다", () => {
+  it("기존 원문 선택은 보존하면서 남은 자리만 채우고 기본 다이어그램은 덮어쓰지 않는다", () => {
     const withExplicitSource: GeneratedSlideDeck = {
       ...deck([
         candidateSlide(0, {
@@ -104,12 +107,18 @@ describe("원문 시각자료 자동 보강", () => {
             altText: "기존 원문",
           },
         }),
-        candidateSlide(1),
+        candidateSlide(1, { sourceRefs: ["[현장안전 지침 p.9]"] }),
       ]),
       sources,
     };
 
-    expect(autoAssignDeckSourceVisuals(withExplicitSource)).toBe(withExplicitSource);
+    const enrichedExplicit = autoAssignDeckSourceVisuals(withExplicitSource);
+    expect(enrichedExplicit.slides[0].visual).toEqual(withExplicitSource.slides[0].visual);
+    expect(enrichedExplicit.slides[1].visual).toMatchObject({
+      mode: "source-page",
+      documentId: 12,
+      page: 9,
+    });
 
     const withNativeDiagram: GeneratedSlideDeck = {
       ...deck([
@@ -165,6 +174,68 @@ describe("원문 시각자료 자동 보강", () => {
     expect(pageKeys).toHaveLength(3);
     expect(new Set(pageKeys).size).toBe(pageKeys.length);
   });
+
+  it("사진·도해 가능성이 있는 사례 장도 정확한 출처가 있으면 남은 슬롯 후보가 된다", () => {
+    const input: GeneratedSlideDeck = {
+      ...deck([
+        candidateSlide(0, {
+          role: "case",
+          title: "위험구역 배치를 원문 도해로 확인합니다",
+          sourceRefs: ["[현장안전 지침 p.9]"],
+        }),
+      ]),
+      sources,
+    };
+
+    expect(autoAssignDeckSourceVisuals(input).slides[0].visual).toMatchObject({
+      mode: "source-page",
+      documentId: 12,
+      page: 9,
+    });
+  });
+
+  it("한글 조합 방식이 달라도 같은 검증 출처를 자동 연결한다", () => {
+    const nfdTitle = "구조장비 교범".normalize("NFD");
+    const nfcRef = `[${nfdTitle.normalize("NFC")} p.4]`;
+    const input: GeneratedSlideDeck = {
+      ...deck([candidateSlide(0, { sourceRefs: [nfcRef] })]),
+      sources: [{ document_id: 11, doc: nfdTitle, page: 4 }],
+    };
+
+    expect(autoAssignDeckSourceVisuals(input).slides[0].visual).toMatchObject({
+      mode: "source-page",
+      documentId: 11,
+      page: 4,
+    });
+  });
+});
+
+describe("원문 페이지 시각성 판정", () => {
+  it("텍스트 연산만 있는 페이지는 제외하고 사진·표·도해 신호는 허용한다", () => {
+    const textOnly = {
+      imageOperations: 0,
+      formOperations: 0,
+      vectorOperations: 2,
+      shadingOperations: 0,
+      textCharacters: 3_200,
+    };
+    const photoPage = { ...textOnly, imageOperations: 2, textCharacters: 500 };
+    const logoOnTextPage = { ...textOnly, imageOperations: 1, textCharacters: 3_000 };
+    const tablePage = { ...textOnly, vectorOperations: 18, textCharacters: 900 };
+    const outlinedGlyphTextPage = {
+      ...textOnly,
+      vectorOperations: 995,
+      textCharacters: 3_094,
+    };
+
+    expect(isUsefulSourcePageVisual(textOnly)).toBe(false);
+    expect(isUsefulSourcePageVisual(photoPage)).toBe(true);
+    expect(isUsefulSourcePageVisual(logoOnTextPage)).toBe(false);
+    expect(isUsefulSourcePageVisual(tablePage)).toBe(true);
+    expect(isUsefulSourcePageVisual(outlinedGlyphTextPage)).toBe(false);
+    expect(sourcePageVisualScore(photoPage)).toBeGreaterThan(sourcePageVisualScore(textOnly));
+    expect(sourcePageVisualScore(tablePage)).toBeGreaterThan(sourcePageVisualScore(textOnly));
+  });
 });
 
 describe("원문 시각자료 요청 계획", () => {
@@ -212,5 +283,83 @@ describe("원문 시각자료 요청 계획", () => {
     expect(planned.deck.slides[1].visual?.mode).toBe("native-diagram");
     expect(planned.deck.slides[2].visual?.mode).toBe("none");
     expect(planned.rejected).toHaveLength(2);
+  });
+
+  it("한 장의 여러 검증 출처를 시각 품질 비교 후보로 보존한다", () => {
+    const planned = planSourceVisualRequests({
+      ...deck([
+        sourceSlide(0, {
+          visual: {
+            mode: "source-page",
+            documentId: 11,
+            page: 4,
+            sourceRef: "[구조장비 교범 p.4]",
+            altText: "구조장비 원문",
+          },
+          sourceRefs: ["[구조장비 교범 p.4]", "[현장안전 지침 p.9]"],
+        }),
+      ]),
+      sources: [
+        { document_id: 11, doc: "구조장비 교범", page: 4 },
+        { document_id: 12, doc: "현장안전 지침", page: 9 },
+      ],
+    });
+
+    expect(planned.requests[0].candidates).toEqual([
+      {
+        documentId: 11,
+        page: 4,
+        documentTitle: "구조장비 교범",
+        sourceRef: "[구조장비 교범 p.4]",
+      },
+      {
+        documentId: 12,
+        page: 9,
+        documentTitle: "현장안전 지침",
+        sourceRef: "[현장안전 지침 p.9]",
+      },
+    ]);
+  });
+
+  it("8개 출력 장의 1순위 후보를 보존하면서 전체 비교 후보를 24개로 제한한다", () => {
+    const sources = Array.from({ length: 32 }, (_, index) => ({
+      document_id: index + 1,
+      doc: `후보 교범 ${index + 1}`,
+      page: 1,
+    }));
+    const slides = Array.from({ length: 8 }, (_, slideIndex) => {
+      const slideSources = sources.slice(slideIndex * 4, slideIndex * 4 + 4);
+      const sourceRefs = slideSources.map((source) => `[${source.doc} p.1]`);
+      return sourceSlide(slideIndex, {
+        visual: {
+          mode: "source-page",
+          documentId: slideSources[0].document_id,
+          page: 1,
+          sourceRef: sourceRefs[0],
+        },
+        sourceRefs,
+      });
+    });
+
+    const planned = planSourceVisualRequests({ ...deck(slides), sources });
+
+    expect(planned.requests).toHaveLength(8);
+    expect(planned.requests.reduce((sum, request) => sum + request.candidates.length, 0)).toBe(24);
+    expect(planned.requests.every((request) => request.candidates.length >= 1)).toBe(true);
+  });
+
+  it("원문 렌더 실패 폴백은 visual-explanation 자리표시자를 남기지 않는다", () => {
+    const fallback = fallbackSourceVisualSlide(
+      sourceSlide(0, {
+        role: "equipment",
+        steps: undefined,
+      })
+    );
+
+    expect(fallback.composition).toBe("checklist");
+    expect(fallback.layout).toBe("equipment");
+    expect(fallback.visual?.mode).toBe("native-diagram");
+    expect(fallback.visual?.documentId).toBeUndefined();
+    expect(fallback.visual?.page).toBeUndefined();
   });
 });

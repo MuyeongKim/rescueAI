@@ -44,7 +44,11 @@ export async function GET(
       { status: 500, headers: { "Cache-Control": "no-store" } }
     );
   }
-  if (!document?.file_url || document.status !== "processed") {
+  if (
+    !document?.file_url ||
+    document.status !== "processed" ||
+    document.source_type !== "pdf"
+  ) {
     return Response.json(
       { error: "이 자료에는 열람 가능한 원본 PDF가 없습니다." },
       { status: 404, headers: { "Cache-Control": "no-store" } }

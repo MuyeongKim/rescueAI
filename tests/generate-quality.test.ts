@@ -590,6 +590,31 @@ describe("원문 시각자료 출처 바인딩", () => {
     });
   });
 
+  it("한글 조합 방식이 달라도 검증 출처를 연결하고 서버 원문 라벨로 정규화한다", () => {
+    const deck = validSlides();
+    const nfdTitle = "공기호흡기 교육교범".normalize("NFD");
+    deck.slides[1] = {
+      ...deck.slides[1],
+      role: "evidence",
+      composition: "visual-explanation",
+      visual: {
+        mode: "source-page",
+        sourceRef: `[${nfdTitle.normalize("NFC")} p.3]`,
+      },
+    };
+
+    const bound = bindSlideVisualsToSources(deck, [
+      { document_id: 17, doc: nfdTitle, page: 3 },
+    ]);
+
+    expect(bound.slides[1].visual).toMatchObject({
+      mode: "source-page",
+      documentId: 17,
+      page: 3,
+      sourceRef: `[${nfdTitle} p.3]`,
+    });
+  });
+
   it("출처가 일치하지 않거나 원문 문서 ID가 없으면 외부 이미지를 요청하지 않는다", () => {
     const deck = validSlides();
     deck.slides[1] = {

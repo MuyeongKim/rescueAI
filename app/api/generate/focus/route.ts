@@ -80,6 +80,7 @@ const requestSchema = z
     topic: z.string().trim().min(2).max(100),
     excludeFocuses: z.array(z.string().trim().min(2).max(100)).max(60).default([]),
     model: z.string().trim().max(100).optional(),
+    mode: z.enum(["auto", "refine"]).default("auto"),
   })
   .strip();
 
@@ -114,7 +115,8 @@ export async function POST(request: Request) {
     }
     try {
       const parsed = requestSchema.parse(input);
-      if (!isLikelyBroadTrainingTopic(parsed.topic)) {
+      const broadTopic = isLikelyBroadTrainingTopic(parsed.topic);
+      if (!broadTopic && parsed.mode !== "refine") {
         return Response.json({
           scope: "specific",
           options: [],
@@ -123,7 +125,7 @@ export async function POST(request: Request) {
         });
       }
       return Response.json({
-        scope: "broad",
+        scope: broadTopic ? "broad" : "refined",
         options: demoOptions(parsed.category),
         similarMaterials: [],
         // 데모 후보는 고정 예시라 입력 주제에 따른 추천 순위를 단정하지 않는다.
@@ -155,8 +157,9 @@ export async function POST(request: Request) {
   if (!parsed.success) {
     return Response.json({ error: "분야와 훈련 주제를 확인해 주세요." }, { status: 400 });
   }
-  const { category, topic, excludeFocuses, model } = parsed.data;
-  if (!isLikelyBroadTrainingTopic(topic)) {
+  const { category, topic, excludeFocuses, model, mode } = parsed.data;
+  const broadTopic = isLikelyBroadTrainingTopic(topic);
+  if (!broadTopic && mode !== "refine") {
     return Response.json({
       scope: "specific",
       options: [],
@@ -203,6 +206,7 @@ export async function POST(request: Request) {
       contextText: context.contextText,
       allowedSourceRefs,
       excludedFocuses: sessionExcluded,
+      refinementMode: mode === "refine",
     });
 
     let activeModel = model;
@@ -285,7 +289,7 @@ export async function POST(request: Request) {
       ...(fallbackUsed ? ["빠른 모델로 추천했습니다."] : []),
     ];
     return Response.json({
-      scope: "broad",
+      scope: broadTopic ? "broad" : "refined",
       options,
       similarMaterials: topicHistory.similarMaterials,
       // 프롬프트의 추천 우선순위와 서버의 근거·중복 필터를 모두 통과한 최상위 후보다.

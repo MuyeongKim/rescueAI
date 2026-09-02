@@ -233,6 +233,40 @@ describe("POST /api/generate/focus", () => {
     expect(mocks.generateObject).not.toHaveBeenCalled();
   });
 
+  it("사용자가 세분화를 요청하면 구체적인 주제도 근거 기반 후보를 생성한다", async () => {
+    const response = await POST(
+      requestWith({
+        category: "산악",
+        topic: "급경사 로프 접근과 확보",
+        mode: "refine",
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.scope).toBe("refined");
+    expect(payload.options.length).toBeGreaterThan(0);
+    expect(mocks.fetchCategoryContext).toHaveBeenCalledWith(
+      "산악",
+      40,
+      "급경사 로프 접근과 확보"
+    );
+    expect(mocks.generateObject).toHaveBeenCalledOnce();
+    expect(mocks.generateObject.mock.calls[0][0].prompt).toContain(
+      "사용자가 입력한 구체화할 주제: 급경사 로프 접근과 확보"
+    );
+  });
+
+  it("알 수 없는 세부 방향 요청 모드는 모델 호출 전에 거절한다", async () => {
+    const response = await POST(
+      requestWith({ category: "산악", topic: "산악사고 대비 훈련", mode: "unknown" })
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.fetchCategoryContext).not.toHaveBeenCalled();
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
   it("넓은 주제는 현재 사용자 저장 이력만 조회하고 근거 있는 방향을 반환한다", async () => {
     const client = makeClient([
       {

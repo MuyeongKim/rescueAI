@@ -255,21 +255,24 @@ export function SavedList({
         const deck = hydrateMaterial(it).deck;
         if (!deck) throw new Error("저장한 슬라이드를 불러오지 못했습니다.");
         visualToastId = toast.loading("원문 시각자료를 준비하고 있습니다…");
-        const [
-          { downloadPptx },
-          { autoAssignDeckSourceVisuals, prepareDeckSourceVisuals },
-        ] = await Promise.all([
+        const [{ downloadPptx }, { prepareDeckSourceVisuals }] = await Promise.all([
           import("@/lib/pptx"),
           import("@/lib/source-visuals"),
         ]);
-        const prepared = await prepareDeckSourceVisuals(autoAssignDeckSourceVisuals(deck));
+        // 저장된 원문·도형·내용 선택을 그대로 내보내고 런타임 이미지만 준비한다.
+        const prepared = await prepareDeckSourceVisuals(deck);
         if (prepared.requested === 0) {
           toast.dismiss(visualToastId);
           visualToastId = undefined;
         } else if (prepared.failed > 0) {
-          toast.warning("일부 원문 이미지는 기본 도형으로 대신했습니다", {
+          const textOnlyCount = prepared.fallbacks.filter(
+            (fallback) => fallback.reason === "text-only-page"
+          ).length;
+          toast.warning("일부 원문 이미지는 도형·내용 구도로 대신했습니다", {
             id: visualToastId,
-            description: `${prepared.resolved}개 반영 · ${prepared.failed}개 대체`,
+            description: `${prepared.resolved}개 반영 · ${prepared.failed}개 대체${
+              textOnlyCount > 0 ? ` · 텍스트 위주 페이지 ${textOnlyCount}개 제외` : ""
+            }`,
           });
           visualToastId = undefined;
         } else {

@@ -429,6 +429,11 @@ export function generatedSourceLabel(source: GeneratedDocSource): string {
   return `[${source.doc.trim()}${source.page != null ? ` p.${source.page}` : ""}]`;
 }
 
+/** macOS 파일명의 NFD와 브라우저·LLM의 NFC 표기를 같은 출처 라벨로 비교한다. */
+export function normalizedSourceLabelKey(label: string): string {
+  return label.trim().normalize("NFC");
+}
+
 /** 서버가 확인한 출처만으로 저장·재검사용 허용 라벨 목록을 재구성한다. */
 export function generatedSourceLabels(
   sources: readonly GeneratedDocSource[]
@@ -482,7 +487,7 @@ export function bindSlideVisualsToSources(
     ) {
       continue;
     }
-    const label = generatedSourceLabel(source);
+    const label = normalizedSourceLabelKey(generatedSourceLabel(source));
     const ids = documentIdsByLabel.get(label) ?? new Set<number>();
     ids.add(source.document_id);
     documentIdsByLabel.set(label, ids);
@@ -499,7 +504,7 @@ export function bindSlideVisualsToSources(
     ) {
       continue;
     }
-    const label = generatedSourceLabel(source);
+    const label = normalizedSourceLabelKey(generatedSourceLabel(source));
     if (!ambiguousLabels.has(label) && !sourceByLabel.has(label)) {
       sourceByLabel.set(label, source);
     }
@@ -524,11 +529,12 @@ export function bindSlideVisualsToSources(
       }
 
       const sourceRef = visual.sourceRef?.trim();
+      const sourceRefKey = sourceRef ? normalizedSourceLabelKey(sourceRef) : "";
       const source =
         slide.composition === "visual-explanation" &&
-        sourceRef &&
-        !ambiguousLabels.has(sourceRef)
-          ? sourceByLabel.get(sourceRef)
+        sourceRefKey &&
+        !ambiguousLabels.has(sourceRefKey)
+          ? sourceByLabel.get(sourceRefKey)
           : undefined;
       const mismatchedMetadata =
         source &&
@@ -556,7 +562,7 @@ export function bindSlideVisualsToSources(
           mode: "source-page",
           documentId: source.document_id,
           page: source.page ?? undefined,
-          sourceRef,
+          sourceRef: generatedSourceLabel(source),
           altText: visual.altText,
           caption: visual.caption,
           fit: visual.fit ?? "contain",
@@ -740,6 +746,7 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
 - '물 → 제독제 → 물'을 보편 절차로 단정하지 마세요. 해당 순서를 쓸 때는 물질 식별, SDS·제조사·SOP, 수반응성 및 제독제 적합 조건을 같은 장에 함께 밝히세요.
 - 과거 저장본 호환 필드 layout도 함께 지정하세요: objectives, concept, process, equipment, case, safety, summary.
 - visual은 모든 장에 지정하되, 원문 사진·표·도해가 교육에 직접 필요한 visual-explanation 장만 source-page를 사용하세요.
+  참고 자료 본문에 사진·그림·표·도해·장비 구성처럼 실제 시각 단서가 확인되는 페이지를 우선하고, 텍스트 설명뿐인 페이지는 고르지 마세요.
   이때 sourceRef와 altText를 함께 적고 fit은 contain을 사용합니다. 절차·시간흐름·판단흐름은 native-diagram,
   시각자료가 필요 없는 장은 none을 사용하세요. assetId·documentId·imageData는 서버가 검증하여 연결하므로 만들지 마세요.
 - 원문에 확인되지 않은 화학보호복·장비 외형이나 착용 절차를 그림으로 상상하지 마세요. 원문 시각자료를 연결할 수 없으면
@@ -2226,7 +2233,7 @@ ${args.current.bullets.map((b) => `· ${b}`).join("\n")}
 - ${slideMode.rules}
 - 비교 장이면 steps에 기준명 2개를, 절차·시간흐름·판단흐름 장이면 ${MAX_SLIDE_STEP_CHARS}자 이내의 단계어 3~5개를 넣고, 아니면 steps를 생략하세요.
 - 내용 의미에 맞는 role과 composition을 서로 구분해 지정하고, 호환용 layout도 함께 지정하세요.
-- visual은 source-page/native-diagram/none 중 하나로 지정하세요. 원문 시각자료는 visual-explanation 화면에서만 사용하고 정확한 sourceRef와 altText를 넣되 assetId·documentId·imageData는 만들지 마세요.
+- visual은 source-page/native-diagram/none 중 하나로 지정하세요. 원문 시각자료는 참고 자료 본문에 사진·그림·표·도해 같은 시각 단서가 확인되는 경우에만 visual-explanation 화면에서 사용하고 정확한 sourceRef와 altText를 넣되 assetId·documentId·imageData는 만들지 마세요.
 - sourceRefs에는 참고 자료의 출처 라벨을 글자 그대로 1~4개 넣으세요.
 - 참고 자료에 없는 출처 라벨이나 주장을 만들지 마세요.
 - 대상 수준(${args.audience})에 맞는 용어로 한국어로, 이 슬라이드 하나만 JSON으로 반환하세요.`;

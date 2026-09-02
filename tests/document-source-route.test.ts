@@ -107,6 +107,29 @@ describe("GET /api/documents/[id]/source", () => {
     expect(client.spies.createSignedUrl).not.toHaveBeenCalled();
   });
 
+  it("does not issue a URL for a processed non-PDF document", async () => {
+    const client = makeClient({
+      document: {
+        id: 8,
+        title: "동영상 교육자료",
+        source_type: "video",
+        file_url: "rag/video/training.mp4",
+        status: "processed",
+      },
+    });
+    mocks.createClient.mockResolvedValue(client);
+
+    const response = await GET(new Request("http://localhost"), {
+      params: { id: "8" },
+    });
+
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({
+      error: "이 자료에는 열람 가능한 원본 PDF가 없습니다.",
+    });
+    expect(client.spies.createSignedUrl).not.toHaveBeenCalled();
+  });
+
   it("does not make the browser fetch an arbitrary legacy external URL", async () => {
     const client = makeClient({
       document: {

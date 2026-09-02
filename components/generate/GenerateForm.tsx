@@ -72,8 +72,11 @@ import {
 import {
   focusRequestFingerprint,
   isLikelyBroadTrainingTopic,
+  shouldAutoRequestTrainingFocus,
+  shouldOfferTrainingFocusSuggestions,
   type SimilarTrainingMaterial,
   type TrainingFocusOption,
+  type TrainingFocusRequestMode,
 } from "@/lib/generate-focus";
 import type { SopEvidence } from "@/lib/sop-evidence";
 import {
@@ -81,6 +84,7 @@ import {
   type PublicGenerationJob,
 } from "@/lib/generation-job";
 import type { ValidatedGenerateRequest } from "@/lib/generation-request";
+import { autoAssignDeckSourceVisuals } from "@/lib/source-visuals";
 
 const TOPIC_SUGGESTIONS: Record<string, readonly string[]> = {
   화재: ["공기호흡기 점검과 착용", "고립소방관 구조 절차", "화재현장 인명검색 안전수칙"],
@@ -149,6 +153,13 @@ type TopicFocusState =
     }
   | { status: "resolved"; focus: string }
   | { status: "bypassed" };
+
+type TrainingFocusRequestOptions = {
+  refresh?: boolean;
+  mode?: TrainingFocusRequestMode;
+  moveFocus?: boolean;
+  generateIfSpecific?: boolean;
+};
 
 type CategoryRecommendationConfidence = "high" | "medium" | "low";
 
@@ -732,6 +743,8 @@ export function GenerateForm({
   durableGenerationEnabled?: boolean;
 }) {
   const categories = Object.keys(docsByCategory);
+  // 저장본은 사용자가 고른 원문·도형·내용 구성을 그대로 복원한다.
+  // 자동 시각 구성은 최초 전체 생성 결과에만 적용한다.
   const hydrated = hydrateMaterial(initialMaterial);
   const resumedRequest = initialMaterial ? undefined : initialJob?.request;
   // 과거 NotebookLM 저장본은 결과만 호환하고, 새 자료 입력은 지원하는 세 유형 중 계획으로 연다.
@@ -783,6 +796,7 @@ export function GenerateForm({
     )
   );
   const topicRef = useRef(resumedRequest?.topic ?? initialMaterial?.topic ?? "");
+  const topicEditedRef = useRef(false);
   const categoryRequestRef = useRef<AbortController | null>(null);
   const categoryRequestFingerprintRef = useRef("");
   const categoryDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -790,6 +804,9 @@ export function GenerateForm({
   const pendingGenerateAfterCategoryRef = useRef<string | null>(null);
   const continueGenerationAfterCategoryRef = useRef<() => Promise<void>>(async () => undefined);
   const focusRequestRef = useRef<AbortController | null>(null);
+  const requestTrainingFocusRef = useRef<
+    (options?: TrainingFocusRequestOptions) => Promise<void>
+  >(async () => undefined);
   const generationRequestRef = useRef<AbortController | null>(null);
   const regenRequestRef = useRef<AbortController | null>(null);
   const evidenceRepairRequestRef = useRef<EvidenceRepairOperation | null>(null);
@@ -921,6 +938,17 @@ export function GenerateForm({
     category,
     topic
   );
+  const offerTopicFocusSuggestions = shouldOfferTrainingFocusSuggestions({
+    categoryConfirmed,
+    topic,
+    status: topicFocus.status,
+  });
+  const autoRequestTopicFocus = shouldAutoRequestTrainingFocus({
+    categoryConfirmed,
+    topic,
+    status: topicFocus.status,
+    topicEdited: topicEditedRef.current,
+  });
 
   const genReq = {
     type,
@@ -1330,6 +1358,7 @@ export function GenerateForm({
   }
 
   function handleTopicChange(nextTopic: string, immediate = false) {
+    topicEditedRef.current = true;
     topicRef.current = nextTopic;
     setTopic(nextTopic);
     setSaved(false);
@@ -2037,7 +2066,7 @@ export function GenerateForm({
         throw new Error("근거 보완 응답 형식이 올바르지 않습니다.");
       }
 
-      const nextDeck: GeneratedSlideDeck = {
+      const nextDeck = {
         ...payload.deck,
         mode: resolveSlideDeckMode(payload.deck.mode ?? context.slideMode),
       };
@@ -2306,10 +2335,10 @@ export function GenerateForm({
     const { quality: serverQuality, ...generatedResult } = json;
     if (resultType === "slides") {
       const generatedDeck = generatedResult as unknown as GeneratedSlideDeck;
-      const normalizedDeck: GeneratedSlideDeck = {
+      const normalizedDeck = autoAssignDeckSourceVisuals({
         ...generatedDeck,
         mode: resolveSlideDeckMode(generatedDeck.mode ?? context.slideMode),
-      };
+      });
       const checkedQuality = localQuality(
         "slides",
         normalizedDeck,
@@ -2720,10 +2749,20 @@ export function GenerateForm({
     }
   }
 
-  async function requestTrainingFocus(refresh = false) {
+  async function requestTrainingFocus({
+    refresh = false,
+    mode = "auto",
+    moveFocus = true,
+    generateIfSpecific = true,
+  }: TrainingFocusRequestOptions = {}) {
     if (
       !category ||
       !categoryConfirmed ||
+      focusRequestRef.current ||
+      loading ||
+      jobRunning ||
+      jobRetrying ||
+      pendingJobLookupActive ||
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
@@ -2758,7 +2797,6 @@ export function GenerateForm({
             customValue: "",
             historyCompared: false,
           };
-    focusRequestRef.current?.abort();
     const controller = new AbortController();
     focusRequestRef.current = controller;
     activeFocusRequestFingerprintRef.current = requestFocusFingerprint;
@@ -2774,9 +2812,11 @@ export function GenerateForm({
         ? { status: "refreshing", ...previousChoice }
         : { status: "loading", options: [], similarMaterials: [] }
     );
-    // 트리거 버튼은 로딩 패널로 교체된다. 응답을 기다리는 동안 키보드 포커스가
-    // body로 빠지지 않도록 즉시 새 패널 제목으로 옮긴다.
-    requestAnimationFrame(() => focusHeadingRef.current?.focus());
+    // 사용자가 직접 요청한 경우에만 교체된 패널로 포커스를 옮긴다. 자동 추천은 입력 중인
+    // 사용자의 키보드·스크린리더 위치를 바꾸지 않고 상태 영역으로만 진행을 알린다.
+    if (moveFocus) {
+      requestAnimationFrame(() => focusHeadingRef.current?.focus());
+    }
 
     try {
       const response = await fetch("/api/generate/focus", {
@@ -2790,11 +2830,12 @@ export function GenerateForm({
           // 초안에 집중하고, 추천은 빠른 모델과 서버 근거 필터로 처리한다.
           model: model === "gemini-pro" ? "gemini-flash" : model,
           excludeFocuses: Array.from(focusHistoryRef.current).slice(-60),
+          mode,
         }),
       });
       const payload = (await response.json().catch(() => null)) as
         | {
-            scope?: "specific" | "broad";
+            scope?: "specific" | "broad" | "refined";
             options?: TrainingFocusOption[];
             similarMaterials?: SimilarTrainingMaterial[];
             recommendedId?: string;
@@ -2821,7 +2862,9 @@ export function GenerateForm({
             ...previousChoice,
             error: message,
           });
-          requestAnimationFrame(() => focusHeadingRef.current?.focus());
+          if (moveFocus) {
+            requestAnimationFrame(() => focusHeadingRef.current?.focus());
+          }
           return;
         }
         setTopicFocus({
@@ -2829,12 +2872,18 @@ export function GenerateForm({
           message,
           similarMaterials: safeSimilarTrainingMaterials(payload?.similarMaterials),
         });
-        requestAnimationFrame(() => focusHeadingRef.current?.focus());
+        if (moveFocus) {
+          requestAnimationFrame(() => focusHeadingRef.current?.focus());
+        }
         return;
       }
       if (payload?.scope === "specific") {
-        setTopicFocus({ status: "bypassed" });
-        await runGeneration();
+        if (generateIfSpecific) {
+          setTopicFocus({ status: "bypassed" });
+          await runGeneration();
+        } else {
+          setTopicFocus({ status: "idle" });
+        }
         return;
       }
       const options = Array.isArray(payload?.options) ? payload.options.slice(0, 5) : [];
@@ -2850,7 +2899,9 @@ export function GenerateForm({
           message,
           similarMaterials,
         });
-        requestAnimationFrame(() => focusHeadingRef.current?.focus());
+        if (moveFocus) {
+          requestAnimationFrame(() => focusHeadingRef.current?.focus());
+        }
         return;
       }
       options.forEach((option) => focusHistoryRef.current.add(option.title));
@@ -2867,14 +2918,16 @@ export function GenerateForm({
         historyCompared:
           payload?.historyBasis === "saved-materials",
       });
-      requestAnimationFrame(() => {
-        const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-        focusHeadingRef.current?.scrollIntoView({
-          behavior: reduceMotion ? "auto" : "smooth",
-          block: "start",
+      if (moveFocus) {
+        requestAnimationFrame(() => {
+          const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+          focusHeadingRef.current?.scrollIntoView({
+            behavior: reduceMotion ? "auto" : "smooth",
+            block: "start",
+          });
+          focusHeadingRef.current?.focus({ preventScroll: true });
         });
-        focusHeadingRef.current?.focus({ preventScroll: true });
-      });
+      }
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       if (
@@ -2891,7 +2944,9 @@ export function GenerateForm({
           ...previousChoice,
           error: message,
         });
-        requestAnimationFrame(() => focusHeadingRef.current?.focus());
+        if (moveFocus) {
+          requestAnimationFrame(() => focusHeadingRef.current?.focus());
+        }
         return;
       }
       setTopicFocus({
@@ -2899,7 +2954,9 @@ export function GenerateForm({
         message,
         similarMaterials: [],
       });
-      requestAnimationFrame(() => focusHeadingRef.current?.focus());
+      if (moveFocus) {
+        requestAnimationFrame(() => focusHeadingRef.current?.focus());
+      }
     } finally {
       if (focusRequestRef.current === controller) {
         focusRequestRef.current = null;
@@ -2910,10 +2967,6 @@ export function GenerateForm({
 
   async function continueGenerationAfterCategory() {
     const trimmedTopic = topic.trim();
-    if (!isLikelyBroadTrainingTopic(trimmedTopic)) {
-      await runGeneration();
-      return;
-    }
     if (topicFocus.status === "loading" || topicFocus.status === "refreshing") return;
     if (topicFocus.status === "resolved") {
       await runGeneration(topicFocus.focus);
@@ -2948,7 +3001,11 @@ export function GenerateForm({
       await runGeneration(focus);
       return;
     }
-    await requestTrainingFocus(false);
+    if (!isLikelyBroadTrainingTopic(trimmedTopic)) {
+      await runGeneration();
+      return;
+    }
+    await requestTrainingFocus();
   }
 
   async function handleGenerate() {
@@ -2992,6 +3049,36 @@ export function GenerateForm({
   }
 
   continueGenerationAfterCategoryRef.current = continueGenerationAfterCategory;
+  requestTrainingFocusRef.current = requestTrainingFocus;
+
+  // 사용자가 새로 입력한 넓은 주제는 분야가 확정되는 즉시 세부 방향까지 자동으로 잇는다.
+  // 저장본·진행 중 작업을 열었을 때는 원치 않는 모델 호출을 만들지 않는다.
+  useEffect(() => {
+    if (
+      !autoRequestTopicFocus ||
+      !category ||
+      loading ||
+      jobRunning ||
+      jobRetrying ||
+      pendingJobLookupActive ||
+      topicFocus.status !== "idle"
+    ) {
+      return;
+    }
+    void requestTrainingFocusRef.current({
+      mode: "auto",
+      moveFocus: false,
+      generateIfSpecific: false,
+    });
+  }, [
+    autoRequestTopicFocus,
+    category,
+    jobRetrying,
+    jobRunning,
+    loading,
+    pendingJobLookupActive,
+    topicFocus.status,
+  ]);
 
   // setCategory 직후에는 이전 렌더의 빈 분야가 남아 있으므로, 다음 렌더에서 생성 의도를 잇는다.
   useEffect(() => {
@@ -3149,30 +3236,29 @@ export function GenerateForm({
     try {
       // PPTX·PDF 렌더러는 무거워서 다운로드 시점에만 로드한다.
       visualToastId = toast.loading("원문 시각자료를 준비하고 있습니다…");
-      const [
-        { downloadPptx },
-        { autoAssignDeckSourceVisuals, prepareDeckSourceVisuals },
-      ] = await Promise.all([
+      const [{ downloadPptx }, { prepareDeckSourceVisuals }] = await Promise.all([
         import("@/lib/pptx"),
         import("@/lib/source-visuals"),
       ]);
-      const prepared = await prepareDeckSourceVisuals(
-        autoAssignDeckSourceVisuals(exportDeck),
-        (progress) => {
-          if (visualToastId === undefined) return;
-          toast.loading("원문 시각자료를 준비하고 있습니다…", {
-            id: visualToastId,
-            description: `${progress.completed}/${progress.total} · ${progress.title} ${progress.page}쪽`,
-          });
-        }
-      );
+      const prepared = await prepareDeckSourceVisuals(exportDeck, (progress) => {
+        if (visualToastId === undefined) return;
+        toast.loading("원문 시각자료를 준비하고 있습니다…", {
+          id: visualToastId,
+          description: `${progress.completed}/${progress.total} · ${progress.title} ${progress.page}쪽`,
+        });
+      });
       if (prepared.requested === 0) {
         toast.dismiss(visualToastId);
         visualToastId = undefined;
       } else if (prepared.failed > 0) {
-        toast.warning("일부 원문 이미지는 기본 도형으로 대신했습니다", {
+        const textOnlyCount = prepared.fallbacks.filter(
+          (fallback) => fallback.reason === "text-only-page"
+        ).length;
+        toast.warning("일부 원문 이미지는 도형·내용 구도로 대신했습니다", {
           id: visualToastId,
-          description: `${prepared.resolved}개 반영 · ${prepared.failed}개 대체`,
+          description: `${prepared.resolved}개 반영 · ${prepared.failed}개 대체${
+            textOnlyCount > 0 ? ` · 텍스트 위주 페이지 ${textOnlyCount}개 제외` : ""
+          }`,
         });
         visualToastId = undefined;
       } else {
@@ -3504,7 +3590,10 @@ export function GenerateForm({
                   ? "훈련 주제를 두 글자 이상 입력해 주세요."
                   : "한 문장만 적으면 관련 자료를 찾아 교육 흐름까지 구성합니다."}
               </p>
-              <div className="flex flex-wrap gap-1.5 pt-1" aria-label="추천 훈련 주제">
+              <div className="flex flex-wrap gap-1.5 pt-1" aria-label="빠른 입력 예시">
+                <p className="w-full text-xs font-medium text-muted-foreground">
+                  빠른 입력 예시
+                </p>
                 {suggestions.map((suggestion) => (
                   <button
                     key={suggestion}
@@ -3571,23 +3660,35 @@ export function GenerateForm({
               onRetry={() => void requestCategoryRecommendation()}
             />
 
-            {categoryConfirmed && broadTopic && topicFocus.status === "idle" && (
-              <div className="flex flex-col gap-3 rounded-lg border border-amber-300/60 bg-amber-50/70 px-3 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/20 dark:text-amber-100 sm:flex-row sm:items-center sm:justify-between">
+            {offerTopicFocusSuggestions && (
+              <div className="flex flex-col gap-3 rounded-lg border border-primary/20 bg-primary/[0.035] px-3 py-3 text-sm leading-relaxed sm:flex-row sm:items-center sm:justify-between">
                 <div className="min-w-0">
-                  <p className="font-semibold">이 주제는 여러 훈련 방향으로 나눌 수 있습니다.</p>
-                  <p className="mt-0.5">
-                    연결 교범에서 실습·평가로 구성하기 좋은 세부 방향을 추천받을 수 있습니다.
+                  <p className="font-semibold text-foreground">
+                    {broadTopic
+                      ? "입력한 주제를 세부 훈련 단위로 나눌 수 있습니다."
+                      : "필요하면 이 주제를 한 단계 더 구체화할 수 있습니다."}
+                  </p>
+                  <p className="mt-0.5 text-muted-foreground">
+                    연결 교범을 근거로 실습·평가에 바로 쓸 수 있는 세부 훈련주제를 제안합니다.
                   </p>
                 </div>
                 <Button
                   type="button"
                   variant="outline"
-                  className="min-h-12 shrink-0 border-amber-400/70 bg-background px-4 text-amber-950 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-950/50"
-                  disabled={resultMutationLocked || loading || categoryBusy || focusBusy}
-                  onClick={() => void requestTrainingFocus(false)}
+                  className="min-h-12 shrink-0 bg-background px-4"
+                  disabled={
+                    resultMutationLocked ||
+                    loading ||
+                    jobRunning ||
+                    jobRetrying ||
+                    pendingJobLookupActive ||
+                    categoryBusy ||
+                    focusBusy
+                  }
+                  onClick={() => void requestTrainingFocus({ mode: "refine" })}
                 >
                   <Lightbulb className="h-4 w-4" aria-hidden="true" />
-                  훈련주제 도움받기
+                  세부 훈련주제 제안받기
                 </Button>
               </div>
             )}
@@ -3659,7 +3760,9 @@ export function GenerateForm({
                       : previous
                   );
                 }}
-                onRefresh={() => void requestTrainingFocus(true)}
+                onRefresh={() =>
+                  void requestTrainingFocus({ refresh: true, mode: "refine" })
+                }
                 onBypass={() => {
                   if (savingRef.current || regenRequestRef.current) return;
                   setTopicFocus({ status: "bypassed" });
@@ -3681,7 +3784,7 @@ export function GenerateForm({
                   disabled={resultMutationLocked}
                   onClick={() => {
                     focusHistoryRef.current.add(topicFocus.focus);
-                    void requestTrainingFocus(true);
+                    void requestTrainingFocus({ refresh: true, mode: "refine" });
                   }}
                 >
                   다른 방향 선택

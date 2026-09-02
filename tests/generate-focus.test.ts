@@ -13,6 +13,8 @@ import {
   filterGroundedTrainingFocusOptionsWithDiagnostics,
   isLikelyBroadTrainingTopic,
   normalizeTrainingFocusText,
+  shouldAutoRequestTrainingFocus,
+  shouldOfferTrainingFocusSuggestions,
   trainingFocusConceptOverlap,
   trainingFocusSimilarity,
   trainingFocusSuggestionsSchema,
@@ -48,6 +50,76 @@ describe("isLikelyBroadTrainingTopic", () => {
   it("빈 값이나 지나치게 짧은 값은 넓은 훈련 주제로 간주하지 않는다", () => {
     expect(isLikelyBroadTrainingTopic(" ")).toBe(false);
     expect(isLikelyBroadTrainingTopic("산")).toBe(false);
+  });
+});
+
+describe("세부 훈련주제 제안 노출 정책", () => {
+  it("분야가 확정되면 넓은 주제와 구체적인 주제 모두 제안 기능을 표시한다", () => {
+    expect(
+      shouldOfferTrainingFocusSuggestions({
+        categoryConfirmed: true,
+        topic: "산악사고 대비 훈련",
+        status: "idle",
+      })
+    ).toBe(true);
+    expect(
+      shouldOfferTrainingFocusSuggestions({
+        categoryConfirmed: true,
+        topic: "공기호흡기 착용 방법",
+        status: "idle",
+      })
+    ).toBe(true);
+    expect(
+      shouldOfferTrainingFocusSuggestions({
+        categoryConfirmed: true,
+        topic: "공기호흡기 착용 방법",
+        status: "bypassed",
+      })
+    ).toBe(true);
+  });
+
+  it("분야 미확정 또는 진행 중 상태에서는 중복 제안 동작을 표시하지 않는다", () => {
+    expect(
+      shouldOfferTrainingFocusSuggestions({
+        categoryConfirmed: false,
+        topic: "산악사고 대비 훈련",
+        status: "idle",
+      })
+    ).toBe(false);
+    expect(
+      shouldOfferTrainingFocusSuggestions({
+        categoryConfirmed: true,
+        topic: "산악사고 대비 훈련",
+        status: "loading",
+      })
+    ).toBe(false);
+  });
+
+  it("사용자가 새로 입력한 넓은 주제만 자동 제안하고 저장본·구체 주제는 자동 호출하지 않는다", () => {
+    expect(
+      shouldAutoRequestTrainingFocus({
+        categoryConfirmed: true,
+        topic: "산악사고 대비 훈련",
+        status: "idle",
+        topicEdited: true,
+      })
+    ).toBe(true);
+    expect(
+      shouldAutoRequestTrainingFocus({
+        categoryConfirmed: true,
+        topic: "산악사고 대비 훈련",
+        status: "idle",
+        topicEdited: false,
+      })
+    ).toBe(false);
+    expect(
+      shouldAutoRequestTrainingFocus({
+        categoryConfirmed: true,
+        topic: "공기호흡기 착용 방법",
+        status: "idle",
+        topicEdited: true,
+      })
+    ).toBe(false);
   });
 });
 
@@ -137,6 +209,21 @@ describe("buildTrainingFocusSuggestionPrompt", () => {
 
     expect(prompt).toContain("없음 (옵션을 반환하지 마세요)");
     expect(prompt).toContain("관련 참고 자료 없음");
+  });
+
+  it("명시적 세분화 요청은 구체적인 주제를 반복하지 않고 더 좁은 실습 단위로 나누도록 한다", () => {
+    const prompt = buildTrainingFocusSuggestionPrompt({
+      category: "화재",
+      topic: "공기호흡기 착용 방법",
+      contextText: `${SOURCE_A}\n공기호흡기 착용 전 용기 압력과 면체 기밀을 확인한다.`,
+      allowedSourceRefs: [SOURCE_A],
+      refinementMode: true,
+    });
+
+    expect(prompt).toContain("사용자가 입력한 구체화할 주제: 공기호흡기 착용 방법");
+    expect(prompt).toContain("그대로 반복하거나 말만 바꾸지 않습니다");
+    expect(prompt).toContain("더 좁은 단계·상황·판단·장비 조작·오류 복구 단위");
+    expect(prompt).toContain("공통 안전관리나 평가만을 단독 방향으로 만들지 않습니다");
   });
 });
 

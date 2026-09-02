@@ -43,4 +43,19 @@ describe("데모 세부 훈련 방향 요청", () => {
     expect(payload.options[0].sourceRefs).toEqual(["[데모 연결 교범 p.1]"]);
     expect(payload.recommendedId).toBeUndefined();
   });
+
+  it("구체적인 주제도 명시적으로 세분화를 요청하면 선택지를 제공한다", async () => {
+    const response = await POST(
+      requestWith({
+        category: "산악",
+        topic: "급경사 로프 접근과 확보",
+        mode: "refine",
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.scope).toBe("refined");
+    expect(payload.options).toHaveLength(4);
+  });
 });

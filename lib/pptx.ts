@@ -1055,6 +1055,28 @@ export async function buildPptxBytes(
       return;
     }
 
+    const branches = [
+      { x: 1.15, label: steps[1], text: bullets[1] ?? bullets[0] },
+      { x: 7.15, label: steps[2], text: bullets[2] ?? bullets[bullets.length - 1] },
+    ];
+    // 연결선은 모든 노드보다 먼저 그려 편집 중에도 선이 도형 위로 올라오지 않게 한다.
+    branches.forEach((_, index) => {
+      slide.addShape("line", {
+        x: index === 0 ? 3.85 : 7.68,
+        y: 3.42,
+        w: 1.8,
+        h: 0.72,
+        line: {
+          color: accent,
+          width: 1.8,
+          ...(index === 0
+            ? { beginArrowType: "triangle" as const }
+            : { endArrowType: "triangle" as const }),
+          transparency: 22,
+        },
+      });
+    });
+
     slide.addShape("diamond", {
       x: 5.53,
       y: 2.1,
@@ -1078,25 +1100,7 @@ export async function buildPptxBytes(
       fit: "shrink",
     });
 
-    const branches = [
-      { x: 1.15, label: steps[1], text: bullets[1] ?? bullets[0] },
-      { x: 7.15, label: steps[2], text: bullets[2] ?? bullets[bullets.length - 1] },
-    ];
     branches.forEach((branch, index) => {
-      slide.addShape("line", {
-        x: index === 0 ? 3.85 : 7.68,
-        y: 3.42,
-        w: 1.8,
-        h: 0.72,
-        line: {
-          color: accent,
-          width: 1.8,
-          ...(index === 0
-            ? { beginArrowType: "triangle" as const }
-            : { endArrowType: "triangle" as const }),
-          transparency: 22,
-        },
-      });
       slide.addShape("roundRect", {
         x: branch.x,
         y: 4.25,

@@ -19,13 +19,19 @@ import {
 } from "lucide-react";
 
 import type {
+  GeneratedDocSource,
   GeneratedSlide,
   GeneratedSlideDeck,
   SlideCompositionType,
   SlideLayoutType,
 } from "@/lib/generate";
 import { generatedPptxSlideCount } from "@/lib/pptx-plan";
-import { fallbackSlideVisualMode, resolveSlideDeckMode } from "@/lib/generate";
+import {
+  fallbackSlideVisualMode,
+  generatedSourceLabel,
+  normalizedSourceLabelKey,
+  resolveSlideDeckMode,
+} from "@/lib/generate";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -76,22 +82,114 @@ const LAYOUT_META: Record<SlideLayoutType, { label: string; eyebrow: string }> =
   summary: { label: "핵심 정리", eyebrow: "교육 핵심 정리" },
 };
 
+type SlideVisualKind = "source" | "diagram" | "content";
+
+const SLIDE_VISUAL_KIND_LABELS: Record<SlideVisualKind, string> = {
+  source: "원문",
+  diagram: "도형",
+  content: "내용",
+};
+const SOURCE_VISUAL_UNSELECTED_VALUE = "__source_visual_unselected__";
+
+export function slideVisualKind(slide: GeneratedSlide): SlideVisualKind {
+  if (slide.visual?.mode === "source-page" || slide.visual?.mode === "source-crop") {
+    return "source";
+  }
+  if (
+    slide.visual?.mode === "native-diagram" ||
+    slide.composition === "process" ||
+    slide.composition === "comparison" ||
+    slide.composition === "timeline" ||
+    slide.composition === "decision-flow" ||
+    slide.composition === "checklist"
+  ) {
+    return "diagram";
+  }
+  return "content";
+}
+
+export function slideVisualSummary(slides: readonly GeneratedSlide[]) {
+  return slides.reduce(
+    (summary, slide) => {
+      summary[slideVisualKind(slide)] += 1;
+      return summary;
+    },
+    { source: 0, diagram: 0, content: 0 }
+  );
+}
+
+export type VerifiedSlideVisualCandidate = {
+  label: string;
+  documentId: number;
+  page: number;
+  documentTitle: string;
+};
+
+/** 사용자가 임의 ID를 입력하지 않도록 현재 장의 검증된 근거 교집합만 반환한다. */
+export function verifiedSlideVisualCandidates(
+  slide: GeneratedSlide,
+  sources: readonly GeneratedDocSource[]
+): VerifiedSlideVisualCandidate[] {
+  const candidatesByLabel = new Map<string, Map<string, VerifiedSlideVisualCandidate>>();
+  for (const source of sources) {
+    if (
+      !Number.isSafeInteger(source.document_id) ||
+      source.document_id <= 0 ||
+      source.page == null ||
+      !Number.isSafeInteger(source.page) ||
+      source.page <= 0 ||
+      !source.doc.trim()
+    ) {
+      continue;
+    }
+    const label = generatedSourceLabel(source);
+    const labelKey = normalizedSourceLabelKey(label);
+    const identity = `${source.document_id}:${source.page}`;
+    const byIdentity = candidatesByLabel.get(labelKey) ?? new Map();
+    byIdentity.set(identity, {
+      label,
+      documentId: source.document_id,
+      page: source.page,
+      documentTitle: source.doc.trim(),
+    });
+    candidatesByLabel.set(labelKey, byIdentity);
+  }
+
+  const result: VerifiedSlideVisualCandidate[] = [];
+  const used = new Set<string>();
+  for (const rawRef of slide.sourceRefs ?? []) {
+    const label = normalizedSourceLabelKey(rawRef);
+    const byIdentity = candidatesByLabel.get(label);
+    if (!byIdentity || byIdentity.size !== 1) continue;
+    const candidate = byIdentity.values().next().value;
+    if (!candidate) continue;
+    const identity = `${candidate.documentId}:${candidate.page}`;
+    if (used.has(identity)) continue;
+    used.add(identity);
+    result.push(candidate);
+  }
+  return result.slice(0, 4);
+}
+
 /** 서버가 덱에 보관한 출처 라벨 중 수동 선택에 안전한 형식만 노출한다. */
 export function verifiedDeckSourceLabels(labels: readonly string[] | undefined): string[] {
-  return Array.from(
-    new Set(
-      (labels ?? [])
-        .map((label) => label.trim())
-        .filter(
-          (label) =>
-            label.length >= 4 &&
-            label.length <= 300 &&
-            label.startsWith("[") &&
-            label.endsWith("]") &&
-            !/[\r\n]/.test(label)
-        )
-    )
-  ).slice(0, 80);
+  const unique = new Map<string, string>();
+  for (const rawLabel of labels ?? []) {
+    const label = rawLabel.trim();
+    if (
+      label.length < 4 ||
+      label.length > 300 ||
+      !label.startsWith("[") ||
+      !label.endsWith("]") ||
+      /[\r\n]/.test(label)
+    ) {
+      continue;
+    }
+    const key = normalizedSourceLabelKey(label);
+    if (!unique.has(key)) unique.set(key, label);
+    if (unique.size >= 80) break;
+  }
+  return Array.from(unique.values());
 }
 
 /** 과거 저장본처럼 layout이 없는 경우에도 미리보기의 의미 구조를 유지한다. */
@@ -176,6 +274,11 @@ function SlidePreview({
   const bullets = slide.bullets.filter(Boolean);
   const steps = (slide.steps ?? []).filter(Boolean);
   const dark = layout === "summary";
+  const visualKind = slideVisualKind(slide);
+  const isSourceVisual = visualKind === "source";
+  const sourceLabel = visualSourceLabel(slide);
+  const hasSourcePreview =
+    isSourceVisual && Boolean(slide.visual?.imageData?.startsWith("data:image/"));
 
   return (
     <div
@@ -185,7 +288,11 @@ function SlidePreview({
       )}
       role={decorative ? undefined : "img"}
       aria-hidden={decorative || undefined}
-      aria-label={decorative ? undefined : `슬라이드 ${index + 1} 미리보기: ${meta.label}`}
+      aria-label={
+        decorative
+          ? undefined
+          : `슬라이드 ${index + 1} 미리보기: ${meta.label}, ${SLIDE_VISUAL_KIND_LABELS[visualKind]} 구성`
+      }
     >
       <div className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: accent }} />
       <div className="flex h-full flex-col px-[5.5%] pb-[4%] pt-[5%]">
@@ -209,7 +316,31 @@ function SlidePreview({
             {meta.eyebrow}
           </p>
 
-          {layout === "process" && steps.length >= 2 ? (
+          {isSourceVisual ? (
+            <div className="grid h-[82%] grid-cols-[1.25fr_0.75fr] gap-3">
+              <div className="relative flex min-w-0 items-center justify-center overflow-hidden rounded border bg-muted/40">
+                {hasSourcePreview && slide.visual?.imageData ? (
+                  <Image
+                    src={slide.visual.imageData}
+                    alt=""
+                    fill
+                    unoptimized
+                    sizes="320px"
+                    className="object-contain"
+                  />
+                ) : (
+                  <div className="px-2 text-center text-muted-foreground">
+                    <FileImage className="mx-auto h-6 w-6" aria-hidden="true" />
+                    <p className="mt-1 text-[8px] font-semibold">원문 페이지 연결</p>
+                    <p className="mt-0.5 line-clamp-2 text-[7px] leading-tight">
+                      {sourceLabel ?? "검증된 교육자료"}
+                    </p>
+                  </div>
+                )}
+              </div>
+              <PreviewList bullets={bullets} accent={accent} />
+            </div>
+          ) : layout === "process" && steps.length >= 2 ? (
             <div className="flex h-[80%] flex-col justify-between">
               <div className="flex items-start justify-between gap-1">
                 {steps.slice(0, 5).map((step, stepIndex) => (
@@ -281,8 +412,11 @@ function SlidePreview({
           )}
         </div>
 
-        <div className="flex items-center justify-between border-t border-current/10 pt-1 text-[7px] opacity-55">
+        <div className="flex items-center justify-between gap-2 border-t border-current/10 pt-1 text-[7px] opacity-60">
           <span>전북특별자치도 소방본부</span>
+          <span className="rounded-full border border-current/20 px-1.5 py-0.5 font-semibold">
+            {SLIDE_VISUAL_KIND_LABELS[visualKind]}
+          </span>
           <span>{index + 1}</span>
         </div>
       </div>
@@ -357,14 +491,14 @@ function SlideReadableContent({ slide, accent }: { slide: GeneratedSlide; accent
 
 const COMPOSITION_LABELS: Record<NonNullable<GeneratedSlide["composition"]>, string> = {
   statement: "핵심 메시지",
-  list: "목록",
+  list: "내용 중심",
   process: "절차 흐름",
   comparison: "비교",
   timeline: "시간 흐름",
   "decision-flow": "판단 흐름",
   checklist: "점검표",
   scenario: "상황 사례",
-  "visual-explanation": "시각 설명",
+  "visual-explanation": "원문 자료 + 설명",
   summary: "핵심 정리",
 };
 
@@ -428,8 +562,29 @@ function fillSlideItems(
 /** 구성을 바꾼 직후에도 해당 레이아웃이 깨지지 않도록 최소 문장·단계와 시각자료를 맞춘다. */
 export function normalizedCompositionPatch(
   slide: GeneratedSlide,
-  composition: SlideCompositionType
+  composition: SlideCompositionType,
+  sourceCandidate?: VerifiedSlideVisualCandidate
 ): Partial<GeneratedSlide> {
+  if (composition === "visual-explanation") {
+    if (!sourceCandidate) {
+      // 검증된 원문이 없으면 저장을 막는 불완전한 visual-explanation 상태를 만들지 않는다.
+      return {};
+    }
+    return {
+      composition,
+      layout: "concept",
+      visual: {
+        mode: "source-page",
+        documentId: sourceCandidate.documentId,
+        page: sourceCandidate.page,
+        sourceRef: sourceCandidate.label,
+        altText: `${sourceCandidate.documentTitle} ${sourceCandidate.page}쪽 원문 페이지`,
+        caption: sourceCandidate.label,
+        fit: "contain",
+      },
+    };
+  }
+
   const layout = legacyLayoutForComposition(composition, slide.layout);
   let bullets = fillSlideItems(slide.bullets, 1, ["핵심 내용을 입력해 주세요."], 4);
   let steps = (slide.steps ?? []).map((step) => step.trim()).filter(Boolean).slice(0, 5);
@@ -464,12 +619,54 @@ export function normalizedCompositionPatch(
   };
   const isSourceVisual =
     slide.visual?.mode === "source-page" || slide.visual?.mode === "source-crop";
-  if (isSourceVisual && composition !== "visual-explanation") {
+  if (isSourceVisual) {
     patch.visual = {
       mode: fallbackSlideVisualMode({ ...slide, composition, layout }),
     };
   }
   return patch;
+}
+
+/** 근거 체크와 원문 페이지 메타데이터를 한 번에 맞춰 화면·저장·PPTX 상태를 동일하게 한다. */
+export function normalizedSourceRefsPatch(
+  slide: GeneratedSlide,
+  sourceRefs: readonly string[],
+  sources: readonly GeneratedDocSource[]
+): Partial<GeneratedSlide> {
+  const refs = Array.from(
+    new Map(
+      sourceRefs
+        .map((label) => label.trim())
+        .filter(Boolean)
+        .map((label) => [normalizedSourceLabelKey(label), label] as const)
+    ).values()
+  ).slice(0, 4);
+  const isSourceVisual =
+    slide.visual?.mode === "source-page" || slide.visual?.mode === "source-crop";
+  if (!isSourceVisual) return { sourceRefs: refs };
+
+  const candidates = verifiedSlideVisualCandidates({ ...slide, sourceRefs: refs }, sources);
+  const current = candidates.find(
+    (candidate) =>
+      candidate.documentId === slide.visual?.documentId &&
+      candidate.page === slide.visual?.page
+  );
+  const selected = current ?? candidates[0];
+  if (selected) {
+    return {
+      sourceRefs: refs,
+      ...normalizedCompositionPatch(
+        { ...slide, sourceRefs: refs },
+        "visual-explanation",
+        selected
+      ),
+    };
+  }
+
+  return {
+    sourceRefs: refs,
+    ...normalizedCompositionPatch({ ...slide, sourceRefs: refs }, "list"),
+  };
 }
 
 function minimumBulletCount(slide: GeneratedSlide): number {
@@ -620,20 +817,36 @@ export function SlideDeckResult({
   const [announcement, setAnnouncement] = useState("");
   const pendingIssueFocusRef = useRef<number | null>(null);
   const selectedSlide = deck.slides[selectedIndex];
+  const visualSummary = slideVisualSummary(deck.slides);
+  const selectedVisualCandidates = selectedSlide
+    ? verifiedSlideVisualCandidates(selectedSlide, deck.sources)
+    : [];
+  const selectedVisualCandidate = selectedVisualCandidates.find(
+    (candidate) =>
+      Boolean(selectedSlide?.visual?.sourceRef) &&
+      normalizedSourceLabelKey(candidate.label) ===
+        normalizedSourceLabelKey(selectedSlide?.visual?.sourceRef ?? "") &&
+      candidate.documentId === selectedSlide?.visual?.documentId &&
+      candidate.page === selectedSlide?.visual?.page
+  );
   const verifiedSourceLabels = verifiedDeckSourceLabels(deck.sourceLabels);
-  const verifiedSourceLabelSet = new Set(verifiedSourceLabels);
+  const verifiedSourceLabelByKey = new Map(
+    verifiedSourceLabels.map((label) => [normalizedSourceLabelKey(label), label] as const)
+  );
   const selectedVerifiedSourceRefs = Array.from(
     new Set(
       (selectedSlide?.sourceRefs ?? [])
-        .map((label) => label.trim())
-        .filter((label) => verifiedSourceLabelSet.has(label))
+        .map((label) => verifiedSourceLabelByKey.get(normalizedSourceLabelKey(label)))
+        .filter((label): label is string => Boolean(label))
     )
   ).slice(0, 4);
   const invalidSourceRefs = Array.from(
     new Set(
       (selectedSlide?.sourceRefs ?? [])
         .map((label) => label.trim())
-        .filter((label) => label && !verifiedSourceLabelSet.has(label))
+        .filter(
+          (label) => label && !verifiedSourceLabelByKey.has(normalizedSourceLabelKey(label))
+        )
     )
   );
   const evidenceIssueSet = new Set(evidenceRepair?.issueIndices ?? []);
@@ -739,7 +952,11 @@ export function SlideDeckResult({
   }
 
   function handleSourceRefChange(label: string, checked: boolean) {
-    if (!selectedSlide || editorLocked || !verifiedSourceLabelSet.has(label)) return;
+    if (
+      !selectedSlide ||
+      editorLocked ||
+      !verifiedSourceLabelByKey.has(normalizedSourceLabelKey(label))
+    ) return;
     let sourceRefs = selectedVerifiedSourceRefs;
     if (checked) {
       if (sourceRefs.includes(label) || sourceRefs.length >= 4) return;
@@ -748,7 +965,10 @@ export function SlideDeckResult({
       if (!sourceRefs.includes(label) || sourceRefs.length <= 1) return;
       sourceRefs = sourceRefs.filter((sourceRef) => sourceRef !== label);
     }
-    onPatchSlide(selectedIndex, { sourceRefs });
+    onPatchSlide(
+      selectedIndex,
+      normalizedSourceRefsPatch(selectedSlide, sourceRefs, deck.sources)
+    );
     setAnnouncement(
       `슬라이드 ${selectedIndex + 1}에 검증된 근거 ${sourceRefs.length}개를 연결했습니다.`
     );
@@ -756,7 +976,10 @@ export function SlideDeckResult({
 
   function handleRemoveInvalidSourceRefs() {
     if (!selectedSlide || editorLocked || selectedVerifiedSourceRefs.length === 0) return;
-    onPatchSlide(selectedIndex, { sourceRefs: selectedVerifiedSourceRefs });
+    onPatchSlide(
+      selectedIndex,
+      normalizedSourceRefsPatch(selectedSlide, selectedVerifiedSourceRefs, deck.sources)
+    );
     setAnnouncement(`슬라이드 ${selectedIndex + 1}의 검증되지 않은 출처 표기를 제거했습니다.`);
   }
 
@@ -798,6 +1021,9 @@ export function SlideDeckResult({
               본문 {deck.slides.length}장 · 다운로드 총 {downloadSlideCount}장(표지·근거 포함) · 근거:
             </span>
             <SourceBadges sources={deck.sources} />
+            <span className="basis-full text-xs text-muted-foreground" aria-label="슬라이드 시각 구성 요약">
+              현재 구성 · 원문 {visualSummary.source}장 · 편집 가능한 도형 {visualSummary.diagram}장 · 내용 중심 {visualSummary.content}장
+            </span>
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
@@ -1000,18 +1226,26 @@ export function SlideDeckResult({
                       <div className="min-w-0 space-y-4">
                         <div className="space-y-1.5">
                           <label className="text-sm font-semibold" htmlFor={`slide-layout-${selectedIndex}`}>
-                            화면 구성
+                            슬라이드 표현 방식
                           </label>
                           <Select
                             value={compositionFromLegacy(selectedSlide)}
                             onValueChange={(value) => {
                               const composition = value as SlideCompositionType;
+                              const sourceCandidate =
+                                composition === "visual-explanation"
+                                  ? selectedVisualCandidate ?? selectedVisualCandidates[0]
+                                  : undefined;
                               onPatchSlide(
                                 selectedIndex,
-                                normalizedCompositionPatch(selectedSlide, composition)
+                                normalizedCompositionPatch(
+                                  selectedSlide,
+                                  composition,
+                                  sourceCandidate
+                                )
                               );
                               setAnnouncement(
-                                `슬라이드 ${selectedIndex + 1} 화면 구성을 ${COMPOSITION_LABELS[composition]}으로 바꿨습니다.`
+                                `슬라이드 ${selectedIndex + 1} 표현 방식을 ${COMPOSITION_LABELS[composition]}으로 바꿨습니다.`
                               );
                             }}
                           >
@@ -1023,13 +1257,87 @@ export function SlideDeckResult({
                             </SelectTrigger>
                             <SelectContent>
                               {COMPOSITION_OPTIONS.map(([value, label]) => (
-                                <SelectItem key={value} value={value}>
+                                <SelectItem
+                                  key={value}
+                                  value={value}
+                                  disabled={
+                                    value === "visual-explanation" &&
+                                    selectedVisualCandidates.length === 0
+                                  }
+                                >
                                   {label}
                                 </SelectItem>
                               ))}
                             </SelectContent>
                           </Select>
+                          {selectedVisualCandidates.length === 0 && (
+                            <p className="text-xs leading-relaxed text-muted-foreground">
+                              원문 방식은 이 장에 검증된 페이지 근거가 연결된 경우에만 선택할 수 있습니다.
+                            </p>
+                          )}
                         </div>
+
+                        {compositionFromLegacy(selectedSlide) === "visual-explanation" &&
+                          selectedVisualCandidates.length > 0 && (
+                            <div className="space-y-1.5">
+                              <label
+                                className="text-sm font-semibold"
+                                htmlFor={`slide-source-visual-${selectedIndex}`}
+                              >
+                                원문 페이지
+                              </label>
+                              <Select
+                                value={
+                                  selectedVisualCandidate?.label ?? SOURCE_VISUAL_UNSELECTED_VALUE
+                                }
+                                onValueChange={(label) => {
+                                  const candidate = selectedVisualCandidates.find(
+                                    (item) => item.label === label
+                                  );
+                                  if (!candidate) return;
+                                  onPatchSlide(
+                                    selectedIndex,
+                                    normalizedCompositionPatch(
+                                      selectedSlide,
+                                      "visual-explanation",
+                                      candidate
+                                    )
+                                  );
+                                  setAnnouncement(
+                                    `슬라이드 ${selectedIndex + 1}의 원문 페이지를 ${label}로 바꿨습니다.`
+                                  );
+                                }}
+                              >
+                                <SelectTrigger
+                                  id={`slide-source-visual-${selectedIndex}`}
+                                  className="h-12 text-base"
+                                >
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {!selectedVisualCandidate && (
+                                    <SelectItem value={SOURCE_VISUAL_UNSELECTED_VALUE} disabled>
+                                      원문 페이지를 다시 선택해 주세요
+                                    </SelectItem>
+                                  )}
+                                  {selectedVisualCandidates.map((candidate) => (
+                                    <SelectItem key={candidate.label} value={candidate.label}>
+                                      {candidate.label}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                              {!selectedVisualCandidate && (
+                                <p className="text-xs leading-relaxed text-amber-800 dark:text-amber-300">
+                                  현재 표시 정보와 연결된 근거가 달라졌습니다. 사용할 원문 페이지를
+                                  선택해 주세요.
+                                </p>
+                              )}
+                              <p className="text-xs leading-relaxed text-muted-foreground">
+                                실제 사진·도해·표가 없는 페이지는 내보낼 때 자동으로 도형·내용 구도로 대체합니다.
+                              </p>
+                            </div>
+                          )}
 
                         <div className="space-y-1.5">
                           <label className="text-sm font-semibold" htmlFor={`slide-title-${selectedIndex}`}>

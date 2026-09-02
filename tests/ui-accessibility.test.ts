@@ -9,9 +9,12 @@ import {
 import { DocsBrowser, type DocRow } from "@/components/docs/DocsBrowser";
 import {
   normalizedCompositionPatch,
+  normalizedSourceRefsPatch,
   resolvePreviewLayout,
+  slideVisualSummary,
   SlideDeckResult,
   verifiedDeckSourceLabels,
+  verifiedSlideVisualCandidates,
 } from "@/components/generate/SlideDeckResult";
 import { DocResult } from "@/components/generate/DocResult";
 import {
@@ -592,6 +595,122 @@ describe("슬라이드 편집 접근성과 상태", () => {
     const decision = normalizedCompositionPatch(sampleSlide, "decision-flow");
     expect(decision.bullets).toHaveLength(2);
     expect(decision.steps).toHaveLength(3);
+
+    const candidates = verifiedSlideVisualCandidates(sampleSlide, sampleDeck.sources);
+    expect(candidates).toEqual([
+      {
+        label: "[교육자료 1 p.1]",
+        documentId: 1,
+        page: 1,
+        documentTitle: "교육자료 1",
+      },
+    ]);
+    const sourceVisual = normalizedCompositionPatch(
+      sampleSlide,
+      "visual-explanation",
+      candidates[0]
+    );
+    expect(sourceVisual.visual).toMatchObject({
+      mode: "source-page",
+      documentId: 1,
+      page: 1,
+      sourceRef: "[교육자료 1 p.1]",
+      fit: "contain",
+    });
+    expect(normalizedCompositionPatch(sampleSlide, "visual-explanation")).toEqual({});
+  });
+
+  it("현재 원문 근거를 해제하면 남은 검증 페이지로 화면·저장 메타데이터를 함께 바꾼다", () => {
+    const sources = [
+      { document_id: 1, doc: "교육자료 1", page: 1 },
+      { document_id: 2, doc: "교육자료 2", page: 2 },
+    ];
+    const slide: GeneratedSlide = {
+      ...sampleSlide,
+      composition: "visual-explanation",
+      sourceRefs: ["[교육자료 1 p.1]", "[교육자료 2 p.2]"],
+      visual: {
+        mode: "source-page",
+        documentId: 1,
+        page: 1,
+        sourceRef: "[교육자료 1 p.1]",
+      },
+    };
+
+    const patch = normalizedSourceRefsPatch(slide, ["[교육자료 2 p.2]"], sources);
+
+    expect(patch.sourceRefs).toEqual(["[교육자료 2 p.2]"]);
+    expect(patch.visual).toMatchObject({
+      mode: "source-page",
+      documentId: 2,
+      page: 2,
+      sourceRef: "[교육자료 2 p.2]",
+    });
+  });
+
+  it("원문 후보가 사라지면 불완전한 자리표시자 대신 내용 중심 구도로 안전하게 내린다", () => {
+    const patch = normalizedSourceRefsPatch(
+      {
+        ...sampleSlide,
+        composition: "visual-explanation",
+        visual: {
+          mode: "source-page",
+          documentId: 1,
+          page: 1,
+          sourceRef: "[교육자료 1 p.1]",
+        },
+      },
+      ["[페이지 없는 자료]"],
+      [{ document_id: 9, doc: "페이지 없는 자료", page: null }]
+    );
+
+    expect(patch.composition).toBe("list");
+    expect(patch.visual).toEqual({ mode: "none" });
+  });
+
+  it("한글 조합 방식이 다른 출처도 같은 원문 후보로 표시한다", () => {
+    const nfdTitle = "교육자료".normalize("NFD");
+    const nfcLabel = `[${nfdTitle.normalize("NFC")} p.1]`;
+
+    expect(
+      verifiedSlideVisualCandidates(
+        { ...sampleSlide, sourceRefs: [nfcLabel] },
+        [{ document_id: 7, doc: nfdTitle, page: 1 }]
+      )
+    ).toMatchObject([{ documentId: 7, page: 1 }]);
+    expect(
+      verifiedDeckSourceLabels([`[${nfdTitle} p.1]`, nfcLabel])
+    ).toHaveLength(1);
+  });
+
+  it("자동 시각 구성 요약과 원문 선택 가능 여부를 명확히 표시한다", () => {
+    const html = renderSlideDeck({
+      deck: {
+        ...sampleDeck,
+        slides: [
+          {
+            ...sampleSlide,
+            composition: "visual-explanation",
+            visual: {
+              mode: "source-page",
+              documentId: 1,
+              page: 1,
+              sourceRef: "[교육자료 1 p.1]",
+              altText: "교육자료 1 원문",
+            },
+          },
+        ],
+      },
+    });
+
+    expect(html).toContain("현재 구성 · 원문 1장 · 편집 가능한 도형 0장 · 내용 중심 0장");
+    expect(html).toContain("슬라이드 표현 방식");
+    expect(html).toContain("원문 페이지");
+    expect(slideVisualSummary(sampleDeck.slides)).toEqual({
+      source: 1,
+      diagram: 0,
+      content: 0,
+    });
   });
 });
 
