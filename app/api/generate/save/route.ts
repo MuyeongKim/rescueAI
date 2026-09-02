@@ -15,9 +15,7 @@ import {
 } from "@/lib/generate";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
 import {
-  fetchExternalSopContext,
   ragTableEnabled,
-  verifyExternalRagSourceProvenance,
 } from "@/lib/rag-external";
 import {
   inspectSopContract,
@@ -31,6 +29,10 @@ import {
   rebindNormalizedSlideContent,
   readLimitedJsonBody,
 } from "@/lib/generated-material-save";
+import {
+  createGenerationRagReader,
+  type GenerationRagReader,
+} from "@/lib/supabase/generation-rag";
 import {
   claimedGeneratedSources,
   sameVerifiedSourceSet,
@@ -383,7 +385,7 @@ function qualityGateBeforeSave(
 
 async function verifySopBeforeSave(
   body: ValidatedSaveBody,
-  supabase: Awaited<ReturnType<typeof createClient>>
+  ragReader: GenerationRagReader | null
 ): Promise<Response | null> {
   if (body.kind === "notebooklm") return null;
 
@@ -392,7 +394,8 @@ async function verifySopBeforeSave(
     try {
       const focus = typeof body.content.focus === "string" ? body.content.focus : "";
       const query = buildFocusedTrainingQuery(body.topic, focus);
-      const result = await fetchExternalSopContext(body.category, query, 4, supabase);
+      if (!ragReader) throw new Error("서버 RAG 검증기가 준비되지 않았습니다.");
+      const result = await ragReader.fetchSopContext(body.category, query, 4);
       expected = normalizeVerifiedSopEvidence(result.evidence);
     } catch (error) {
       // 조회 자체가 실패한 경우 클라이언트의 주장으로 대체하지 않는다. 근거 없음과도
@@ -407,6 +410,15 @@ async function verifySopBeforeSave(
 
   const claimed = clientSopEvidence(body.content);
   if (claimed && !sameSopEvidence(claimed, expected)) {
+    // 문서명·사용자 입력은 로그에 남기지 않고 상태와 개수만 기록한다.
+    if (process.env.NODE_ENV === "production") {
+      console.warn("[generate/save] SOP 근거 충돌:", {
+        claimedStatus: claimed.status,
+        claimedLabelCount: claimed.sourceLabels.length,
+        expectedStatus: expected.status,
+        expectedLabelCount: expected.sourceLabels.length,
+      });
+    }
     return Response.json(
       {
         code: "sop_evidence_conflict",
@@ -440,9 +452,31 @@ async function verifySopBeforeSave(
   return null;
 }
 
+function trustedRagVerificationReader(): GenerationRagReader | null | Response {
+  if (!ragTableEnabled()) return null;
+  try {
+    // 내구성 Workflow와 같은 RAG 권한으로 재조회해야 공통 SOP가 사용자 RLS에서
+    // 누락되더라도 생성 당시 서버 검증 집합과 저장 검증 집합이 갈라지지 않는다.
+    return createGenerationRagReader();
+  } catch (error) {
+    console.error(
+      "[generate/save] 서버 RAG 검증기 준비 실패:",
+      error instanceof Error ? error.message : error
+    );
+    return Response.json(
+      {
+        code: "source_provenance_unavailable",
+        error: "서버 자료 검증을 준비하지 못했습니다. 잠시 후 다시 저장해 주세요.",
+      },
+      { status: 503 }
+    );
+  }
+}
+
 async function verifySourcesBeforeSave(
   body: ValidatedSaveBody,
-  supabase: Awaited<ReturnType<typeof createClient>>
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  ragReader: GenerationRagReader | null
 ): Promise<Response | null> {
   if (body.kind === "notebooklm") return null;
   const claimed = claimedGeneratedSources(body.content);
@@ -464,11 +498,12 @@ async function verifySourcesBeforeSave(
   }
 
   const verified = ragTableEnabled()
-    ? await verifyExternalRagSourceProvenance(
-        claimedSources,
-        body.category ?? "",
-        supabase
-      )
+    ? ragReader
+      ? await ragReader.verifySourceProvenance(
+          claimedSources,
+          body.category ?? ""
+        )
+      : { sources: [], degraded: true }
     : await verifyNativeDocumentSourceProvenance(
         claimedSources,
         body.category ?? "",
@@ -510,8 +545,8 @@ async function verifySourcesBeforeSave(
   return null;
 }
 
-// 생성물 저장 — 본인 세션으로 insert(신규) 또는 update(재편집). RLS 가 본인 행만 허용/검증.
-// 서비스 롤 미사용.
+// 생성물 저장 — insert/update는 본인 세션과 RLS로만 수행한다. service role은 인증 뒤
+// 생성 Workflow와 같은 RAG 근거를 읽어 재검증하는 데만 제한적으로 사용한다.
 export async function POST(req: Request) {
   // 데모 모드: DB 없이 저장 성공으로 처리(UI 흐름 확인용)
   if (DEMO) {
@@ -568,9 +603,16 @@ export async function POST(req: Request) {
     }
   }
 
-  const sourceError = await verifySourcesBeforeSave(body, supabase);
+  const ragVerificationReader =
+    body.kind === "notebooklm" ? null : trustedRagVerificationReader();
+  if (ragVerificationReader instanceof Response) return ragVerificationReader;
+  const sourceError = await verifySourcesBeforeSave(
+    body,
+    supabase,
+    ragVerificationReader
+  );
   if (sourceError) return sourceError;
-  const sopError = await verifySopBeforeSave(body, supabase);
+  const sopError = await verifySopBeforeSave(body, ragVerificationReader);
   if (sopError) return sopError;
   // 서버가 방금 고정한 SOP 근거까지 포함해 최종 품질 계약을 다시 검사한다.
   const verifiedQualityError = qualityGateBeforeSave(body, true);
@@ -817,7 +859,14 @@ export async function PATCH(req: Request) {
         { status: 422 }
       );
     }
-    const sourceError = await verifySourcesBeforeSave(verifiedBody, supabase);
+    const ragVerificationReader =
+      verifiedBody.kind === "notebooklm" ? null : trustedRagVerificationReader();
+    if (ragVerificationReader instanceof Response) return ragVerificationReader;
+    const sourceError = await verifySourcesBeforeSave(
+      verifiedBody,
+      supabase,
+      ragVerificationReader
+    );
     if (sourceError) return sourceError;
     const visualAfter = sourceVisualSignature(verifiedBody.content);
     if (visualBefore !== visualAfter) {
@@ -831,7 +880,7 @@ export async function PATCH(req: Request) {
       );
     }
 
-    const sopError = await verifySopBeforeSave(verifiedBody, supabase);
+    const sopError = await verifySopBeforeSave(verifiedBody, ragVerificationReader);
     if (sopError) return sopError;
     const verifiedQualityError = qualityGateBeforeSave(verifiedBody, true);
     if (verifiedQualityError) return verifiedQualityError;

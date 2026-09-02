@@ -80,8 +80,12 @@ eval/           평가셋 러너(vitest 통합)
 - `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`·`SUPABASE_SERVICE_ROLE_KEY` 는 **서버 전용**.
   클라이언트 번들에 절대 노출 금지. (`NEXT_PUBLIC_` 접두사 붙이지 말 것)
 - service role 클라이언트(`lib/supabase/admin.ts`)는 **role='admin' 검증 후** 또는 인덱서에서만.
-  단, 내구성 자료제작 worker는 `requireApiUser()`를 통과한 API가 발급한 작업 ID·실행 토큰으로
-  `lib/supabase/generation-worker.ts`를 통해 `generation_jobs` 갱신과 생성 근거 조회만 수행한다.
+  자료제작 예외는 `lib/supabase/generation-worker.ts`와 `lib/supabase/generation-rag.ts`의
+  제한된 전용 창구로만 둔다. 내구성 worker는 `requireApiUser()`를 통과한 API가 발급한 작업
+  ID·실행 토큰으로 `generation_jobs` 갱신과 생성 근거 조회만 수행한다. 인증·레이트리밋을
+  통과한 저장/공유 API는 `generation-rag.ts`를 통해 생성과 같은 RAG의 출처·SOP만 읽기
+  전용으로 재검증한다. 사용자 저장행 조회·쓰기는 계속 세션 클라이언트와 RLS·개정 번호
+  CAS를 사용한다.
 - 모든 사용자 데이터 테이블은 **RLS** 적용. 본인 데이터만 접근.
 - **브라우저 스토리지(localStorage/sessionStorage) 의존 금지** — 상태는 서버/DB에.
 - 인증 가드는 `lib/auth.ts` 단일 출처:

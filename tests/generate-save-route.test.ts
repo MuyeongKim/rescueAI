@@ -1,17 +1,29 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({
-  createClient: vi.fn(),
-  requireApiUser: vi.fn(),
-  rateLimit: vi.fn(),
-  tooManyRequests: vi.fn(),
-  fetchExternalSopContext: vi.fn(),
-  verifyExternalRagSourceProvenance: vi.fn(),
-  ragTableEnabled: vi.fn(),
-}));
+const mocks = vi.hoisted(() => {
+  const fetchExternalSopContext = vi.fn();
+  const verifyExternalRagSourceProvenance = vi.fn();
+  return {
+    createClient: vi.fn(),
+    createGenerationRagReader: vi.fn(),
+    generationRagReader: {
+      fetchSopContext: fetchExternalSopContext,
+      verifySourceProvenance: verifyExternalRagSourceProvenance,
+    },
+    requireApiUser: vi.fn(),
+    rateLimit: vi.fn(),
+    tooManyRequests: vi.fn(),
+    fetchExternalSopContext,
+    verifyExternalRagSourceProvenance,
+    ragTableEnabled: vi.fn(),
+  };
+});
 
 vi.mock("@/lib/demo", () => ({ DEMO: false }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
+vi.mock("@/lib/supabase/generation-rag", () => ({
+  createGenerationRagReader: mocks.createGenerationRagReader,
+}));
 vi.mock("@/lib/auth", () => ({ requireApiUser: mocks.requireApiUser }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: mocks.rateLimit,
@@ -554,6 +566,7 @@ describe("POST /api/generate/save", () => {
     mocks.rateLimit.mockReturnValue({ ok: true, retryAfterSec: 0 });
     mocks.tooManyRequests.mockReturnValue(new Response("Too Many Requests", { status: 429 }));
     mocks.ragTableEnabled.mockReturnValue(true);
+    mocks.createGenerationRagReader.mockReturnValue(mocks.generationRagReader);
     mocks.verifyExternalRagSourceProvenance.mockImplementation(async (sources) => ({
       sources,
       degraded: false,
@@ -574,6 +587,7 @@ describe("POST /api/generate/save", () => {
 
     expect(response.status).toBe(401);
     expect(mocks.rateLimit).not.toHaveBeenCalled();
+    expect(mocks.createGenerationRagReader).not.toHaveBeenCalled();
   });
 
   it("레이트리밋 실패 시 JSON을 파싱하지 않고 429를 반환한다", async () => {
@@ -584,6 +598,7 @@ describe("POST /api/generate/save", () => {
 
     expect(response.status).toBe(429);
     expect(mocks.tooManyRequests).toHaveBeenCalledWith(10);
+    expect(mocks.createGenerationRagReader).not.toHaveBeenCalled();
   });
 
   it("120KB를 넘는 선언 길이는 인증 후 413으로 거절한다", async () => {
@@ -873,6 +888,7 @@ describe("POST /api/generate/save", () => {
     const response = await POST(requestWith(body));
 
     expect(response.status).toBe(422);
+    expect(mocks.createGenerationRagReader).not.toHaveBeenCalled();
     expect(mocks.fetchExternalSopContext).not.toHaveBeenCalled();
     await expect(response.json()).resolves.toMatchObject({
       code: "generation_quality_invalid",
@@ -924,8 +940,7 @@ describe("POST /api/generate/save", () => {
       expect(mocks.fetchExternalSopContext).toHaveBeenCalledWith(
         "산악",
         "산악사고 대비 훈련",
-        4,
-        client
+        4
       );
       expect(client.spies.insert.mock.calls[0][0].content.sopEvidence).toEqual({
         status: "found",
@@ -933,6 +948,40 @@ describe("POST /api/generate/save", () => {
       });
     }
   );
+
+  it("사용자 세션에서 공통 SOP가 누락돼도 생성 Workflow와 같은 서버 reader 결과로 저장한다", async () => {
+    const client = makeClient();
+    mocks.createClient.mockResolvedValue(client);
+    const commonSopLabel = "[재난현장 표준작전절차(SOP) — 들어가는 말 p.261]";
+    const serverEvidence = {
+      status: "found" as const,
+      sourceLabels: [VERIFIED_SOP_LABEL, commonSopLabel],
+    };
+    mocks.fetchExternalSopContext.mockResolvedValue(
+      sopLookupResult(serverEvidence)
+    );
+    const body = validFoundContractBody("slides");
+    body.content.sources.push({
+      document_id: 8,
+      doc: "재난현장 표준작전절차(SOP) — 들어가는 말",
+      page: 261,
+    });
+    body.content.sourceLabels = serverEvidence.sourceLabels;
+    body.content.sopEvidence = serverEvidence;
+
+    const response = await POST(requestWith(body));
+
+    expect(response.status).toBe(200);
+    expect(mocks.createGenerationRagReader).toHaveBeenCalledOnce();
+    expect(mocks.fetchExternalSopContext).toHaveBeenCalledWith(
+      "산악",
+      "산악사고 대비 훈련",
+      4
+    );
+    expect(client.spies.insert.mock.calls[0][0].content.sopEvidence).toEqual(
+      serverEvidence
+    );
+  });
 
   it("클라이언트 SOP 근거가 서버 재조회 결과와 다르면 409로 거절한다", async () => {
     const client = makeClient();
@@ -946,6 +995,43 @@ describe("POST /api/generate/save", () => {
     expect(payload.code).toBe("sop_evidence_conflict");
     expect(client.spies.insert).not.toHaveBeenCalled();
     expect(client.spies.update).not.toHaveBeenCalled();
+  });
+
+  it("상태가 같아도 실제 SOP 문서나 페이지가 다르면 409로 거절한다", async () => {
+    const client = makeClient();
+    mocks.createClient.mockResolvedValue(client);
+    mocks.fetchExternalSopContext.mockResolvedValue(
+      sopLookupResult({
+        status: "found",
+        sourceLabels: ["[다른 산악구조 지침 p.9]"],
+      })
+    );
+
+    const response = await POST(requestWith(validFoundContractBody("slides")));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "sop_evidence_conflict",
+    });
+    expect(client.spies.insert).not.toHaveBeenCalled();
+  });
+
+  it("서버 RAG 검증기를 준비하지 못하면 저장하지 않고 503을 반환한다", async () => {
+    const client = makeClient();
+    mocks.createClient.mockResolvedValue(client);
+    mocks.createGenerationRagReader.mockImplementation(() => {
+      throw new Error("missing service key");
+    });
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await POST(requestWith(validSlidesBody()));
+
+    expect(response.status).toBe(503);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "source_provenance_unavailable",
+    });
+    expect(client.spies.insert).not.toHaveBeenCalled();
+    consoleSpy.mockRestore();
   });
 
   it("넓은 주제의 선택 방향까지 포함해 생성 시점과 같은 SOP 검색어를 재구성한다", async () => {
@@ -963,8 +1049,7 @@ describe("POST /api/generate/save", () => {
     expect(mocks.fetchExternalSopContext).toHaveBeenCalledWith(
       "산악",
       "암벽 접근 및 환자 고정 / 상위 주제: 산악사고 대비 훈련",
-      4,
-      client
+      4
     );
   });
 
@@ -1058,6 +1143,7 @@ describe("POST /api/generate/save", () => {
     );
 
     expect(response.status).toBe(200);
+    expect(mocks.createGenerationRagReader).not.toHaveBeenCalled();
     expect(mocks.fetchExternalSopContext).not.toHaveBeenCalled();
     expect(client.spies.insert).toHaveBeenCalledOnce();
   });
@@ -1202,6 +1288,7 @@ describe("PATCH /api/generate/save", () => {
     mocks.rateLimit.mockReturnValue({ ok: true, retryAfterSec: 0 });
     mocks.tooManyRequests.mockReturnValue(new Response("Too Many Requests", { status: 429 }));
     mocks.ragTableEnabled.mockReturnValue(true);
+    mocks.createGenerationRagReader.mockReturnValue(mocks.generationRagReader);
     mocks.verifyExternalRagSourceProvenance.mockImplementation(async (sources) => ({
       sources,
       degraded: false,
@@ -1223,6 +1310,7 @@ describe("PATCH /api/generate/save", () => {
 
     expect(response.status).toBe(401);
     expect(mocks.rateLimit).not.toHaveBeenCalled();
+    expect(mocks.createGenerationRagReader).not.toHaveBeenCalled();
     expect(client.spies.storedSelect).not.toHaveBeenCalled();
   });
 
@@ -1235,6 +1323,7 @@ describe("PATCH /api/generate/save", () => {
     );
 
     expect(response.status).toBe(413);
+    expect(mocks.createGenerationRagReader).not.toHaveBeenCalled();
     expect(client.spies.storedSelect).not.toHaveBeenCalled();
   });
 
@@ -1321,8 +1410,7 @@ describe("PATCH /api/generate/save", () => {
     expect(mocks.fetchExternalSopContext).toHaveBeenCalledWith(
       "산악",
       "산악사고 대비 훈련",
-      4,
-      client
+      4
     );
     expect(client.spies.update).toHaveBeenCalledWith({
       shared: true,
@@ -1460,6 +1548,7 @@ describe("PATCH /api/generate/save", () => {
     const response = await PATCH(patchRequestWith({ id: 12, shared: true }));
 
     expect(response.status).toBe(200);
+    expect(mocks.createGenerationRagReader).not.toHaveBeenCalled();
     expect(mocks.fetchExternalSopContext).not.toHaveBeenCalled();
     expect(client.spies.update).toHaveBeenCalledOnce();
   });
