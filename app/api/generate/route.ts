@@ -1,12 +1,9 @@
 import { generateObject } from "ai";
-import { z } from "zod";
 import { getChatModel } from "@/lib/llm";
 import { requireApiUser } from "@/lib/auth";
 import {
-  AUDIENCES,
-  DURATIONS,
-  SLIDE_DECK_MODES,
   bindSlideVisualsToSources,
+  blockingGenerationQualityIssues,
   buildGenerationRepairPrompt,
   buildGeneratePrompt,
   buildGenerateSystemPrompt,
@@ -16,7 +13,6 @@ import {
   generationQualityMessages,
   inspectCurrentGenerationQuality,
   inspectGenerationQuality,
-  MAX_GENERATION_CONDITIONS_CHARS,
   resolveSlideDeckMode,
   stripDocumentInlineSourceRefs,
   type GenerateRequest,
@@ -25,6 +21,7 @@ import {
   type GenerationQualityIssue,
   type GenerationQualityReport,
 } from "@/lib/generate";
+import { generateRequestSchema } from "@/lib/generation-request";
 import { DEMO, demoGeneratedDoc, demoGeneratedSlides } from "@/lib/demo";
 import { fetchCategoryContext } from "@/lib/generate-context";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
@@ -37,20 +34,31 @@ import {
   SOP_NOT_FOUND_DISCLOSURE,
   type SopEvidence,
 } from "@/lib/sop-evidence";
+import { generationProDraftCallMaxMs } from "@/lib/generation-budget";
 
-export const maxDuration = 120;
+export const maxDuration = 300;
 
 const MAX_GENERATE_REQUEST_BYTES = 8 * 1024;
-// Vercel 함수 종료 직전까지 LLM 재시도를 끌지 않고 JSON 응답 시간을 남긴다.
-const GENERATION_REQUEST_BUDGET_MS = 114_000;
-const GENERATION_RESPONSE_RESERVE_MS = 5_000;
-const GENERATION_PRO_CALL_MAX_MS = 72_000;
-const GENERATION_FALLBACK_RESERVE_MS = 28_000;
-const GENERATION_FAST_CALL_MAX_MS = 40_000;
-const GENERATION_OTHER_CALL_MAX_MS = 90_000;
+// Hobby + Fluid Compute의 300초 상한보다 먼저 내부 마감을 걸어 JSON 직렬화와 응답 전송
+// 시간을 남긴다. 정밀 초안이 늦어져도 빠른 모델 재시도 시간을 침범하지 않는다.
+const GENERATION_REQUEST_BUDGET_MS = 285_000;
+const GENERATION_RESPONSE_RESERVE_MS = 15_000;
+const GENERATION_FAST_CALL_MAX_MS = 60_000;
+const GENERATION_FALLBACK_RESERVE_MS = GENERATION_FAST_CALL_MAX_MS;
+const GENERATION_PRO_REPAIR_CALL_MAX_MS = 90_000;
+const GENERATION_OTHER_CALL_MAX_MS = 180_000;
 const GENERATION_MIN_CALL_MS = 5_000;
-const GENERATION_REPAIR_MIN_REMAINING_MS = 32_000;
-const GENERATION_PRO_REPAIR_MIN_REMAINING_MS = 60_000;
+const GENERATION_REPAIR_MIN_REMAINING_MS =
+  GENERATION_FAST_CALL_MAX_MS + GENERATION_RESPONSE_RESERVE_MS;
+const GENERATION_PRO_REPAIR_MIN_REMAINING_MS =
+  GENERATION_PRO_REPAIR_CALL_MAX_MS +
+  GENERATION_FALLBACK_RESERVE_MS +
+  GENERATION_RESPONSE_RESERVE_MS;
+
+const FAST_REPAIR_ADOPTED_WARNING =
+  "정밀 모델 초안 — 빠른 모델로 자동 보완됨";
+const REPAIR_CANDIDATE_REJECTED_WARNING =
+  "자동 보완 결과가 개선되지 않아 기존 초안을 유지함";
 
 class GenerationTimeBudgetError extends Error {
   constructor() {
@@ -64,6 +72,7 @@ function remainingGenerationMs(deadlineMs: number): number {
 }
 
 function generationAbortSignal(
+  requestSignal: AbortSignal,
   deadlineMs: number,
   maxCallMs: number,
   additionalReserveMs = 0
@@ -71,7 +80,10 @@ function generationAbortSignal(
   const availableMs =
     remainingGenerationMs(deadlineMs) - GENERATION_RESPONSE_RESERVE_MS - additionalReserveMs;
   if (availableMs < GENERATION_MIN_CALL_MS) throw new GenerationTimeBudgetError();
-  return AbortSignal.timeout(Math.max(1, Math.min(maxCallMs, availableMs)));
+  return AbortSignal.any([
+    requestSignal,
+    AbortSignal.timeout(Math.max(1, Math.min(maxCallMs, availableMs))),
+  ]);
 }
 
 function isGenerationBudgetError(error: unknown): boolean {
@@ -86,37 +98,39 @@ function isGenerationBudgetError(error: unknown): boolean {
   );
 }
 
-const optionalText = (max: number) =>
-  z
-    .string()
-    .trim()
-    .max(max)
-    .transform((value) => value || undefined)
-    .optional();
+function generationQualityScore(
+  report: GenerationQualityReport
+): readonly [blockingIssues: number, totalIssues: number] {
+  return [blockingGenerationQualityIssues(report).length, report.issues.length];
+}
 
-const optionalDate = z
-  .string()
-  .trim()
-  .max(10)
-  .refine((value) => value === "" || /^\d{4}-\d{2}-\d{2}$/.test(value))
-  .transform((value) => value || undefined)
-  .optional();
+function isGenerationQualityImprovement(
+  current: GenerationQualityReport,
+  candidate: GenerationQualityReport
+): boolean {
+  const [currentBlocking, currentTotal] = generationQualityScore(current);
+  const [candidateBlocking, candidateTotal] = generationQualityScore(candidate);
+  return (
+    candidateBlocking < currentBlocking ||
+    (candidateBlocking === currentBlocking && candidateTotal < currentTotal)
+  );
+}
 
-const generateRequestSchema = z
-  .object({
-    type: z.enum(["plan", "lesson", "slides"]),
-    category: z.string().trim().min(1).max(50),
-    audience: z.enum(AUDIENCES),
-    duration: z.enum(DURATIONS),
-    topic: z.string().trim().min(2).max(100),
-    focus: optionalText(100),
-    date: optionalDate,
-    place: optionalText(100),
-    conditions: optionalText(MAX_GENERATION_CONDITIONS_CHARS),
-    slideMode: z.enum(SLIDE_DECK_MODES).optional(),
-    model: optionalText(100),
-  })
-  .strip();
+function warnRejectedRepairCandidate(
+  type: "plan" | "lesson" | "slides",
+  current: GenerationQualityReport,
+  candidate: GenerationQualityReport
+): void {
+  const [currentBlocking, currentTotal] = generationQualityScore(current);
+  const [candidateBlocking, candidateTotal] = generationQualityScore(candidate);
+  console.warn("[generate] 자동 보완 결과 미채택, 기존 초안 유지:", {
+    type,
+    currentBlocking,
+    currentTotal,
+    candidateBlocking,
+    candidateTotal,
+  });
+}
 
 type QualityMeta = {
   checked: true;
@@ -132,21 +146,25 @@ function qualityMeta(
   retrievalDegraded = false,
   modelFallbackUsed = false,
   sopEvidence?: SopEvidence,
-  generationBudgetLimited = false
+  generationBudgetLimited = false,
+  fastRepairAdopted = false,
+  repairCandidateRejected = false
 ): QualityMeta {
   const messages = generationQualityMessages(
     report,
     [
-      ...(retrievalDegraded ? ["자료 검색 일부 기능 제한 — 회수 근거 확인 필요"] : []),
-      ...(modelFallbackUsed ? ["정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"] : []),
-      ...(generationBudgetLimited
-        ? ["생성 시간 보호 — 자동 보완을 생략했으므로 표시된 항목만 확인 필요"]
-        : []),
       ...(sopEvidence?.status === "not_found"
         ? ["관련 SOP 근거 미확인 — 시행 전 최신 SOP 확인 필요"]
         : sopEvidence?.status === "degraded"
           ? ["SOP 자료 검색 상태 확인 불가 — 시행 전 다시 확인 필요"]
           : []),
+      ...(modelFallbackUsed ? ["정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"] : []),
+      ...(fastRepairAdopted ? [FAST_REPAIR_ADOPTED_WARNING] : []),
+      ...(repairCandidateRejected ? [REPAIR_CANDIDATE_REJECTED_WARNING] : []),
+      ...(generationBudgetLimited
+        ? ["생성 시간 보호 — 자동 보완을 생략했으므로 표시된 항목만 확인 필요"]
+        : []),
+      ...(retrievalDegraded ? ["자료 검색 일부 기능 제한 — 회수 근거 확인 필요"] : []),
     ]
   );
   return { checked: true, repaired, ...messages, issues: report.issues };
@@ -284,25 +302,35 @@ export async function POST(req: Request) {
     let activeModelKey = genReq.model;
     let modelFallbackUsed = false;
     let generationBudgetLimited = false;
+    let fastRepairAdopted = false;
+    let repairCandidateRejected = false;
+    let lastGenerationModelKey: string | undefined;
     const withGenerationModel = async <T,>(
       run: (model: ReturnType<typeof getChatModel>, abortSignal: AbortSignal) => Promise<T>,
       phase: "draft" | "repair"
     ): Promise<T> => {
       const switchToFlash = (reason: string, error?: unknown) => {
         activeModelKey = "gemini-flash";
-        modelFallbackUsed = true;
-        console.warn(
-          `[generate] ${reason}, 빠른 모델로 전환:`,
-          error instanceof Error ? error.message : "time budget"
-        );
+        modelFallbackUsed ||= phase === "draft";
+        if (error === undefined) {
+          console.info(`[generate] ${reason}, 빠른 모델로 전환`);
+        } else {
+          console.warn(
+            `[generate] ${reason}, 빠른 모델로 전환:`,
+            error instanceof Error ? error.message : "unknown error"
+          );
+        }
       };
 
+      // 전체 JSON을 다시 쓰는 Pro 보완은 자체 90초와 Flash 복구 60초를 모두 담을 때만
+      // 시도한다. 시간이 부족하면 정밀 초안은 보존한 채 빠른 모델로 보완한다.
       if (
         phase === "repair" &&
         activeModelKey === "gemini-pro" &&
-        remainingGenerationMs(generationDeadlineMs) < GENERATION_PRO_REPAIR_MIN_REMAINING_MS
+        remainingGenerationMs(generationDeadlineMs) <
+          GENERATION_PRO_REPAIR_MIN_REMAINING_MS
       ) {
-        switchToFlash("자동 보완 시간 예산 부족");
+        switchToFlash("자동 보완 정밀 모델 시간 예산 부족");
       }
 
       const canFallback = activeModelKey === "gemini-pro";
@@ -321,20 +349,29 @@ export async function POST(req: Request) {
           activeModelKey === "gemini-pro" ? GENERATION_FALLBACK_RESERVE_MS : 0;
         const maxCallMs =
           activeModelKey === "gemini-pro"
-            ? GENERATION_PRO_CALL_MAX_MS
+            ? phase === "repair"
+              ? GENERATION_PRO_REPAIR_CALL_MAX_MS
+              : generationProDraftCallMaxMs(type)
             : activeModelKey === "gemini-flash"
               ? GENERATION_FAST_CALL_MAX_MS
               : GENERATION_OTHER_CALL_MAX_MS;
+        lastGenerationModelKey = activeModelKey;
         return await run(
           getChatModel(activeModelKey),
-          generationAbortSignal(generationDeadlineMs, maxCallMs, reserveMs)
+          generationAbortSignal(req.signal, generationDeadlineMs, maxCallMs, reserveMs)
         );
       } catch (error) {
+        if (req.signal.aborted) throw error;
         if (activeModelKey !== "gemini-pro") throw error;
         switchToFlash("정밀 모델 호출 실패", error);
+        lastGenerationModelKey = activeModelKey;
         return run(
           getChatModel(activeModelKey),
-          generationAbortSignal(generationDeadlineMs, GENERATION_FAST_CALL_MAX_MS)
+          generationAbortSignal(
+            req.signal,
+            generationDeadlineMs,
+            GENERATION_FAST_CALL_MAX_MS
+          )
         );
       }
     };
@@ -366,6 +403,7 @@ export async function POST(req: Request) {
           return object;
         }, "repair");
       let object = await generateSlides(buildGeneratePrompt(genReq, sopEvidence));
+      const precisionDraftUsed = lastGenerationModelKey === "gemini-pro";
       let report = inspectGenerationQuality(
         "slides",
         object,
@@ -379,7 +417,7 @@ export async function POST(req: Request) {
         remainingGenerationMs(generationDeadlineMs) >= GENERATION_REPAIR_MIN_REMAINING_MS
       ) {
         try {
-          object = await repairSlides(
+          const candidate = await repairSlides(
             buildGenerationRepairPrompt({
               type: "slides",
               request: genReq,
@@ -388,14 +426,23 @@ export async function POST(req: Request) {
               sopEvidence,
             })
           );
-          report = inspectGenerationQuality(
+          const candidateReport = inspectGenerationQuality(
             "slides",
-            object,
+            candidate,
             duration,
             allowedSourceRefs,
             sopEvidence
           );
-          repaired = true;
+          if (isGenerationQualityImprovement(report, candidateReport)) {
+            object = candidate;
+            report = candidateReport;
+            repaired = true;
+            fastRepairAdopted ||=
+              precisionDraftUsed && lastGenerationModelKey === "gemini-flash";
+          } else {
+            repairCandidateRejected = true;
+            warnRejectedRepairCandidate("slides", report, candidateReport);
+          }
         } catch (repairError) {
           generationBudgetLimited ||= isGenerationBudgetError(repairError);
           console.error("[generate] 슬라이드 자동 보완 실패, 1차 초안 반환:", repairError);
@@ -425,7 +472,9 @@ export async function POST(req: Request) {
           retrievalDegraded,
           modelFallbackUsed,
           sopEvidence,
-          generationBudgetLimited
+          generationBudgetLimited,
+          fastRepairAdopted,
+          repairCandidateRejected
         ),
       } satisfies GeneratedSlideDeck & { quality: QualityMeta });
     }
@@ -458,6 +507,7 @@ export async function POST(req: Request) {
       await generateDoc(buildGeneratePrompt(genReq, sopEvidence)),
       allowedSourceRefs
     );
+    const precisionDraftUsed = lastGenerationModelKey === "gemini-pro";
     let report = inspectGenerationQuality(
       type,
       object,
@@ -471,7 +521,7 @@ export async function POST(req: Request) {
       remainingGenerationMs(generationDeadlineMs) >= GENERATION_REPAIR_MIN_REMAINING_MS
     ) {
       try {
-        object = stripDocumentInlineSourceRefs(
+        const candidate = stripDocumentInlineSourceRefs(
           await repairDoc(
             buildGenerationRepairPrompt({
               type,
@@ -483,14 +533,23 @@ export async function POST(req: Request) {
           ),
           allowedSourceRefs
         );
-        report = inspectGenerationQuality(
+        const candidateReport = inspectGenerationQuality(
           type,
-          object,
+          candidate,
           duration,
           allowedSourceRefs,
           sopEvidence
         );
-        repaired = true;
+        if (isGenerationQualityImprovement(report, candidateReport)) {
+          object = candidate;
+          report = candidateReport;
+          repaired = true;
+          fastRepairAdopted ||=
+            precisionDraftUsed && lastGenerationModelKey === "gemini-flash";
+        } else {
+          repairCandidateRejected = true;
+          warnRejectedRepairCandidate(type, report, candidateReport);
+        }
       } catch (repairError) {
         generationBudgetLimited ||= isGenerationBudgetError(repairError);
         console.error("[generate] 문서 자동 보완 실패, 1차 초안 반환:", repairError);
@@ -516,7 +575,9 @@ export async function POST(req: Request) {
         retrievalDegraded,
         modelFallbackUsed,
         sopEvidence,
-        generationBudgetLimited
+        generationBudgetLimited,
+        fastRepairAdopted,
+        repairCandidateRejected
       ),
     } satisfies GeneratedDoc & { quality: QualityMeta });
   } catch (e) {

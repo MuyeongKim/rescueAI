@@ -125,7 +125,8 @@ export async function middleware(request: NextRequest) {
 
 export const config = {
   matcher: [
-    // 정적 파일/이미지/콜백을 제외한 모든 경로
-    "/((?!_next/static|_next/image|favicon.ico|auth/callback|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
+    // 정적 파일/이미지/콜백과 Workflow 내부 실행 경로를 제외한 모든 경로.
+    // 내부 step POST를 인증 미들웨어가 가로채면 영속 작업의 재개·재시도가 끊긴다.
+    "/((?!_next/static|_next/image|favicon.ico|auth/callback|\\.well-known/workflow/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico)$).*)",
   ],
 };

@@ -7,12 +7,23 @@ import { ragTableEnabled, listExternalRagCategories } from "@/lib/rag-external";
 import { COURSE_CATEGORIES } from "@/lib/courses";
 import { availableModels } from "@/lib/llm";
 import type { SavedMaterial } from "@/lib/generate";
+import type { PublicGenerationJob } from "@/lib/generation-job";
+import {
+  GENERATION_JOB_PUBLIC_COLUMNS,
+  toPublicGenerationJob,
+} from "@/lib/generation-job-store";
 import { listMyMaterials } from "@/lib/generated-materials";
 import { GenerateForm } from "@/components/generate/GenerateForm";
 import { SavedList } from "@/components/generate/SavedList";
 import { OperationalHeader } from "@/components/layout/OperationalHeader";
 
 export const dynamic = "force-dynamic";
+
+function validGenerationJobId(value?: string): string | undefined {
+  return value && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(value)
+    ? value
+    : undefined;
+}
 
 // 저장본 재편집(?m=<id>) — RLS에 더해 인증 user_id를 명시해 본인 행만 조회한다.
 async function loadMaterial(id?: string): Promise<SavedMaterial | undefined> {
@@ -32,6 +43,34 @@ async function loadMaterial(id?: string): Promise<SavedMaterial | undefined> {
     .eq("user_id", user.id)
     .maybeSingle();
   return (data as unknown as SavedMaterial) ?? undefined;
+}
+
+// 영속 생성 작업 다시 열기(?j=<uuid>) — RLS만 믿고 넓게 조회하지 않고 인증 소유자도 명시한다.
+async function loadGenerationJob(id?: string): Promise<PublicGenerationJob | undefined> {
+  const jobId = validGenerationJobId(id);
+  if (DEMO || !jobId) {
+    return undefined;
+  }
+  const supabase = await createClient();
+  const {
+    data: { user },
+  } = await supabase.auth.getUser();
+  if (!user) return undefined;
+
+  const { data } = await supabase
+    .from("generation_jobs")
+    .select(GENERATION_JOB_PUBLIC_COLUMNS)
+    .eq("id", jobId)
+    .eq("user_id", user.id)
+    .maybeSingle();
+  if (!data) return undefined;
+
+  try {
+    return toPublicGenerationJob(data);
+  } catch {
+    // 손상되었거나 이전 계약의 행은 생성 화면 전체를 깨뜨리지 않는다.
+    return undefined;
+  }
 }
 
 // 인덱싱된 자료가 있는 분야와 분야별 자료 제목을 모은다.
@@ -68,14 +107,20 @@ async function loadDocsByCategory(): Promise<Record<string, string[]>> {
 export default async function GeneratePage({
   searchParams,
 }: {
-  searchParams: { m?: string };
+  searchParams: { m?: string; j?: string };
 }) {
   const docsByCategory = await loadDocsByCategory();
   const categories = Object.keys(docsByCategory);
   const models = availableModels();
-  const initialMaterial = await loadMaterial(searchParams?.m);
+  const requestedJobId = DEMO ? undefined : validGenerationJobId(searchParams?.j);
+  const [initialMaterial, initialJob] = await Promise.all([
+    loadMaterial(searchParams?.m),
+    loadGenerationJob(searchParams?.j),
+  ]);
+  // 두 쿼리가 함께 들어오면 영속 작업 주소를 우선해 서로 다른 결과가 한 화면에 섞이지 않게 한다.
+  const editableMaterial = requestedJobId ? undefined : initialMaterial;
   // 재편집 중이 아닐 때만 최근 저장 자료 섹션을 보여준다.
-  const recentSaved = initialMaterial ? [] : await listMyMaterials(5);
+  const recentSaved = editableMaterial || initialJob || requestedJobId ? [] : await listMyMaterials(5);
 
   return (
     <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
@@ -97,16 +142,25 @@ export default async function GeneratePage({
         </Link>
       </div>
 
-      {categories.length === 0 && !initialMaterial ? (
+      {categories.length === 0 && !editableMaterial && !initialJob && !requestedJobId ? (
         <p className="border border-l-4 border-l-primary bg-card py-12 text-center text-sm text-muted-foreground">
           아직 인덱싱된 자료가 없습니다. 자료를 올리면 분야가 자동으로 나타납니다.
         </p>
       ) : (
         <GenerateForm
-          key={initialMaterial ? `material-${initialMaterial.id}` : "new"}
+          key={
+            initialJob || requestedJobId
+              ? `job-${initialJob?.id ?? requestedJobId}`
+              : editableMaterial
+                ? `material-${editableMaterial.id}`
+                : "new"
+          }
           docsByCategory={docsByCategory}
           models={models}
-          initialMaterial={initialMaterial}
+          initialMaterial={editableMaterial}
+          initialJob={initialJob}
+          pendingJobId={initialJob ? undefined : requestedJobId}
+          durableGenerationEnabled={!DEMO}
         />
       )}
 

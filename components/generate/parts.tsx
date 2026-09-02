@@ -1,6 +1,7 @@
 "use client";
 
 // AI 자료제작 화면의 공용 조각들 — 입력 폼(GenerateForm)과 결과 카드들이 함께 쓴다.
+import { useEffect, useState } from "react";
 import {
   Check,
   CircleCheck,
@@ -14,9 +15,21 @@ import {
 import {
   BLOCKING_GENERATION_QUALITY_CODES,
   REGEN_INSTRUCTIONS,
+  type Duration,
   type GeneratedDocSource,
   type GenerationQualityIssue,
 } from "@/lib/generate";
+import {
+  estimatedGenerationStage,
+  formatApproximateDuration,
+  formatElapsedSeconds,
+  generationEstimateSeconds,
+  type TimedGenerationType,
+} from "@/lib/generation-timing";
+import {
+  isGenerationJobDispatchConfirmed,
+  type PublicGenerationJob,
+} from "@/lib/generation-job";
 import { cn } from "@/lib/utils";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -112,6 +125,7 @@ export type EvidenceRepairState = {
   status: EvidenceRepairStatus;
   issueIndices: number[];
   message?: string;
+  startedAt?: number;
 };
 
 export type EvidenceRepairControls = EvidenceRepairState & {
@@ -126,6 +140,7 @@ export type QualityRepairState = {
   status: QualityRepairStatus;
   issueIndices: number[];
   message?: string;
+  startedAt?: number;
 };
 
 export type QualityRepairControls = QualityRepairState & {
@@ -243,9 +258,11 @@ export function QualityBanner({
   return (
     <div
       id="generation-quality-summary"
-      role={blocked ? "alert" : "status"}
-      aria-live={blocked ? "assertive" : "polite"}
-      aria-atomic="true"
+      // 보완 중에는 아래 타이머가 매초 바뀐다. 상위 전체를 live region으로 두면
+      // 화면낭독기가 배너 전체를 반복 낭독하므로, 단계 안내만 별도 status로 알린다.
+      role={repairBusy ? undefined : blocked ? "alert" : "status"}
+      aria-live={repairBusy ? undefined : blocked ? "assertive" : "polite"}
+      aria-atomic={repairBusy ? undefined : "true"}
       className={cn(
         "flex gap-2.5 border-l-4 px-3 py-3 text-sm",
         blocked
@@ -268,6 +285,24 @@ export function QualityBanner({
       <div className="min-w-0 flex-1">
         <p className="font-semibold">{summaryTitle}</p>
         <p className="mt-0.5 text-sm leading-relaxed opacity-80">{summaryDescription}</p>
+        {qualityBusy && (
+          <GenerationWaitStatus
+            key={`quality-${qualityRepair?.startedAt ?? "current"}`}
+            estimatedSeconds={180}
+            startedAt={qualityRepair?.startedAt}
+            fixedStage="SOP 표현과 근거를 보완하는 중"
+            completionLabel="보완 예상 완료"
+          />
+        )}
+        {evidenceBusy && (
+          <GenerationWaitStatus
+            key={`evidence-${evidenceRepair?.startedAt ?? "current"}`}
+            estimatedSeconds={60}
+            startedAt={evidenceRepair?.startedAt}
+            fixedStage="슬라이드별 출처를 대조하는 중"
+            completionLabel="근거 확인 예상 완료"
+          />
+        )}
         {deckQualityIssues.length > 0 && (
           <section className="mt-3 space-y-2" aria-labelledby="deck-quality-issues-title">
             <h3 id="deck-quality-issues-title" className="font-semibold">
@@ -577,32 +612,252 @@ export function RegenControls({ index, regen }: { index: number; regen: RegenSta
   );
 }
 
-/** 생성 중 스켈레톤 — 수십 초 대기를 채우는 미리보기 골격 */
-export function ResultSkeleton({ accent, label }: { accent: string; label: string }) {
+function expectedCompletionClock(timestampMs: number): string {
+  return new Intl.DateTimeFormat("ko-KR", {
+    hour: "numeric",
+    minute: "2-digit",
+  }).format(new Date(timestampMs));
+}
+
+export function GenerationWaitStatus({
+  estimatedSeconds,
+  startedAt,
+  endedAt,
+  fixedStage,
+  progress,
+  persistent = false,
+  dispatchPending = false,
+  connectionRetry,
+  completionLabel = "예상 완료",
+}: {
+  estimatedSeconds: number;
+  startedAt?: number;
+  endedAt?: number;
+  fixedStage?: string;
+  progress?: number;
+  persistent?: boolean;
+  dispatchPending?: boolean;
+  connectionRetry?: { attempt: number; retryAt: number } | null;
+  completionLabel?: string;
+}) {
+  const [fallbackBaseline] = useState(() => Date.now());
+  const baseline = startedAt ?? fallbackBaseline;
+  const [nowMs, setNowMs] = useState(baseline);
+
+  useEffect(() => {
+    setNowMs(endedAt ?? Date.now());
+    if (endedAt) return;
+    const timer = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(timer);
+  }, [endedAt]);
+
+  const effectiveNow = endedAt ?? nowMs;
+  const elapsedSeconds = Math.max(0, Math.floor((effectiveNow - baseline) / 1_000));
+  const remainingSeconds = Math.max(0, estimatedSeconds - elapsedSeconds);
+  const overdue = elapsedSeconds >= estimatedSeconds;
+  const stage = fixedStage ?? estimatedGenerationStage(elapsedSeconds, estimatedSeconds);
+  const expectedClock = expectedCompletionClock(baseline + estimatedSeconds * 1_000);
+  const safeProgress =
+    typeof progress === "number" ? Math.max(0, Math.min(100, Math.floor(progress))) : null;
+  const retrySeconds = connectionRetry
+    ? Math.max(0, Math.ceil((connectionRetry.retryAt - nowMs) / 1_000))
+    : null;
+
+  return (
+    <div className="mt-3 rounded-lg border border-current/15 bg-background/70 p-3 text-foreground">
+      <div className="flex flex-col gap-1 text-xs sm:flex-row sm:items-center sm:justify-between">
+        <span>
+          경과 시간{" "}
+          <time className="font-mono font-semibold tabular-nums" dateTime={`PT${elapsedSeconds}S`}>
+            {formatElapsedSeconds(elapsedSeconds)}
+          </time>
+        </span>
+        {!overdue && !endedAt && (
+          <span className="font-medium">
+            {completionLabel}{" "}
+            <time dateTime={new Date(baseline + estimatedSeconds * 1_000).toISOString()}>
+              {expectedClock}경
+            </time>
+          </span>
+        )}
+      </div>
+      <p className="mt-2 text-sm font-semibold" aria-hidden="true">
+        {fixedStage ? "현재 단계" : "예상 단계"} · {stage}
+      </p>
+      <p className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+        {fixedStage ? "현재 진행 단계" : "예상 진행 단계"}: {stage}
+      </p>
+      {safeProgress !== null && (
+        <div className="mt-2 space-y-1">
+          <div className="flex items-center justify-between text-xs text-muted-foreground">
+            <span>서버 진행률</span>
+            <span className="font-mono font-semibold tabular-nums">{safeProgress}%</span>
+          </div>
+          <div
+            className="h-2 overflow-hidden rounded-full bg-muted"
+            role="progressbar"
+            aria-label="자료 생성 진행률"
+            aria-valuemin={0}
+            aria-valuemax={100}
+            aria-valuenow={safeProgress}
+          >
+            <div
+              className="h-full rounded-full bg-primary transition-[width] duration-500 motion-reduce:transition-none"
+              style={{ width: `${safeProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
+      <p className="mt-1 text-xs leading-relaxed text-muted-foreground">
+        {endedAt
+          ? `마지막 상태까지 ${formatApproximateDuration(elapsedSeconds)} 동안 처리했습니다.`
+          : overdue
+          ? "예상 시간을 넘겼지만 품질 점검과 보완은 계속됩니다. 완료될 때까지 현재 상태를 보존합니다."
+          : `약 ${formatApproximateDuration(remainingSeconds)} 남음 · 통상 예상 ${formatApproximateDuration(estimatedSeconds)} 내외`}
+      </p>
+      {persistent && (
+        <p className="mt-1 text-xs font-medium text-emerald-700 dark:text-emerald-300">
+          서버 접수가 완료되어 화면을 닫아도 계속 진행됩니다. 이 주소를 다시 열면 현재 단계부터 확인할 수 있습니다.
+        </p>
+      )}
+      {dispatchPending && (
+        <p className="mt-1 text-xs font-medium text-amber-700 dark:text-amber-300">
+          작업 번호를 보존했고 서버 접수·실행 연결을 확인하고 있습니다. 연결 완료 안내가 보일 때까지 이 화면을 유지해 주세요.
+        </p>
+      )}
+      {connectionRetry && (
+        <>
+          <p
+            className="mt-2 text-xs text-amber-700 dark:text-amber-300"
+            aria-hidden="true"
+          >
+            서버 상태 연결을 다시 시도합니다 · {retrySeconds ?? 0}초 후 · {connectionRetry.attempt}번째
+          </p>
+          <p className="sr-only" role="status" aria-live="polite">
+            서버 상태 연결이 잠시 지연되어 자동으로 다시 시도합니다.
+          </p>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** 생성 중 스켈레톤 — 정밀 모델 대기 중 경과시간과 보수적 완료 예상을 함께 보여준다. */
+export function ResultSkeleton({
+  accent,
+  label,
+  type,
+  duration,
+  job,
+  connectionRetry,
+  verifyingDelivery = false,
+  retrying = false,
+  onRetry,
+}: {
+  accent: string;
+  label: string;
+  type: TimedGenerationType;
+  duration: Duration;
+  job?: PublicGenerationJob | null;
+  connectionRetry?: { attempt: number; retryAt: number } | null;
+  verifyingDelivery?: boolean;
+  retrying?: boolean;
+  onRetry?: () => void;
+}) {
+  const estimatedSeconds = job?.estimatedSeconds ?? generationEstimateSeconds(type, duration);
+  const terminalProblem =
+    !verifyingDelivery &&
+    (job?.status === "failed" ||
+      job?.status === "needs_attention" ||
+      (job?.status === "completed" && !job.qualityPassed));
+  const startedAt = job ? Date.parse(job.startedAt ?? job.createdAt) : undefined;
+  const endedAt = terminalProblem && job ? Date.parse(job.completedAt ?? job.updatedAt) : undefined;
+  const statusTitle =
+    job?.status === "needs_attention"
+      ? "추가 품질 점검이 필요합니다"
+      : job?.status === "completed"
+        ? "품질 통과를 확인하지 못했습니다"
+        : "자료 생성을 완료하지 못했습니다";
   return (
     <Card className="animate-in fade-in overflow-hidden border-border/60 shadow-sm duration-300">
       <AccentBar accent={accent} />
-      <CardHeader className="pb-3">
-        <Skeleton className="h-5 w-2/3" />
-        <Skeleton className="mt-1 h-4 w-40" />
-      </CardHeader>
-      <CardContent className="space-y-5">
-        {[0, 1, 2].map((i) => (
-          <div key={i} className="space-y-2">
-            <Skeleton className="h-4 w-1/3" />
-            <Skeleton className="h-3 w-full" />
-            <Skeleton className="h-3 w-11/12" />
-            <Skeleton className="h-3 w-4/5" />
+      {terminalProblem ? (
+        <CardHeader className="space-y-2 pb-3">
+          <div className="flex items-start gap-2 text-amber-800 dark:text-amber-200">
+            <TriangleAlert className="mt-0.5 h-5 w-5 shrink-0" aria-hidden="true" />
+            <div>
+              <h2 className="font-semibold">{statusTitle}</h2>
+              <p className="mt-1 text-sm text-muted-foreground">
+                {job?.errorMessage ??
+                  "완료 기준을 통과하지 못했습니다. 저장된 작업 단계에서 다시 시도할 수 있습니다."}
+              </p>
+            </div>
           </div>
-        ))}
-        <p className="text-center text-xs text-muted-foreground">
-          {label}을(를) 만들고 있어요. 잠시만 기다려 주세요.
-        </p>
-        <div className="grid grid-cols-3 gap-2 border-t pt-4 text-center text-[11px] text-muted-foreground">
-          <span>1. 관련 교범 선별</span>
-          <span>2. 현장형 초안 작성</span>
-          <span>3. 누락·중복 점검</span>
-        </div>
+        </CardHeader>
+      ) : (
+        <CardHeader className="pb-3">
+          <Skeleton className="h-5 w-2/3" />
+          <Skeleton className="mt-1 h-4 w-40" />
+        </CardHeader>
+      )}
+      <CardContent className="space-y-5">
+        {!terminalProblem && (
+          <>
+            {[0, 1, 2].map((i) => (
+              <div key={i} className="space-y-2">
+                <Skeleton className="h-4 w-1/3" />
+                <Skeleton className="h-3 w-full" />
+                <Skeleton className="h-3 w-11/12" />
+                <Skeleton className="h-3 w-4/5" />
+              </div>
+            ))}
+            <p className="text-center text-xs text-muted-foreground">
+              {label}을(를) 만들고 있어요. 품질 기준을 통과할 때까지 단계별로 저장합니다.
+            </p>
+          </>
+        )}
+        <GenerationWaitStatus
+          estimatedSeconds={estimatedSeconds}
+          startedAt={Number.isFinite(startedAt) ? startedAt : undefined}
+          endedAt={Number.isFinite(endedAt) ? endedAt : undefined}
+          fixedStage={verifyingDelivery ? "서버 접수 상태를 확인하는 중" : job?.stage}
+          progress={verifyingDelivery ? undefined : job?.progress}
+          persistent={Boolean(
+            job &&
+              !terminalProblem &&
+              !verifyingDelivery &&
+              isGenerationJobDispatchConfirmed(job)
+          )}
+          dispatchPending={Boolean(
+            verifyingDelivery ||
+              (job && !terminalProblem && !isGenerationJobDispatchConfirmed(job))
+          )}
+          connectionRetry={connectionRetry}
+          completionLabel={job ? "서버 예상 완료" : "1차 결과 예상 완료"}
+        />
+        {terminalProblem ? (
+          <div className="space-y-2 border-t pt-4">
+            <p className="text-xs leading-relaxed text-muted-foreground">
+              완료 전 단계와 점검 기록은 서버에 남아 있습니다. 재시도해도 이미 저장된 작업은 잃지 않습니다.
+            </p>
+            {onRetry && (
+              <Button type="button" className="min-h-11 w-full gap-2" disabled={retrying} onClick={onRetry}>
+                {retrying ? (
+                  <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                ) : (
+                  <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                )}
+                {retrying ? "저장 지점 확인 중…" : "저장된 작업 다시 시도"}
+              </Button>
+            )}
+          </div>
+        ) : (
+          <div className="grid grid-cols-3 gap-2 border-t pt-4 text-center text-[11px] text-muted-foreground">
+            <span>1. 관련 교범 선별</span>
+            <span>2. 현장형 초안 작성</span>
+            <span>3. 누락·중복 점검</span>
+          </div>
+        )}
       </CardContent>
     </Card>
   );

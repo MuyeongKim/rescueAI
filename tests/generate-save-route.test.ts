@@ -23,7 +23,7 @@ vi.mock("@/lib/rag-external", () => ({
   ragTableEnabled: mocks.ragTableEnabled,
 }));
 
-import { PATCH, POST } from "@/app/api/generate/save/route";
+import { DELETE, PATCH, POST } from "@/app/api/generate/save/route";
 import { verifyNativeDocumentSourceProvenance } from "@/lib/source-provenance";
 import {
   SOP_APPLICATION_MARKER,
@@ -106,6 +106,51 @@ function patchRequestWith(body: unknown, headers?: Record<string, string>): Requ
     headers: { "Content-Type": "application/json", ...headers },
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
+}
+
+function deleteRequest(id = 12, revision = 3): Request {
+  return new Request(
+    `http://localhost/api/generate/save?id=${id}&revision=${revision}`,
+    { method: "DELETE" }
+  );
+}
+
+function makeDeleteClient({
+  currentRevision = 3,
+  currentExists = true,
+  deletedRows = [{ id: 12 }],
+}: {
+  currentRevision?: number;
+  currentExists?: boolean;
+  deletedRows?: Array<{ id: number }>;
+} = {}) {
+  const currentMaybeSingle = vi.fn().mockResolvedValue({
+    data: currentExists ? { id: 12, revision: currentRevision } : null,
+    error: null,
+  });
+  const currentOwnerEq = vi.fn(() => ({ maybeSingle: currentMaybeSingle }));
+  const currentIdEq = vi.fn(() => ({ eq: currentOwnerEq }));
+  const select = vi.fn(() => ({ eq: currentIdEq }));
+
+  const deleteSelect = vi.fn().mockResolvedValue({ data: deletedRows, error: null });
+  const deleteRevisionEq = vi.fn(() => ({ select: deleteSelect }));
+  const deleteOwnerEq = vi.fn(() => ({ eq: deleteRevisionEq }));
+  const deleteIdEq = vi.fn(() => ({ eq: deleteOwnerEq }));
+  const remove = vi.fn(() => ({ eq: deleteIdEq }));
+
+  return {
+    from: vi.fn(() => ({ select, delete: remove })),
+    spies: {
+      currentIdEq,
+      currentOwnerEq,
+      currentMaybeSingle,
+      remove,
+      deleteIdEq,
+      deleteOwnerEq,
+      deleteRevisionEq,
+      deleteSelect,
+    },
+  };
 }
 
 function makePatchClient(stored: Record<string, unknown> | null) {
@@ -1082,6 +1127,68 @@ describe("POST /api/generate/save", () => {
     await expect(response.json()).resolves.toMatchObject({
       code: "material_revision_conflict",
     });
+  });
+});
+
+describe("DELETE /api/generate/save", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.requireApiUser.mockResolvedValue({
+      ok: true,
+      user: { id: "user-1", email: "user1@example.com" },
+    });
+    mocks.rateLimit.mockReturnValue({ ok: true, retryAfterSec: 0 });
+    mocks.tooManyRequests.mockReturnValue(new Response("Too Many Requests", { status: 429 }));
+  });
+
+  it("개정 번호가 없는 오래된 삭제 요청을 인증·DB 조회 전에 거절한다", async () => {
+    const response = await DELETE(
+      new Request("http://localhost/api/generate/save?id=12", { method: "DELETE" })
+    );
+
+    expect(response.status).toBe(400);
+    expect(mocks.createClient).not.toHaveBeenCalled();
+  });
+
+  it("다른 화면이 먼저 수정한 저장본은 삭제하지 않고 409를 반환한다", async () => {
+    const client = makeDeleteClient({ currentRevision: 4 });
+    mocks.createClient.mockResolvedValue(client);
+
+    const response = await DELETE(deleteRequest(12, 3));
+    const payload = await response.json();
+
+    expect(response.status).toBe(409);
+    expect(payload).toMatchObject({
+      code: "material_revision_conflict",
+      currentRevision: 4,
+    });
+    expect(client.spies.remove).not.toHaveBeenCalled();
+  });
+
+  it("개정 확인 직후 저장 경쟁에서 CAS가 0행이면 최신본을 보존한다", async () => {
+    const client = makeDeleteClient({ currentRevision: 3, deletedRows: [] });
+    mocks.createClient.mockResolvedValue(client);
+
+    const response = await DELETE(deleteRequest(12, 3));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({
+      code: "material_revision_conflict",
+    });
+    expect(client.spies.deleteIdEq).toHaveBeenCalledWith("id", 12);
+    expect(client.spies.deleteOwnerEq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(client.spies.deleteRevisionEq).toHaveBeenCalledWith("revision", 3);
+  });
+
+  it("소유자와 최신 개정 번호가 모두 맞을 때만 삭제한다", async () => {
+    const client = makeDeleteClient();
+    mocks.createClient.mockResolvedValue(client);
+
+    const response = await DELETE(deleteRequest());
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toEqual({ ok: true });
+    expect(client.spies.deleteSelect).toHaveBeenCalledWith("id");
   });
 });
 

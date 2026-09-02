@@ -5,6 +5,7 @@ import type { Database } from "@/lib/database.types";
 
 // 서비스 롤(관리자) 클라이언트 — RLS를 우회한다. **서버에서만** 사용할 것.
 // 용도: 관리자 통계 집계처럼 전체 데이터 접근이 필요하고, 호출 전 role='admin' 검증이 끝난 경우.
+// 예외: generation-worker.ts가 인증된 사용자 요청을 서버 작업에 위임할 때만 제한적으로 감싼다.
 export function createAdminClient() {
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
   if (!serviceKey) {

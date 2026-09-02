@@ -16,6 +16,7 @@ import {
   generatedDocSchemaFor,
   generatedLessonSchema,
   generatedPlanSchema,
+  generatedSlideSchema,
   generatedSlidesSchema,
   extractSourceLabels,
   generationQualityMessages,
@@ -310,6 +311,15 @@ describe("유형별 생성 스키마", () => {
     const invented = structuredClone(valid.slides[0]);
     invented.sourceRefs = ["[만들어낸 교범 p.99]"];
     expect(strictSlideSchema.safeParse(invented).success).toBe(false);
+
+    const oversizedNotes = structuredClone(valid.slides[0]);
+    oversizedNotes.notes = "가".repeat(5_001);
+    expect(generatedSlideSchema.safeParse(oversizedNotes).success).toBe(true);
+    expect(strictSlideSchema.safeParse(oversizedNotes).success).toBe(false);
+
+    const oversizedBullet = structuredClone(valid.slides[0]);
+    oversizedBullet.bullets = ["가".repeat(501), "정상 범위의 두 번째 핵심 문장입니다."];
+    expect(strictSlideSchema.safeParse(oversizedBullet).success).toBe(false);
     expect(() => strictGeneratedSlidesSchemaFor([])).toThrow("검증된 출처 라벨이 없습니다");
     expect(() => strictGeneratedSlideSchemaFor([`[${"가".repeat(300)}]`])).toThrow(
       "검증된 출처 라벨이 없습니다"
@@ -842,7 +852,11 @@ describe("결정론적 생성 품질 검사", () => {
       expect.arrayContaining([
         expect.objectContaining({
           code: "mixed_chemical_protection_levels",
-          path: "slides",
+          path: "slides.1",
+        }),
+        expect.objectContaining({
+          code: "mixed_chemical_protection_levels",
+          path: "slides.2",
         }),
       ])
     );
@@ -874,7 +888,8 @@ describe("결정론적 생성 품질 검사", () => {
 
     expect(inspectGeneratedSlides(conflicting, "1시간").issues).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ code: "conflicting_pressure_values", path: "slides" }),
+        expect.objectContaining({ code: "conflicting_pressure_values", path: "slides.1" }),
+        expect.objectContaining({ code: "conflicting_pressure_values", path: "slides.2" }),
       ])
     );
 

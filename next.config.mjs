@@ -1,3 +1,5 @@
+import { withWorkflow } from "workflow/next";
+
 // 보안 응답 헤더.
 // CSP: Next 는 인라인 스크립트/스타일을 쓰므로 'unsafe-inline' 이 필요하다(개발 모드는 eval 도).
 //      script-src 를 self 로 묶는 것만으로도 외부 스크립트 주입 경로는 크게 줄어든다.
@@ -68,4 +70,12 @@ const nextConfig = {
   },
 };
 
-export default nextConfig;
+const workflowConfig = withWorkflow(nextConfig);
+
+// Workflow adapter는 Next 16용 `turbopack` 키도 함께 주입한다. 이 프로젝트는 Next 14의
+// webpack 빌드를 사용하므로 adapter가 loader/build를 구성한 뒤 미지원 키만 제거한다.
+export default async function configuredNext(phase, context) {
+  const config = await workflowConfig(phase, context);
+  delete config.turbopack;
+  return config;
+}

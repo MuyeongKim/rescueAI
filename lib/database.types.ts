@@ -248,6 +248,70 @@ type GeneratedMaterialsInsert = {
   created_at?: string;
 };
 
+export type GenerationJobStatus =
+  | "queued"
+  | "retrieving"
+  | "drafting"
+  | "reviewing"
+  | "repairing"
+  | "completed"
+  | "needs_attention"
+  | "failed";
+
+type GenerationJobsRow = {
+  id: string;
+  user_id: string;
+  status: GenerationJobStatus;
+  stage: string;
+  request: Json;
+  result: Json | null;
+  checkpoint: Json;
+  progress: number;
+  attempt: number;
+  revision: number;
+  estimated_seconds: number;
+  quality_passed: boolean;
+  workflow_run_id: string | null;
+  run_token: string | null;
+  client_request_id: string;
+  created_at: string;
+  updated_at: string;
+  last_progress_at: string;
+  workflow_checked_at: string | null;
+  workflow_missing_count: number;
+  workflow_missing_since: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+};
+
+type GenerationJobsInsert = {
+  id?: string;
+  user_id: string;
+  status?: GenerationJobStatus;
+  stage?: string;
+  request: Json;
+  result?: Json | null;
+  checkpoint?: Json;
+  progress?: number;
+  attempt?: number;
+  revision?: number;
+  estimated_seconds?: number;
+  quality_passed?: boolean;
+  workflow_run_id?: string | null;
+  run_token?: string | null;
+  client_request_id: string;
+  created_at?: string;
+  updated_at?: string;
+  last_progress_at?: string;
+  workflow_checked_at?: string | null;
+  workflow_missing_count?: number;
+  workflow_missing_since?: string | null;
+  started_at?: string | null;
+  completed_at?: string | null;
+  error_message?: string | null;
+};
+
 export interface Database {
   public: {
     Tables: {
@@ -309,6 +373,12 @@ export interface Database {
         Row: GeneratedMaterialsRow;
         Insert: GeneratedMaterialsInsert;
         Update: Partial<GeneratedMaterialsInsert>;
+        Relationships: [];
+      };
+      generation_jobs: {
+        Row: GenerationJobsRow;
+        Insert: GenerationJobsInsert;
+        Update: Partial<GenerationJobsInsert>;
         Relationships: [];
       };
     };

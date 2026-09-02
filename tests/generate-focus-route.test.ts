@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(),
@@ -23,13 +23,14 @@ vi.mock("@/lib/generate-context", () => ({
 vi.mock("ai", () => ({ generateObject: mocks.generateObject }));
 vi.mock("@/lib/llm", () => ({ getChatModel: mocks.getChatModel }));
 
-import { POST } from "@/app/api/generate/focus/route";
+import { maxDuration, POST } from "@/app/api/generate/focus/route";
 
-function requestWith(body: unknown): Request {
+function requestWith(body: unknown, signal?: AbortSignal): Request {
   return new Request("http://localhost/api/generate/focus", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
+    signal,
   });
 }
 
@@ -83,6 +84,120 @@ describe("POST /api/generate/focus", () => {
         ],
       },
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("정밀 모델 시간초과 시 결합된 호출 신호로 빠른 모델을 한 번 재시도한다", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    mocks.getChatModel.mockImplementation((key?: string) => key ?? "default");
+    mocks.generateObject
+      .mockRejectedValueOnce(new DOMException("timed out", "TimeoutError"))
+      .mockResolvedValueOnce({
+        object: {
+          options: [
+            {
+              title: "급경사 로프 접근과 확보",
+              description: "급경사 접근 전 확보 지점과 대원 역할을 확인합니다.",
+              sourceRefs: ["[로프구조 교범 p.8]"],
+            },
+          ],
+        },
+      });
+
+    const response = await POST(
+      requestWith({
+        category: "산악",
+        topic: "산악사고대비 훈련",
+        model: "gemini-pro",
+      })
+    );
+
+    expect(maxDuration).toBe(90);
+    expect(response.status).toBe(200);
+    expect(mocks.getChatModel.mock.calls.map(([key]) => key)).toEqual([
+      "gemini-pro",
+      "gemini-flash",
+    ]);
+    expect(mocks.generateObject).toHaveBeenCalledTimes(2);
+    expect(timeoutSpy.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
+      45_000,
+      25_000,
+    ]);
+    expect(mocks.generateObject.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal);
+    expect(mocks.generateObject.mock.calls[1][0].abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("브라우저 요청이 취소되면 정밀 모델 실패 뒤 빠른 모델을 호출하지 않는다", async () => {
+    const controller = new AbortController();
+    const request = requestWith(
+      {
+        category: "산악",
+        topic: "산악사고대비 훈련",
+        model: "gemini-pro",
+      },
+      controller.signal
+    );
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.getChatModel.mockImplementation((key?: string) => key ?? "default");
+    mocks.generateObject.mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+      expect(abortSignal.aborted).toBe(false);
+      controller.abort();
+      expect(abortSignal.aborted).toBe(true);
+      return Promise.reject(new DOMException("aborted", "AbortError"));
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(503);
+    expect(mocks.generateObject).toHaveBeenCalledOnce();
+    expect(mocks.getChatModel).toHaveBeenCalledOnce();
+    expect(mocks.getChatModel).toHaveBeenCalledWith("gemini-pro");
+  });
+
+  it("빠른 모델도 시간초과하면 플랫폼 종료 전에 구조화된 503을 반환한다", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.generateObject.mockRejectedValueOnce(
+      new DOMException("timed out", "TimeoutError")
+    );
+
+    const response = await POST(
+      requestWith({
+        category: "산악",
+        topic: "산악사고대비 훈련",
+        model: "gemini-flash",
+      })
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(payload.error).toContain("시간이 길어");
+    expect(mocks.generateObject).toHaveBeenCalledOnce();
+    expect(mocks.generateObject.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("검색 뒤 남은 내부 예산이 부족하면 모델을 호출하지 않고 503을 반환한다", async () => {
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.fetchCategoryContext.mockImplementationOnce(async () => {
+      now = 71_000;
+      return context;
+    });
+
+    const response = await POST(
+      requestWith({
+        category: "산악",
+        topic: "산악사고대비 훈련",
+        model: "gemini-flash",
+      })
+    );
+
+    expect(response.status).toBe(503);
+    expect(mocks.generateObject).not.toHaveBeenCalled();
   });
 
   it("인증 실패는 잘못된 JSON을 파싱하기 전에 반환한다", async () => {

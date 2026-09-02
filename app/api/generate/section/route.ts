@@ -40,9 +40,55 @@ import {
   inspectSopContract,
 } from "@/lib/sop-evidence";
 
-export const maxDuration = 60;
+export const maxDuration = 120;
 
 const MAX_REGEN_REQUEST_BYTES = 120 * 1024;
+const REGEN_REQUEST_BUDGET_MS = 110_000;
+const REGEN_RESPONSE_RESERVE_MS = 10_000;
+const REGEN_PRO_CALL_MAX_MS = 60_000;
+const REGEN_FAST_CALL_MAX_MS = 30_000;
+const REGEN_FALLBACK_RESERVE_MS = REGEN_FAST_CALL_MAX_MS;
+const REGEN_MIN_CALL_MS = 5_000;
+
+class RegenerationTimeBudgetError extends Error {
+  constructor() {
+    super("부분 재생성 시간 예산이 부족합니다.");
+    this.name = "RegenerationTimeBudgetError";
+  }
+}
+
+function remainingRegenerationMs(deadlineMs: number): number {
+  return Math.max(0, deadlineMs - Date.now());
+}
+
+function regenerationAbortSignal(
+  requestSignal: AbortSignal,
+  deadlineMs: number,
+  maxCallMs: number,
+  additionalReserveMs = 0
+): AbortSignal {
+  const availableMs =
+    remainingRegenerationMs(deadlineMs) -
+    REGEN_RESPONSE_RESERVE_MS -
+    additionalReserveMs;
+  if (availableMs < REGEN_MIN_CALL_MS) throw new RegenerationTimeBudgetError();
+  return AbortSignal.any([
+    requestSignal,
+    AbortSignal.timeout(Math.max(1, Math.min(maxCallMs, availableMs))),
+  ]);
+}
+
+function isRegenerationBudgetError(error: unknown): boolean {
+  const name =
+    error && typeof error === "object" && "name" in error
+      ? String((error as { name?: unknown }).name ?? "")
+      : "";
+  return (
+    error instanceof RegenerationTimeBudgetError ||
+    name === "AbortError" ||
+    name === "TimeoutError"
+  );
+}
 
 const optionalText = (max: number) =>
   z
@@ -123,6 +169,7 @@ const regenRequestSchema = z.discriminatedUnion("kind", [
 
 // 섹션/슬라이드 1개만 AI로 다시 생성한다. (전체 생성은 /api/generate)
 export async function POST(req: Request) {
+  const regenerationDeadlineMs = Date.now() + REGEN_REQUEST_BUDGET_MS;
   // LLM 비용 제한을 회피한 대용량 본문 전송을 막기 위해 인증·레이트리밋을 먼저 확인한다.
   if (!DEMO) {
     const auth = await requireApiUser();
@@ -208,19 +255,41 @@ export async function POST(req: Request) {
     let activeModelKey = body.model;
     let modelFallbackUsed = false;
     const withGenerationModel = async <T,>(
-      run: (model: ReturnType<typeof getChatModel>) => Promise<T>
+      run: (
+        model: ReturnType<typeof getChatModel>,
+        abortSignal: AbortSignal
+      ) => Promise<T>,
+      forceFast = false
     ): Promise<T> => {
+      const modelKey = forceFast ? "gemini-flash" : activeModelKey;
+      const proRequested = modelKey === "gemini-pro";
       try {
-        return await run(getChatModel(activeModelKey));
+        return await run(
+          getChatModel(modelKey),
+          regenerationAbortSignal(
+            req.signal,
+            regenerationDeadlineMs,
+            proRequested ? REGEN_PRO_CALL_MAX_MS : REGEN_FAST_CALL_MAX_MS,
+            proRequested ? REGEN_FALLBACK_RESERVE_MS : 0
+          )
+        );
       } catch (error) {
-        if (activeModelKey !== "gemini-pro") throw error;
+        if (req.signal.aborted) throw error;
+        if (!proRequested) throw error;
         activeModelKey = "gemini-flash";
         modelFallbackUsed = true;
         console.warn(
           "[generate/section] 정밀 모델 호출 실패, 빠른 모델로 한 번 재시도:",
           error instanceof Error ? error.message : "unknown error"
         );
-        return run(getChatModel(activeModelKey));
+        return run(
+          getChatModel(activeModelKey),
+          regenerationAbortSignal(
+            req.signal,
+            regenerationDeadlineMs,
+            REGEN_FAST_CALL_MAX_MS
+          )
+        );
       }
     };
     const responseInit = () => {
@@ -239,8 +308,12 @@ export async function POST(req: Request) {
       }
       const strictSlideSchema = strictGeneratedSlideSchemaFor(sourceLabels);
       const cur = body.current as GeneratedSlide;
-      const generateSlide = (currentSlide: GeneratedSlide, extraInstruction?: string) =>
-        withGenerationModel(async (model) => {
+      const generateSlide = (
+        currentSlide: GeneratedSlide,
+        extraInstruction?: string,
+        forceFast = false
+      ) =>
+        withGenerationModel(async (model, abortSignal) => {
         const generated = await generateObject({
           model,
           schema: strictSlideSchema,
@@ -266,9 +339,10 @@ export async function POST(req: Request) {
             instruction: [instruction, extraInstruction].filter(Boolean).join(" ") || undefined,
           }),
           temperature: 0.5,
+          abortSignal,
         });
         return generated.object;
-      });
+      }, forceFast);
       let object = await generateSlide(cur);
       const currentSlideText = `${cur.title ?? ""}\n${cur.bullets?.join("\n") ?? ""}\n${cur.notes ?? ""}`;
       const isSopSlide =
@@ -281,7 +355,8 @@ export async function POST(req: Request) {
         if (!sopReport.ok) {
           object = await generateSlide(
             object,
-            `SOP 계약 오류를 모두 수정하세요: ${sopReport.issues.map((issue) => issue.message).join(" / ")}`
+            `SOP 계약 오류를 모두 수정하세요: ${sopReport.issues.map((issue) => issue.message).join(" / ")}`,
+            true
           );
         }
         const repairedSopReport = inspectSopContract(
@@ -324,8 +399,12 @@ export async function POST(req: Request) {
     }
 
     const cur = body.current as GeneratedSection;
-    const generateSection = (currentContent: string, extraInstruction?: string) =>
-      withGenerationModel(async (model) => {
+    const generateSection = (
+      currentContent: string,
+      extraInstruction?: string,
+      forceFast = false
+    ) =>
+      withGenerationModel(async (model, abortSignal) => {
       const generated = await generateObject({
         model,
         schema: regeneratedSectionSchema,
@@ -346,9 +425,10 @@ export async function POST(req: Request) {
           instruction: [instruction, extraInstruction].filter(Boolean).join(" ") || undefined,
         }),
         temperature: 0.5,
+        abortSignal,
       });
       return generated.object;
-    });
+    }, forceFast);
     let object = stripSectionInlineSourceRefs(
       await generateSection(cur.content ?? ""),
       sourceLabels
@@ -365,7 +445,8 @@ export async function POST(req: Request) {
         object = stripSectionInlineSourceRefs(
           await generateSection(
             object.content,
-            `SOP 계약 오류를 모두 수정하세요: ${sopReport.issues.map((issue) => issue.message).join(" / ")}`
+            `SOP 계약 오류를 모두 수정하세요: ${sopReport.issues.map((issue) => issue.message).join(" / ")}`,
+            true
           ),
           sourceLabels
         );
@@ -405,6 +486,12 @@ export async function POST(req: Request) {
     );
   } catch (e) {
     console.error("[generate/section] 실패:", e);
+    if (isRegenerationBudgetError(e)) {
+      return Response.json(
+        { error: "재생성 시간이 길어 요청을 안전하게 종료했습니다. 다시 시도해 주세요." },
+        { status: 503 }
+      );
+    }
     return Response.json({ error: "재생성 중 오류가 발생했습니다." }, { status: 500 });
   }
 }

@@ -75,3 +75,4 @@ __input__data/
 !indexing/**/*.py
 !rag7.py
 !tests/**/*.py
+/.swc

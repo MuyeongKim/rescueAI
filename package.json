@@ -47,6 +47,7 @@
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.6.0",
     "tailwindcss-animate": "^1.0.7",
+    "workflow": "^4.8.5",
     "zod": "^3.25.76"
   },
   "devDependencies": {
@@ -61,5 +62,16 @@
     "tailwindcss": "^4.3.0",
     "typescript": "^5",
     "vitest": "^4.1.7"
+  },
+  "overrides": {
+    "@workflow/core": {
+      "nanoid": "5.1.16"
+    },
+    "@workflow/world-local": {
+      "undici": "7.29.0"
+    },
+    "@workflow/world-vercel": {
+      "undici": "7.29.0"
+    }
   }
 }

@@ -377,6 +377,12 @@ export function strictGeneratedSlideSchemaFor(
   }
   const allowedLabelSchema = z.enum(labels as [string, ...string[]]);
   return generatedSlideSchema.extend({
+    // 모델이 지시를 벗어나 과도한 본문을 반환해도 durable checkpoint 1 MiB를
+    // 잠식하지 않도록, 정상 교관용 분량보다 충분히 넓은 저장 안전 상한을 둔다.
+    title: z.string().min(2).max(100),
+    bullets: z.array(z.string().min(1).max(500)).min(1).max(4),
+    steps: z.array(z.string().min(1).max(100)).min(2).max(5).optional(),
+    notes: z.string().min(1).max(5_000),
     sourceRefs: z
       .array(allowedLabelSchema)
       .min(1)
@@ -390,6 +396,7 @@ export function strictGeneratedSlidesSchemaFor(
   allowedSourceLabels: readonly string[]
 ) {
   return generatedSlidesSchema.extend({
+    title: z.string().min(2).max(100),
     slides: z.array(strictGeneratedSlideSchemaFor(allowedSourceLabels)).min(6).max(20),
   });
 }
@@ -1152,6 +1159,7 @@ function inspectSlideSafetyConsistency(
     const levelOccurrences: Array<{
       levels: Set<string>;
       comparison: boolean;
+      slideIndex: number | null;
     }> = [];
     const titleLevels = chemicalProtectionLevels(draft.title);
     if (titleLevels.size > 0) {
@@ -1159,6 +1167,7 @@ function inspectSlideSafetyConsistency(
         levels: titleLevels,
         comparison:
           titleLevels.size >= 2 && PROTECTION_LEVEL_COMPARISON_CUE.test(draft.title),
+        slideIndex: null,
       });
     }
     draft.slides.forEach((slide, index) => {
@@ -1170,6 +1179,7 @@ function inspectSlideSafetyConsistency(
           levels.size >= 2 &&
           (slide.composition === "comparison" ||
             PROTECTION_LEVEL_COMPARISON_CUE.test(slideNarrativeText(slide))),
+        slideIndex: index,
       });
     });
     const distinctLevels = new Set(
@@ -1179,11 +1189,26 @@ function inspectSlideSafetyConsistency(
       levelOccurrences.length > 0 &&
       levelOccurrences.every(({ comparison }) => comparison);
     if (distinctLevels.size > 1 && !deliberateComparison) {
-      issues.push({
-        code: "mixed_chemical_protection_levels",
-        path: "slides",
-        message: `화학보호복 보호등급 ${Array.from(distinctLevels).sort().join("/")}가 비교 장 밖에서 함께 사용되었습니다. 같은 등급으로 임의 통일하지 말고 각 절차의 적용 등급과 근거 출처를 분리해 확인하세요.`,
-      });
+      const affectedIndices = Array.from(
+        new Set(
+          levelOccurrences.flatMap(({ slideIndex }) =>
+            slideIndex === null ? [] : [slideIndex]
+          )
+        )
+      ).sort((a, b) => a - b);
+      const message = `화학보호복 보호등급 ${Array.from(distinctLevels).sort().join("/")}가 비교 장 밖에서 함께 사용되었습니다. 같은 등급으로 임의 통일하지 말고 각 절차의 적용 등급과 근거 출처를 분리해 확인하세요.`;
+      if (affectedIndices.length === 0) {
+        issues.push({ code: "mixed_chemical_protection_levels", path: "slides", message });
+      } else {
+        affectedIndices.forEach((index) => {
+          issues.push({
+            code: "mixed_chemical_protection_levels",
+            path: `slides.${index}`,
+            message,
+            excerpt: compactText(evidenceTexts[index]).slice(0, 240),
+          });
+        });
+      }
     }
   }
 
@@ -1228,11 +1253,17 @@ function inspectSlideSafetyConsistency(
     const deliberateComparison =
       slideIndices.size === 1 && mentions.every(({ comparison }) => comparison);
     if (deliberateComparison) return;
-    issues.push({
-      code: "conflicting_pressure_values",
-      path: "slides",
-      message: `같은 장비·압력 기준에 ${Array.from(new Set(mentions.map(({ raw }) => raw))).join(" / ")}가 함께 사용되었습니다. 수치를 임의로 선택하지 말고 장비 모델·측정 조건·근거 출처를 구분해 확인하세요.`,
-    });
+    const message = `같은 장비·압력 기준에 ${Array.from(new Set(mentions.map(({ raw }) => raw))).join(" / ")}가 함께 사용되었습니다. 수치를 임의로 선택하지 말고 장비 모델·측정 조건·근거 출처를 구분해 확인하세요.`;
+    Array.from(slideIndices)
+      .sort((a, b) => a - b)
+      .forEach((slideIndex) => {
+        issues.push({
+          code: "conflicting_pressure_values",
+          path: `slides.${slideIndex}`,
+          message,
+          excerpt: compactText(evidenceTexts[slideIndex]).slice(0, 240),
+        });
+      });
   });
 
   draft.slides.forEach((slide, index) => {

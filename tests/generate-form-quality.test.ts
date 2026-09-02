@@ -1,14 +1,17 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   activeSavedCategory,
   hasCategoryRecommendationForTopic,
   hasSlideSopQualityIssues,
+  isDefinitiveGenerationJobCreateRejection,
   isConfirmedCategorySelection,
   isCompatibleSopEvidenceRefresh,
   isCurrentEvidenceRepairSnapshot,
   localQuality,
   normalizedEvidenceIssueIndices,
+  preparePendingGenerationJobCreate,
+  replaceGenerationJobUrl,
   restoreTopicFocusAfterRequestAbort,
   safeCategoryRecommendationResponse,
   shouldAutoConfirmCategoryRecommendation,
@@ -40,6 +43,73 @@ function planWithSopStatus(status: "not_found" | "degraded"): GeneratedDoc {
 }
 
 describe("편집 후 SOP 상태 경고", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("작업 접수 전에 복구용 jobId를 현재 생성 화면 주소에 기록한다", () => {
+    const replaceState = vi.fn();
+    vi.stubGlobal("window", {
+      location: { href: "http://localhost/generate?m=17&view=compact" },
+      history: { state: { scroll: 0 }, replaceState },
+    });
+
+    replaceGenerationJobUrl("11111111-1111-4111-8111-111111111111");
+
+    const nextUrl = replaceState.mock.calls[0]?.[2] as URL;
+    expect(nextUrl.searchParams.get("j")).toBe(
+      "11111111-1111-4111-8111-111111111111"
+    );
+    expect(nextUrl.searchParams.has("m")).toBe(false);
+    expect(nextUrl.searchParams.get("view")).toBe("compact");
+  });
+
+  it("같은 입력의 접수 재시도는 clientRequestId와 URL 작업 ID를 함께 재사용한다", () => {
+    const generatedIds = [
+      "22222222-2222-4222-8222-222222222222",
+      "11111111-1111-4111-8111-111111111111",
+    ];
+    const rememberedJobIds: string[] = [];
+    const createUuid = () => {
+      const next = generatedIds.shift();
+      if (!next) throw new Error("재시도에서 새 UUID를 만들면 안 됩니다.");
+      return next;
+    };
+
+    const first = preparePendingGenerationJobCreate(
+      "same-request",
+      null,
+      createUuid,
+      (jobId) => rememberedJobIds.push(jobId)
+    );
+    const retry = preparePendingGenerationJobCreate(
+      "same-request",
+      first,
+      createUuid,
+      (jobId) => rememberedJobIds.push(jobId)
+    );
+
+    expect(first).toEqual({
+      fingerprint: "same-request",
+      clientRequestId: "22222222-2222-4222-8222-222222222222",
+      jobId: "11111111-1111-4111-8111-111111111111",
+      deliveryUncertain: false,
+    });
+    expect(retry).toBe(first);
+    expect(rememberedJobIds).toEqual([
+      "11111111-1111-4111-8111-111111111111",
+      "11111111-1111-4111-8111-111111111111",
+    ]);
+  });
+
+  it("접수 전 4xx 거절만 작업 주소를 폐기 가능한 오류로 분류한다", () => {
+    expect(isDefinitiveGenerationJobCreateRejection(400, false)).toBe(true);
+    expect(isDefinitiveGenerationJobCreateRejection(429, false)).toBe(true);
+    expect(isDefinitiveGenerationJobCreateRejection(500, false)).toBe(false);
+    expect(isDefinitiveGenerationJobCreateRejection(503, false)).toBe(false);
+    expect(isDefinitiveGenerationJobCreateRejection(400, true)).toBe(false);
+  });
+
   it("현재 활성 교범에 있는 저장 분야만 새 생성 입력으로 복원한다", () => {
     expect(activeSavedCategory("화재", ["산악", "화재"])).toBe("화재");
     expect(activeSavedCategory("폐기된 분야", ["산악", "화재"])).toBe("");

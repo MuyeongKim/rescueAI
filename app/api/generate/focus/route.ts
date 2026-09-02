@@ -29,7 +29,50 @@ import {
   type StoredTrainingMaterialRow,
 } from "@/lib/training-focus-history";
 
-export const maxDuration = 60;
+export const maxDuration = 90;
+
+const FOCUS_REQUEST_BUDGET_MS = 80_000;
+const FOCUS_RESPONSE_RESERVE_MS = 10_000;
+const FOCUS_PRO_CALL_MAX_MS = 45_000;
+const FOCUS_FALLBACK_CALL_MAX_MS = 25_000;
+const FOCUS_STANDALONE_CALL_MAX_MS = 60_000;
+const FOCUS_MIN_CALL_MS = 5_000;
+
+class FocusTimeBudgetError extends Error {
+  constructor() {
+    super("세부 훈련 방향 추천 시간 예산이 부족합니다.");
+    this.name = "FocusTimeBudgetError";
+  }
+}
+
+function remainingFocusMs(deadlineMs: number): number {
+  return Math.max(0, deadlineMs - Date.now());
+}
+
+function focusAbortSignal(
+  requestSignal: AbortSignal,
+  deadlineMs: number,
+  maxCallMs: number,
+  additionalReserveMs = 0
+): AbortSignal {
+  const availableMs =
+    remainingFocusMs(deadlineMs) - FOCUS_RESPONSE_RESERVE_MS - additionalReserveMs;
+  if (availableMs < FOCUS_MIN_CALL_MS) throw new FocusTimeBudgetError();
+  return AbortSignal.any([
+    requestSignal,
+    AbortSignal.timeout(Math.max(1, Math.min(maxCallMs, availableMs))),
+  ]);
+}
+
+function isFocusBudgetError(error: unknown): boolean {
+  const name =
+    error && typeof error === "object" && "name" in error
+      ? String((error as { name?: unknown }).name ?? "")
+      : "";
+  return (
+    error instanceof FocusTimeBudgetError || name === "AbortError" || name === "TimeoutError"
+  );
+}
 
 const requestSchema = z
   .object({
@@ -58,6 +101,7 @@ function demoOptions(category: string): TrainingFocusOption[] {
 }
 
 export async function POST(request: Request) {
+  const focusDeadlineMs = Date.now() + FOCUS_REQUEST_BUDGET_MS;
   if (DEMO) {
     let input: unknown;
     try {
@@ -163,21 +207,37 @@ export async function POST(request: Request) {
 
     let activeModel = model;
     let fallbackUsed = false;
-    const run = async () =>
+    const run = async (abortSignal: AbortSignal) =>
       generateObject({
         model: getChatModel(activeModel),
         schema: trainingFocusSuggestionsSchema,
         prompt,
         temperature: 0.45,
+        abortSignal,
       });
     let generated;
     try {
-      generated = await run();
+      const proRequested = activeModel === "gemini-pro";
+      generated = await run(
+        focusAbortSignal(
+          request.signal,
+          focusDeadlineMs,
+          proRequested ? FOCUS_PRO_CALL_MAX_MS : FOCUS_STANDALONE_CALL_MAX_MS,
+          proRequested ? FOCUS_FALLBACK_CALL_MAX_MS : 0
+        )
+      );
     } catch (error) {
+      if (request.signal.aborted) throw error;
       if (activeModel !== "gemini-pro") throw error;
       activeModel = "gemini-flash";
       fallbackUsed = true;
-      generated = await run();
+      generated = await run(
+        focusAbortSignal(
+          request.signal,
+          focusDeadlineMs,
+          FOCUS_FALLBACK_CALL_MAX_MS
+        )
+      );
     }
 
     const filtered = filterGroundedTrainingFocusOptionsWithDiagnostics(
@@ -238,6 +298,12 @@ export async function POST(request: Request) {
       "[generate/focus] 세부 방향 추천 실패:",
       error instanceof Error ? error.message : error
     );
+    if (isFocusBudgetError(error)) {
+      return Response.json(
+        { error: "세부 훈련 방향을 찾는 시간이 길어 요청을 안전하게 종료했습니다. 다시 시도해 주세요." },
+        { status: 503 }
+      );
+    }
     return Response.json(
       { error: "세부 훈련 방향을 찾는 중 오류가 발생했습니다." },
       { status: 500 }

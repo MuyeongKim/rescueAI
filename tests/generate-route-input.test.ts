@@ -25,13 +25,15 @@ vi.mock("@/lib/generate-context", () => ({
 vi.mock("ai", () => ({ generateObject: mocks.generateObject }));
 vi.mock("@/lib/llm", () => ({ getChatModel: mocks.getChatModel }));
 
-import { POST } from "@/app/api/generate/route";
+import { maxDuration, POST } from "@/app/api/generate/route";
+import { generationProDraftCallMaxMs } from "@/lib/generation-budget";
 import { SOP_NOT_FOUND_DISCLOSURE } from "@/lib/sop-evidence";
 
-function requestWith(body: unknown): Request {
+function requestWith(body: unknown, signal?: AbortSignal): Request {
   return new Request("http://localhost/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal,
     body: typeof body === "string" ? body : JSON.stringify(body),
   });
 }
@@ -111,6 +113,13 @@ describe("POST /api/generate 입력 경계", () => {
       degraded: false,
       sopEvidence: { status: "not_found", sourceLabels: [] },
     });
+  });
+
+  it("정밀 초안에 유형별 시간을 주고 서버 종료 전 빠른 모델 복구 여유를 둔다", () => {
+    expect(maxDuration).toBe(300);
+    expect(generationProDraftCallMaxMs("plan")).toBe(120_000);
+    expect(generationProDraftCallMaxMs("lesson")).toBe(150_000);
+    expect(generationProDraftCallMaxMs("slides")).toBe(180_000);
   });
 
   it("인증 실패는 잘못된 JSON을 읽기 전에 반환한다", async () => {
@@ -217,6 +226,7 @@ describe("POST /api/generate 입력 경계", () => {
   });
 
   it("정밀 모델 호출이 시간 초과되면 시간 예산 안에서 빠른 모델로 재시도한다", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
     const source = { document_id: 1, doc: "공기호흡기 교육자료", page: 1 };
     const sourceRef = "[공기호흡기 교육자료 p.1]";
     mocks.fetchCategoryContext.mockResolvedValue({
@@ -231,22 +241,149 @@ describe("POST /api/generate 입력 경계", () => {
       .mockRejectedValueOnce(new DOMException("timed out", "TimeoutError"))
       .mockResolvedValueOnce({ object: validGeneratedPlan(sourceRef) });
 
+    try {
+      const response = await POST(requestWith(validBody({ model: "gemini-pro" })));
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(mocks.getChatModel).toHaveBeenNthCalledWith(1, "gemini-pro");
+      expect(mocks.getChatModel).toHaveBeenNthCalledWith(2, "gemini-flash");
+      expect(mocks.generateObject).toHaveBeenCalledTimes(2);
+      expect(mocks.generateObject.mock.calls[1]?.[0]?.abortSignal).toBeInstanceOf(AbortSignal);
+      expect(timeoutSpy.mock.calls.map(([timeoutMs]) => timeoutMs)).toEqual([
+        120_000,
+        60_000,
+      ]);
+      expect(payload.quality.warnings).toContain(
+        "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"
+      );
+    } finally {
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("요청이 중단되면 정밀 모델 호출을 끝내고 빠른 모델을 추가 호출하지 않는다", async () => {
+    const source = { document_id: 1, doc: "공기호흡기 교육자료", page: 1 };
+    const sourceRef = "[공기호흡기 교육자료 p.1]";
+    const controller = new AbortController();
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: `${sourceRef}\n공기호흡기 점검과 착용 절차 근거`,
+      sources: [source],
+      bindingSources: [source],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.getChatModel.mockImplementation((key) => key);
+    mocks.generateObject.mockImplementationOnce(
+      ({ abortSignal }: { abortSignal: AbortSignal }) =>
+        new Promise((_, reject) => {
+          abortSignal.addEventListener(
+            "abort",
+            () => reject(abortSignal.reason),
+            { once: true }
+          );
+          controller.abort(new DOMException("client closed", "AbortError"));
+        })
+    );
+
+    try {
+      const response = await POST(
+        requestWith(validBody({ model: "gemini-pro" }), controller.signal)
+      );
+
+      expect(response.status).toBe(503);
+      expect(mocks.getChatModel).toHaveBeenCalledOnce();
+      expect(mocks.getChatModel).toHaveBeenCalledWith("gemini-pro");
+      expect(mocks.generateObject).toHaveBeenCalledOnce();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
+  it("시간이 충분한 자동 보완은 정밀 모델을 유지하고 개선된 후보를 채택한다", async () => {
+    const source = { document_id: 1, doc: "공기호흡기 교육자료", page: 1 };
+    const sourceRef = "[공기호흡기 교육자료 p.1]";
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: `${sourceRef}\n공기호흡기 점검과 착용 절차 근거`,
+      sources: [source],
+      bindingSources: [source],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.getChatModel.mockImplementation((key) => key);
+    const invalidDraft = validGeneratedPlan(sourceRef);
+    invalidDraft.sections[0].content = "짧은 목표";
+    mocks.generateObject
+      .mockResolvedValueOnce({ object: invalidDraft })
+      .mockResolvedValueOnce({ object: validGeneratedPlan(sourceRef) });
+
     const response = await POST(requestWith(validBody({ model: "gemini-pro" })));
     const payload = await response.json();
 
     expect(response.status).toBe(200);
     expect(mocks.getChatModel).toHaveBeenNthCalledWith(1, "gemini-pro");
-    expect(mocks.getChatModel).toHaveBeenNthCalledWith(2, "gemini-flash");
-    expect(mocks.generateObject).toHaveBeenCalledTimes(2);
-    expect(mocks.generateObject.mock.calls[1]?.[0]?.abortSignal).toBeInstanceOf(AbortSignal);
-    expect(payload.quality.warnings).toContain(
-      "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"
+    expect(mocks.getChatModel).toHaveBeenNthCalledWith(2, "gemini-pro");
+    expect(payload.quality.repaired).toBe(true);
+    expect(payload.quality.warnings).not.toContain(
+      "정밀 모델 초안 — 빠른 모델로 자동 보완됨"
     );
   });
 
-  it("자동 보완 시 남은 시간이 적으면 느린 정밀 모델을 다시 기다리지 않는다", async () => {
+  it("정밀 자동 보완이 실패하면 예약한 빠른 모델로 복구하고 채택 사실을 알린다", async () => {
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const source = { document_id: 1, doc: "공기호흡기 교육자료", page: 1 };
+    const sourceRef = "[공기호흡기 교육자료 p.1]";
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: `${sourceRef}\n공기호흡기 점검과 착용 절차 근거`,
+      sources: [source],
+      bindingSources: [source],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.getChatModel.mockImplementation((key) => key);
+    const invalidDraft = validGeneratedPlan(sourceRef);
+    invalidDraft.sections[0].content = "짧은 목표";
+    mocks.generateObject
+      .mockResolvedValueOnce({ object: invalidDraft })
+      .mockRejectedValueOnce(new DOMException("timed out", "TimeoutError"))
+      .mockResolvedValueOnce({ object: validGeneratedPlan(sourceRef) });
+
+    try {
+      const response = await POST(requestWith(validBody({ model: "gemini-pro" })));
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(mocks.getChatModel).toHaveBeenNthCalledWith(1, "gemini-pro");
+      expect(mocks.getChatModel).toHaveBeenNthCalledWith(2, "gemini-pro");
+      expect(mocks.getChatModel).toHaveBeenNthCalledWith(3, "gemini-flash");
+      expect(timeoutSpy.mock.calls.map(([timeoutMs]) => timeoutMs)).toEqual([
+        120_000,
+        90_000,
+        60_000,
+      ]);
+      expect(payload.quality.repaired).toBe(true);
+      expect(payload.quality.warnings).toContain(
+        "정밀 모델 초안 — 빠른 모델로 자동 보완됨"
+      );
+      expect(payload.quality.warnings).not.toContain(
+        "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("정밀 모델 호출 실패"),
+        "timed out"
+      );
+    } finally {
+      warnSpy.mockRestore();
+      timeoutSpy.mockRestore();
+    }
+  });
+
+  it("정밀 보완 시간을 담을 수 없으면 빠른 모델 후보를 채택했다고 구분해 알린다", async () => {
     let now = 1_000;
     const nowSpy = vi.spyOn(Date, "now").mockImplementation(() => now);
+    const infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const source = { document_id: 1, doc: "공기호흡기 교육자료", page: 1 };
     const sourceRef = "[공기호흡기 교육자료 p.1]";
     mocks.fetchCategoryContext.mockResolvedValue({
@@ -261,7 +398,7 @@ describe("POST /api/generate 입력 경계", () => {
     invalidDraft.sections[0].content = "짧은 목표";
     mocks.generateObject
       .mockImplementationOnce(async () => {
-        now += 60_000;
+        now += 120_001;
         return { object: invalidDraft };
       })
       .mockResolvedValueOnce({ object: validGeneratedPlan(sourceRef) });
@@ -275,10 +412,62 @@ describe("POST /api/generate 입력 경계", () => {
       expect(mocks.getChatModel).toHaveBeenNthCalledWith(2, "gemini-flash");
       expect(payload.quality.repaired).toBe(true);
       expect(payload.quality.warnings).toContain(
+        "정밀 모델 초안 — 빠른 모델로 자동 보완됨"
+      );
+      expect(payload.quality.warnings).not.toContain(
         "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨"
       );
+      expect(infoSpy).toHaveBeenCalledWith(
+        expect.stringContaining("자동 보완 정밀 모델 시간 예산 부족")
+      );
     } finally {
+      infoSpy.mockRestore();
       nowSpy.mockRestore();
+    }
+  });
+
+  it("자동 보완 후보가 실제로 개선되지 않으면 정밀 원본을 유지한다", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const source = { document_id: 1, doc: "공기호흡기 교육자료", page: 1 };
+    const sourceRef = "[공기호흡기 교육자료 p.1]";
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: `${sourceRef}\n공기호흡기 점검과 착용 절차 근거`,
+      sources: [source],
+      bindingSources: [source],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.getChatModel.mockImplementation((key) => key);
+    const originalDraft = validGeneratedPlan(sourceRef);
+    originalDraft.title = "정밀 모델 원본";
+    originalDraft.sections[0].content = "짧은 목표";
+    const rejectedCandidate = validGeneratedPlan(sourceRef);
+    rejectedCandidate.title = "개선되지 않은 보완 후보";
+    rejectedCandidate.sections[0].content = "여전히 짧음";
+    mocks.generateObject
+      .mockResolvedValueOnce({ object: originalDraft })
+      .mockResolvedValueOnce({ object: rejectedCandidate });
+
+    try {
+      const response = await POST(requestWith(validBody({ model: "gemini-pro" })));
+      const payload = await response.json();
+
+      expect(response.status).toBe(200);
+      expect(payload.title).toBe("정밀 모델 원본");
+      expect(payload.quality.repaired).toBe(false);
+      expect(payload.quality.warnings).toContain(
+        "자동 보완 결과가 개선되지 않아 기존 초안을 유지함"
+      );
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining("자동 보완 결과 미채택"),
+        expect.objectContaining({
+          type: "plan",
+          currentBlocking: 1,
+          candidateBlocking: 1,
+        })
+      );
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 });

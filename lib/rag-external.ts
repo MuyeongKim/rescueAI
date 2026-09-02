@@ -23,11 +23,14 @@ import {
   type GeneratedDocSource,
 } from "@/lib/generate";
 import type { SopEvidence } from "@/lib/sop-evidence";
+import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 
 // 테이블·검색함수 이름은 RAG_TABLE 단일 출처에서 파생(이름 변경 시 env+SQL만 고치면 됨).
 // 검색 RPC 규칙: match_<테이블명> (예: rag_rescue → match_rag_rescue).
 const RAG_TABLE = process.env.RAG_TABLE || "rag_rescue";
 const MATCH_FN = `match_${RAG_TABLE}`;
+const RAG_AUXILIARY_MODEL_MAX_MS = 45_000;
+const RAG_DB_REQUEST_MAX_MS = 45_000;
 const SOP_DOCUMENT_TYPES = ["sop", "operational_guidance"] as const;
 export const COMMON_SOP_CATEGORY = "현장지휘·공통";
 
@@ -43,6 +46,9 @@ export function sopCategoryScope(category: string): string[] {
 // Route/Server Component에서는 쿠키 기반 클라이언트를 기본 사용한다. 요청 컨텍스트가 없는
 // 평가 러너는 service-role 클라이언트를 명시적으로 주입할 수 있으며, 자동 승격은 하지 않는다.
 export type ExternalRagSupabaseClient = Awaited<ReturnType<typeof createClient>>;
+
+const withRagDbTimeout = <T,>(request: T): T =>
+  withSupabaseRequestTimeout(request, RAG_DB_REQUEST_MAX_MS);
 
 export function ragTableEnabled(): boolean {
   return !!process.env.RAG_TABLE;
@@ -64,10 +70,12 @@ export async function assertExternalEmbeddingContract(
   if (contractCache?.key === cacheKey && contractCache.validUntil > Date.now()) return;
 
   const supabase = suppliedClient ?? (await createClient());
-  const { data, error } = await (supabase.from as CallableFunction)("rag_embedding_config")
-    .select("provider, model, dimensions, version")
-    .eq("table_name", RAG_TABLE)
-    .limit(1);
+  const { data, error } = await withRagDbTimeout(
+    (supabase.from as CallableFunction)("rag_embedding_config")
+      .select("provider, model, dimensions, version")
+      .eq("table_name", RAG_TABLE)
+      .limit(1)
+  );
   if (error) {
     throw new Error(`임베딩 계약 조회 실패: ${error.message}`);
   }
@@ -237,10 +245,12 @@ export async function verifyExternalRagSourceProvenance(
       if (scope.sopOnly) {
         request = request.in("metadata->>document_type", [...SOP_DOCUMENT_TYPES]);
       }
-      return request.limit(
-        Math.min(
-          1000,
-          Math.max(64, batch.length * PROVENANCE_ROWS_PER_PAIR_LIMIT)
+      return withRagDbTimeout(
+        request.limit(
+          Math.min(
+            1000,
+            Math.max(64, batch.length * PROVENANCE_ROWS_PER_PAIR_LIMIT)
+          )
         )
       );
     };
@@ -857,6 +867,7 @@ export async function expandQuery(
 예: {"paraphrase":"소방 드론의 재난현장 표준작전절차와 운용 안전 수칙","keywords":["드론","소방드론","비행","운용","안전","상황분석"]}`,
       temperature: 0,
       providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
+      abortSignal: AbortSignal.timeout(RAG_AUXILIARY_MODEL_MAX_MS),
     });
     const para = object.paraphrase?.trim();
     return {
@@ -890,6 +901,7 @@ async function llmRerank(
       temperature: 0,
       // 재순위는 단순 작업 — Gemini 사고(thinking) 끄면 지연 크게 감소 (타 제공자는 무시됨)
       providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
+      abortSignal: AbortSignal.timeout(RAG_AUXILIARY_MODEL_MAX_MS),
     });
     const seen = new Set<number>();
     const picked: RefinedRagRow[] = [];
@@ -999,7 +1011,7 @@ async function keywordRowsForPlan(
           .textSearch("content", keywordQuery, { type: "websearch", config: "simple" })
           .limit(requestLimit);
         if (category) request = request.eq(`metadata->>${CATEGORY_FIELD}`, category);
-        const { data, error } = await request;
+        const { data, error } = await withRagDbTimeout(request);
         if (error) {
           console.error("[rag-external] keyword error:", error.message);
           return { rows: [] as RagRow[], degraded: true };
@@ -1044,12 +1056,14 @@ async function hybridCandidates(
     (async () => {
       if (!embedding) return { rows: [] as RagRow[], degraded: false };
       try {
-        const { data, error } = await (supabase.rpc as CallableFunction)(MATCH_FN, {
-          query_embedding: toPgVector(embedding),
-          match_count: candidateCount,
-          match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
-          filter: category ? { [CATEGORY_FIELD]: category } : {},
-        });
+        const { data, error } = await withRagDbTimeout(
+          (supabase.rpc as CallableFunction)(MATCH_FN, {
+            query_embedding: toPgVector(embedding),
+            match_count: candidateCount,
+            match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
+            filter: category ? { [CATEGORY_FIELD]: category } : {},
+          })
+        );
         if (error) {
           console.error("[rag-external] vector error:", error.message);
           return { rows: [] as RagRow[], degraded: true };
@@ -1407,12 +1421,14 @@ async function discoverCategorySources(
       from + SOURCE_DISCOVERY_PAGE - 1,
       SOURCE_DISCOVERY_MAX_ROWS - 1
     );
-    const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
-      .select("id, document_id:metadata->>document_id, source:metadata->>source")
-      .eq("is_active", true)
-      .eq(`metadata->>${CATEGORY_FIELD}`, category)
-      .order("id", { ascending: true })
-      .range(from, to);
+    const { data, error } = await withRagDbTimeout(
+      (supabase.from as CallableFunction)(RAG_TABLE)
+        .select("id, document_id:metadata->>document_id, source:metadata->>source")
+        .eq("is_active", true)
+        .eq(`metadata->>${CATEGORY_FIELD}`, category)
+        .order("id", { ascending: true })
+        .range(from, to)
+    );
 
     if (error) {
       console.error("[rag-external] source discovery error:", error.message);
@@ -1458,7 +1474,7 @@ async function fetchRowsByCategorySources(
       query = source.documentId
         ? query.eq("metadata->>document_id", source.documentId)
         : query.eq("metadata->>source", source.source);
-      return query;
+      return withRagDbTimeout(query);
     })
   );
 
@@ -1479,12 +1495,14 @@ async function fetchLegacyCategoryRows(
   category: string,
   desiredLimit: number
 ): Promise<RagRow[] | null> {
-  const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
-    .select("id, content, metadata")
-    .eq("is_active", true)
-    .eq(`metadata->>${CATEGORY_FIELD}`, category)
-    .order("id", { ascending: true })
-    .limit(desiredLimit * 2);
+  const { data, error } = await withRagDbTimeout(
+    (supabase.from as CallableFunction)(RAG_TABLE)
+      .select("id, content, metadata")
+      .eq("is_active", true)
+      .eq(`metadata->>${CATEGORY_FIELD}`, category)
+      .order("id", { ascending: true })
+      .limit(desiredLimit * 2)
+  );
 
   if (error) {
     console.error("[rag-external] fetch context error:", error.message);
@@ -1499,14 +1517,15 @@ async function fetchLegacyCategoryRows(
 export async function fetchExternalRagContext(
   category: string,
   limit = 40,
-  topic?: string
+  topic?: string,
+  suppliedClient?: ExternalRagSupabaseClient
 ): Promise<{
   contextText: string;
   sources: GeneratedDocSource[];
   bindingSources: GeneratedDocSource[];
   degraded: boolean;
 }> {
-  const supabase = await createClient();
+  const supabase = suppliedClient ?? (await createClient());
   const topicTrimmed = topic?.trim().slice(0, 100);
   let retrievalDegraded = false;
 
@@ -1697,7 +1716,7 @@ export async function fetchExternalSopContext(
               config: "simple",
             })
             .limit(32);
-          const { data, error } = await request;
+          const { data, error } = await withRagDbTimeout(request);
           if (error) {
             console.error("[rag-external] SOP keyword error:", error.message);
             return { rows: [] as RagRow[], degraded: true, terms: plan.terms };
@@ -1762,10 +1781,12 @@ export async function listExternalRagCategories(): Promise<Record<string, string
   const byCat = new Map<string, Set<string>>();
 
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await (supabase.from as CallableFunction)(RAG_TABLE)
-      .select(`category:metadata->>${CATEGORY_FIELD}, source:metadata->>source`)
-      .eq("is_active", true)
-      .range(from, from + PAGE - 1);
+    const { data, error } = await withRagDbTimeout(
+      (supabase.from as CallableFunction)(RAG_TABLE)
+        .select(`category:metadata->>${CATEGORY_FIELD}, source:metadata->>source`)
+        .eq("is_active", true)
+        .range(from, from + PAGE - 1)
+    );
     if (error) {
       console.error("[rag-external] list categories error:", error.message);
       break;

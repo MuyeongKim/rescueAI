@@ -30,12 +30,14 @@ components/chat /admin  도메인 컴포넌트
 lib/supabase/   client(브라우저) · server(SSR) · admin(service role, 서버 전용)
 lib/rag.ts      검색 + 컨텍스트 조립        lib/embeddings.ts  쿼리 임베딩
 lib/auth.ts     세션·프로필 조회 + API/페이지 가드   lib/safe-redirect.ts  redirect 파라미터 검증(순수)
+lib/generation-job*.ts  영속 생성 작업 공개 계약·DB projection·Workflow 시작
 lib/chat-history.ts  대화 히스토리 상한(순수)   lib/rate-limit.ts  인메모리 레이트리밋
 lib/generate.ts AI 자료제작 스키마·프롬프트   lib/generate-material.ts  저장본↔폼 변환(순수)
 lib/docx.ts /pptx.ts /hwpx*.ts  문서 변환(클라이언트 동적 import)
 lib/courses.ts  분야(카테고리) 상수만        lib/database.types.ts  수작성 DB 타입
 lib/demo-flag.ts  DEMO 플래그(미들웨어 공용)  lib/demo.ts  목 데이터
 app/home /generate  홈 · AI 자료제작 (+/api/generate)
+app/api/generate/jobs  품질 우선 비동기 작업 생성·상태 조회·저장 지점 재시도
 app/notices /me /docs  공지 · 마이페이지 · 자료실
 app/admin/  통계 + documents(자료) · users(사용자) · notices(공지 작성)
 components/learning/      CategoryBadge(분야색)·ProgressBar 재사용 컴포넌트 (학습 로직은 제거됨)
@@ -51,6 +53,7 @@ supabase/migrations/    0001 테이블 · 0002 RPC · 0003 트리거+RLS · 0004
                         · 20260808… hybrid_search 코사인 수정+정리 · 관리자 통계 RPC
                         · 20260829… 생성물 공유 SOP DB 보호 · SOP/현장지침 문서 유형 분류
 indexing/       Python 파이프라인          docs/  원본 자료 투입 위치
+workflows/      Vercel Workflow 기반 장시간 정밀 생성 단계
 eval/           평가셋 러너(vitest 통합)
 ```
 
@@ -61,11 +64,15 @@ eval/           평가셋 러너(vitest 통합)
   `lesson_progress` 테이블도 2026-08-08 마이그레이션에서 삭제됨.
 - 출동 마일리지·체력단련 기능은 **제거됨**(2026-08-27). 기존 `workout_logs` 데이터와 스키마는
   복구 가능성을 위해 보존하지만 앱에서는 조회·기록하지 않음.
-- AI 자료제작: `/generate` 클릭·선택형 UI → `/api/generate`(분야 자료 컨텍스트+generateObject).
+- AI 자료제작: `/generate` 클릭·선택형 UI → `/api/generate/jobs`가 사용자별 작업을 저장하고
+  Vercel Workflow를 시작한다. `/api/generate`는 데모·동기 호환 경로로 유지한다.
   필수 입력은 자료 유형·분야·주제·대상·시간이고, 날짜·장소·현장 조건은 필요한 경우만 입력한다.
-  사용자에게 모델 선택을 요구하지 않고 정밀 생성 모델을 우선 사용한다. 훈련계획은 고정 5개, 교안은
-  실습형 7개 섹션으로 생성하고 시간·안전·평가·분량·중복·출처·슬라이드 밀도를 결정론적으로 점검해
-  필요한 경우 전체 초안을 한 번 보완한다. 문서는 DOCX/HWPX로 다운로드한다. 슬라이드는 16:9
+  사용자에게 모델 선택을 요구하지 않고 정밀 생성 모델을 우선 사용한다. 작업은 근거 조회→전체 구성→
+  초안(슬라이드는 2장 묶음)→품질 검사→최대 2회 선택 보완으로 나누며 각 완료 단계를
+  `generation_jobs.checkpoint`에 저장한다. Workflow 실행 연결이 확인된 뒤에는 브라우저를 닫아도 이어지고, `?j=<uuid>`로 본인 작업의
+  진행률·경과시간·예상 완료를 다시 확인한다. 품질 게이트를 통과한 결과만 완성본으로 공개한다.
+  훈련계획은 고정 5개, 교안은 실습형 7개 섹션으로 생성하고 시간·안전·평가·분량·중복·출처·
+  슬라이드 밀도를 결정론적으로 점검한다. 문서는 DOCX/HWPX로 다운로드한다. 슬라이드는 16:9
   미리보기에서 레이아웃·순서·단계를 편집할 수 있고, 장별 `[Sources]` 노트가 있는 분야 색 표준
   양식 PPTX로 다운로드한다. 과거 NotebookLM 저장본은 재열람 호환만 유지한다.
 
@@ -73,6 +80,8 @@ eval/           평가셋 러너(vitest 통합)
 - `ANTHROPIC_API_KEY`·`OPENAI_API_KEY`·`SUPABASE_SERVICE_ROLE_KEY` 는 **서버 전용**.
   클라이언트 번들에 절대 노출 금지. (`NEXT_PUBLIC_` 접두사 붙이지 말 것)
 - service role 클라이언트(`lib/supabase/admin.ts`)는 **role='admin' 검증 후** 또는 인덱서에서만.
+  단, 내구성 자료제작 worker는 `requireApiUser()`를 통과한 API가 발급한 작업 ID·실행 토큰으로
+  `lib/supabase/generation-worker.ts`를 통해 `generation_jobs` 갱신과 생성 근거 조회만 수행한다.
 - 모든 사용자 데이터 테이블은 **RLS** 적용. 본인 데이터만 접근.
 - **브라우저 스토리지(localStorage/sessionStorage) 의존 금지** — 상태는 서버/DB에.
 - 인증 가드는 `lib/auth.ts` 단일 출처:

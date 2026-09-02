@@ -683,10 +683,17 @@ export async function POST(req: Request) {
   return Response.json({ id: data.id, revision: data.revision ?? 1 });
 }
 
-// 저장본 삭제 — RLS 로 본인 것만 삭제된다.
+// 저장본 삭제 — RLS + revision CAS로 본인 최신본만 삭제된다.
 export async function DELETE(req: Request) {
-  const id = Number(new URL(req.url).searchParams.get("id"));
-  if (!Number.isInteger(id) || id <= 0) {
+  const url = new URL(req.url);
+  const id = Number(url.searchParams.get("id"));
+  const revision = Number(url.searchParams.get("revision"));
+  if (
+    !Number.isSafeInteger(id) ||
+    id <= 0 ||
+    !Number.isSafeInteger(revision) ||
+    revision <= 0
+  ) {
     return new Response("잘못된 요청입니다.", { status: 400 });
   }
   if (DEMO) return Response.json({ ok: true, demo: true });
@@ -698,10 +705,52 @@ export async function DELETE(req: Request) {
   const rl = rateLimit(`generate-del:${auth.user.id}`, 30, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
-  const { error } = await supabase.from("generated_materials").delete().eq("id", id);
+  const { data: current, error: currentError } = await supabase
+    .from("generated_materials")
+    .select("id, revision")
+    .eq("id", id)
+    .eq("user_id", auth.user.id)
+    .maybeSingle();
+  if (currentError) {
+    console.error("[generate/save] 삭제 전 개정 번호 확인 실패:", currentError.message);
+    return Response.json({ error: "삭제할 자료의 최신 상태를 확인하지 못했습니다." }, { status: 500 });
+  }
+  if (!current) {
+    return Response.json({ error: "삭제할 자료를 찾을 수 없습니다." }, { status: 404 });
+  }
+  if (current.revision !== revision) {
+    return Response.json(
+      {
+        code: "material_revision_conflict",
+        error:
+          "다른 화면에서 이 자료가 수정되었습니다. 최신 목록을 불러온 뒤 다시 확인해 주세요.",
+        currentRevision: current.revision,
+      },
+      { status: 409 }
+    );
+  }
+
+  const { data, error } = await supabase
+    .from("generated_materials")
+    .delete()
+    .eq("id", id)
+    .eq("user_id", auth.user.id)
+    .eq("revision", revision)
+    .select("id");
   if (error) {
     console.error("[generate/save] delete 실패:", error.message);
     return Response.json({ error: "삭제 중 오류가 발생했습니다." }, { status: 500 });
+  }
+  // 조회 직후 다른 화면이 저장했다면 CAS 조건에서 0행이 되어 최신본을 보존한다.
+  if (!data || data.length === 0) {
+    return Response.json(
+      {
+        code: "material_revision_conflict",
+        error:
+          "다른 화면에서 이 자료가 수정되었습니다. 최신 목록을 불러온 뒤 다시 확인해 주세요.",
+      },
+      { status: 409 }
+    );
   }
   return Response.json({ ok: true });
 }

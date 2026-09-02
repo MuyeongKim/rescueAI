@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   requireApiUser: vi.fn(),
@@ -21,14 +21,15 @@ vi.mock("@/lib/generate-context", () => ({
 vi.mock("ai", () => ({ generateObject: mocks.generateObject }));
 vi.mock("@/lib/llm", () => ({ getChatModel: mocks.getChatModel }));
 
-import { POST } from "@/app/api/generate/section/route";
+import { maxDuration, POST } from "@/app/api/generate/section/route";
 import { SOP_NOT_FOUND_DISCLOSURE } from "@/lib/sop-evidence";
 
-function requestWith(body: unknown): Request {
+function requestWith(body: unknown, signal?: AbortSignal): Request {
   return new Request("http://localhost/api/generate/section", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: typeof body === "string" ? body : JSON.stringify(body),
+    signal,
   });
 }
 
@@ -90,6 +91,142 @@ describe("POST /api/generate/section 입력 경계", () => {
       degraded: false,
       sopEvidence: { status: "not_found", sourceLabels: [] },
     });
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("정밀 모델 시간초과 시 결합된 호출 신호로 빠른 모델을 한 번 재시도한다", async () => {
+    vi.spyOn(Date, "now").mockReturnValue(0);
+    const timeoutSpy = vi.spyOn(AbortSignal, "timeout");
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: "[공기호흡기 교범 p.3]\n보호장비 상태를 확인합니다.",
+      sources: [],
+      bindingSources: [],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.getChatModel.mockImplementation((key?: string) => key ?? "default");
+    mocks.generateObject
+      .mockRejectedValueOnce(new DOMException("timed out", "TimeoutError"))
+      .mockResolvedValueOnce({
+        object: { heading: "필요장비", content: "공기호흡기 상태를 확인합니다." },
+      });
+
+    const response = await POST(
+      requestWith(
+        validSectionBody({
+          model: "gemini-pro",
+          current: { heading: "필요장비", content: "현재 장비 목록" },
+        })
+      )
+    );
+
+    expect(maxDuration).toBe(120);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("X-Model-Fallback")).toBe("1");
+    expect(mocks.getChatModel.mock.calls.map(([key]) => key)).toEqual([
+      "gemini-pro",
+      "gemini-flash",
+    ]);
+    expect(mocks.generateObject).toHaveBeenCalledTimes(2);
+    expect(timeoutSpy.mock.calls.map(([milliseconds]) => milliseconds)).toEqual([
+      60_000,
+      30_000,
+    ]);
+    expect(mocks.generateObject.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal);
+    expect(mocks.generateObject.mock.calls[1][0].abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("브라우저 요청이 취소되면 정밀 모델 실패 뒤 빠른 모델을 호출하지 않는다", async () => {
+    const controller = new AbortController();
+    const request = requestWith(
+      validSectionBody({
+        model: "gemini-pro",
+        current: { heading: "필요장비", content: "현재 장비 목록" },
+      }),
+      controller.signal
+    );
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: "[공기호흡기 교범 p.3]\n보호장비 상태를 확인합니다.",
+      sources: [],
+      bindingSources: [],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.getChatModel.mockImplementation((key?: string) => key ?? "default");
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.generateObject.mockImplementationOnce(({ abortSignal }: { abortSignal: AbortSignal }) => {
+      expect(abortSignal.aborted).toBe(false);
+      controller.abort();
+      expect(abortSignal.aborted).toBe(true);
+      return Promise.reject(new DOMException("aborted", "AbortError"));
+    });
+
+    const response = await POST(request);
+
+    expect(response.status).toBe(503);
+    expect(mocks.generateObject).toHaveBeenCalledOnce();
+    expect(mocks.getChatModel).toHaveBeenCalledOnce();
+    expect(mocks.getChatModel).toHaveBeenCalledWith("gemini-pro");
+  });
+
+  it("빠른 모델도 시간초과하면 플랫폼 종료 전에 구조화된 503을 반환한다", async () => {
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: "[공기호흡기 교범 p.3]\n보호장비 상태를 확인합니다.",
+      sources: [],
+      bindingSources: [],
+      degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.generateObject.mockRejectedValueOnce(
+      new DOMException("timed out", "TimeoutError")
+    );
+
+    const response = await POST(
+      requestWith(
+        validSectionBody({
+          model: "gemini-flash",
+          current: { heading: "필요장비", content: "현재 장비 목록" },
+        })
+      )
+    );
+    const payload = await response.json();
+
+    expect(response.status).toBe(503);
+    expect(payload.error).toContain("시간이 길어");
+    expect(mocks.generateObject).toHaveBeenCalledOnce();
+    expect(mocks.generateObject.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("검색 뒤 남은 내부 예산이 부족하면 모델을 호출하지 않고 503을 반환한다", async () => {
+    let now = 0;
+    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.fetchCategoryContext.mockImplementationOnce(async () => {
+      now = 101_000;
+      return {
+        contextText: "[공기호흡기 교범 p.3]\n보호장비 상태를 확인합니다.",
+        sources: [],
+        bindingSources: [],
+        degraded: false,
+        sopEvidence: { status: "not_found", sourceLabels: [] },
+      };
+    });
+
+    const response = await POST(
+      requestWith(
+        validSectionBody({
+          model: "gemini-flash",
+          current: { heading: "필요장비", content: "현재 장비 목록" },
+        })
+      )
+    );
+
+    expect(response.status).toBe(503);
+    expect(mocks.generateObject).not.toHaveBeenCalled();
   });
 
   it("인증 실패는 잘못된 JSON을 읽기 전에 반환한다", async () => {
@@ -186,11 +323,19 @@ describe("POST /api/generate/section 입력 경계", () => {
         object: regeneratedSlide(`${SOP_NOT_FOUND_DISCLOSURE}\n교관 설명`),
       });
 
-    const response = await POST(requestWith(validSlideBody({ sopTarget: true })));
+    const response = await POST(
+      requestWith(validSlideBody({ model: "gemini-pro", sopTarget: true }))
+    );
     const payload = await response.json();
 
     expect(response.status).toBe(200);
     expect(mocks.generateObject).toHaveBeenCalledTimes(2);
+    expect(mocks.getChatModel.mock.calls.map(([key]) => key)).toEqual([
+      "gemini-pro",
+      "gemini-flash",
+    ]);
+    expect(mocks.generateObject.mock.calls[0][0].abortSignal).toBeInstanceOf(AbortSignal);
+    expect(mocks.generateObject.mock.calls[1][0].abortSignal).toBeInstanceOf(AbortSignal);
     const strictSchema = mocks.generateObject.mock.calls[0][0].schema;
     expect(
       strictSchema.safeParse({ ...regeneratedSlide("교관 설명"), sourceRefs: undefined })

@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import {
   ChevronDown,
   FileText,
+  Lightbulb,
   Loader2,
   MessageSquareText,
   Presentation,
@@ -75,6 +76,11 @@ import {
   type TrainingFocusOption,
 } from "@/lib/generate-focus";
 import type { SopEvidence } from "@/lib/sop-evidence";
+import {
+  isGenerationJobDispatchConfirmed,
+  type PublicGenerationJob,
+} from "@/lib/generation-job";
+import type { ValidatedGenerateRequest } from "@/lib/generation-request";
 
 const TOPIC_SUGGESTIONS: Record<string, readonly string[]> = {
   화재: ["공기호흡기 점검과 착용", "고립소방관 구조 절차", "화재현장 인명검색 안전수칙"],
@@ -95,6 +101,13 @@ const DEFAULT_TRAINING_TYPE = "이론 + 현장실습";
 const DEFAULT_TRAINING_METHOD = "자체훈련";
 const RETRIEVAL_DEGRADED_WARNING = "자료 검색 일부 기능 제한 — 회수 근거 확인 필요";
 const MODEL_FALLBACK_WARNING = "정밀 생성 모델 일시 제한 — 빠른 모델로 생성됨";
+// 동일 clientRequestId와 jobId를 유지하므로 응답이 끊겨도 주소로 작업을 복구하고
+// 서버에 같은 작업이 중복 생성되지 않는다.
+const DURABLE_CREATE_RETRY_DELAYS_MS = [0, 1_500, 4_000] as const;
+const DURABLE_CREATE_REQUEST_TIMEOUT_MS = 85_000;
+const DURABLE_RETRY_REQUEST_TIMEOUT_MS = 85_000;
+const DURABLE_POLL_REQUEST_TIMEOUT_MS = 85_000;
+const PENDING_JOB_LOOKUP_LEASE_MS = 5 * 60 * 1000;
 // 같은 일반 계정을 여러 명이 함께 쓰는 시범운영에서 분당 제한을 한 작업이 독점하지 않도록
 // 한 번에 최대 3장만 처리하고, 성공분은 원자적으로 반영한 뒤 남은 장을 이어서 보완하게 한다.
 const SOP_QUALITY_REPAIR_BATCH_SIZE = 3;
@@ -299,6 +312,127 @@ type ResultGenerationContext = {
   place: string;
   conditions: string;
 };
+
+function resultContextFromRequest(
+  request: ValidatedGenerateRequest
+): ResultGenerationContext {
+  return {
+    category: request.category,
+    audience: request.audience,
+    duration: request.duration,
+    slideMode: resolveSlideDeckMode(request.slideMode ?? DEFAULT_SLIDE_DECK_MODE),
+    topic: request.topic,
+    focus: request.focus ?? "",
+    date: request.type === "plan" ? request.date ?? "" : "",
+    place: request.type === "plan" ? request.place ?? "" : "",
+    conditions: request.conditions ?? "",
+  };
+}
+
+function isRunningGenerationJob(job: PublicGenerationJob | null): boolean {
+  return Boolean(
+    job &&
+      job.status !== "completed" &&
+      job.status !== "needs_attention" &&
+      job.status !== "failed"
+  );
+}
+
+function isCompletedQualityJob(
+  job: PublicGenerationJob | null
+): job is PublicGenerationJob & { result: Record<string, unknown> } {
+  return Boolean(
+    job?.status === "completed" && job.qualityPassed && job.result
+  );
+}
+
+const GENERATION_JOB_STATUS_SET = new Set([
+  "queued",
+  "retrieving",
+  "drafting",
+  "reviewing",
+  "repairing",
+  "completed",
+  "needs_attention",
+  "failed",
+]);
+
+function generationJobFromPayload(
+  payload: unknown,
+  expectedId?: string
+): PublicGenerationJob | null {
+  if (!payload || typeof payload !== "object") return null;
+  const job = (payload as { job?: unknown }).job;
+  if (!job || typeof job !== "object") return null;
+  const candidate = job as Partial<PublicGenerationJob>;
+  if (
+    typeof candidate.id !== "string" ||
+    (expectedId && candidate.id !== expectedId) ||
+    typeof candidate.status !== "string" ||
+    !GENERATION_JOB_STATUS_SET.has(candidate.status) ||
+    typeof candidate.stage !== "string" ||
+    typeof candidate.progress !== "number" ||
+    typeof candidate.estimatedSeconds !== "number" ||
+    typeof candidate.qualityPassed !== "boolean" ||
+    !candidate.request ||
+    typeof candidate.request !== "object" ||
+    typeof candidate.createdAt !== "string" ||
+    !Number.isFinite(Date.parse(candidate.createdAt)) ||
+    typeof candidate.updatedAt !== "string" ||
+    !Number.isFinite(Date.parse(candidate.updatedAt))
+  ) {
+    return null;
+  }
+  return candidate as PublicGenerationJob;
+}
+
+export function replaceGenerationJobUrl(id: string): void {
+  const nextUrl = new URL(window.location.href);
+  nextUrl.searchParams.set("j", id);
+  nextUrl.searchParams.delete("m");
+  window.history.replaceState(window.history.state, "", nextUrl);
+}
+
+function removeGenerationJobUrl(expectedId?: string): void {
+  const nextUrl = new URL(window.location.href);
+  if (expectedId && nextUrl.searchParams.get("j") !== expectedId) return;
+  nextUrl.searchParams.delete("j");
+  window.history.replaceState(window.history.state, "", nextUrl);
+}
+
+export interface PendingGenerationJobCreate {
+  fingerprint: string;
+  clientRequestId: string;
+  jobId: string;
+  deliveryUncertain: boolean;
+}
+
+export function preparePendingGenerationJobCreate(
+  fingerprint: string,
+  existing: PendingGenerationJobCreate | null,
+  createUuid: () => string = () => crypto.randomUUID(),
+  rememberJobUrl: (jobId: string) => void = replaceGenerationJobUrl
+): PendingGenerationJobCreate {
+  const pending =
+    existing?.fingerprint === fingerprint
+      ? existing
+      : {
+          fingerprint,
+          clientRequestId: createUuid(),
+          jobId: createUuid(),
+          deliveryUncertain: false,
+        };
+  // POST 응답보다 먼저 주소에 작업 ID를 남겨, 탭을 닫아도 접수된 행을 다시 찾을 수 있게 한다.
+  rememberJobUrl(pending.jobId);
+  return pending;
+}
+
+export function isDefinitiveGenerationJobCreateRejection(
+  status: number,
+  deliveryUncertain: boolean
+): boolean {
+  return !deliveryUncertain && status >= 400 && status < 500;
+}
 
 const SLIDE_MODE_OPTIONS: ReadonlyArray<{
   key: SlideDeckMode;
@@ -586,23 +720,35 @@ export function GenerateForm({
   docsByCategory,
   models = [],
   initialMaterial,
+  initialJob,
+  pendingJobId,
+  durableGenerationEnabled = false,
 }: {
   docsByCategory: Record<string, string[]>;
   models?: { key: string; label: string; note?: string }[];
   initialMaterial?: SavedMaterial; // 저장본 재편집으로 진입 시 복원할 자료
+  initialJob?: PublicGenerationJob;
+  pendingJobId?: string;
+  durableGenerationEnabled?: boolean;
 }) {
   const categories = Object.keys(docsByCategory);
   const hydrated = hydrateMaterial(initialMaterial);
+  const resumedRequest = initialMaterial ? undefined : initialJob?.request;
   // 과거 NotebookLM 저장본은 결과만 호환하고, 새 자료 입력은 지원하는 세 유형 중 계획으로 연다.
-  const [type, setType] = useState<GenType>(initialGenerationType(initialMaterial?.kind));
-  const initialCategory = activeSavedCategory(initialMaterial?.category, categories);
+  const [type, setType] = useState<GenType>(
+    resumedRequest?.type ?? initialGenerationType(initialMaterial?.kind)
+  );
+  const initialCategory = activeSavedCategory(
+    resumedRequest?.category ?? initialMaterial?.category,
+    categories
+  );
   const [category, setCategory] = useState<string>(initialCategory);
   const [categoryRecommendation, setCategoryRecommendation] =
     useState<CategoryRecommendationState>(() =>
       initialCategory
         ? {
             status: "ready",
-            topic: initialMaterial?.topic?.trim() ?? "",
+            topic: resumedRequest?.topic ?? initialMaterial?.topic?.trim() ?? "",
             category: initialCategory,
             confidence: "high",
             alternatives: [],
@@ -612,21 +758,31 @@ export function GenerateForm({
         : { status: "idle" }
     );
   const [categoryPickerOpen, setCategoryPickerOpen] = useState(false);
-  const [audience, setAudience] = useState<Audience>(asAudience(initialMaterial?.audience));
-  const [duration, setDuration] = useState<Duration>(asDuration(initialMaterial?.duration));
-  const [slideMode, setSlideMode] = useState<SlideDeckMode>(
-    resolveSlideDeckMode(hydrated.deck?.mode ?? DEFAULT_SLIDE_DECK_MODE)
+  const [audience, setAudience] = useState<Audience>(
+    resumedRequest?.audience ?? asAudience(initialMaterial?.audience)
   );
-  const [topic, setTopic] = useState(initialMaterial?.topic ?? "");
+  const [duration, setDuration] = useState<Duration>(
+    resumedRequest?.duration ?? asDuration(initialMaterial?.duration)
+  );
+  const [slideMode, setSlideMode] = useState<SlideDeckMode>(
+    resolveSlideDeckMode(
+      resumedRequest?.slideMode ?? hydrated.deck?.mode ?? DEFAULT_SLIDE_DECK_MODE
+    )
+  );
+  const [topic, setTopic] = useState(resumedRequest?.topic ?? initialMaterial?.topic ?? "");
   const [topicError, setTopicError] = useState(false);
   const [topicFocus, setTopicFocus] = useState<TopicFocusState>(
-    hydrated.focus
-      ? { status: "resolved", focus: hydrated.focus }
+    resumedRequest?.focus || hydrated.focus
+      ? { status: "resolved", focus: resumedRequest?.focus ?? hydrated.focus }
       : { status: "idle" }
   );
   const [focusSelectionError, setFocusSelectionError] = useState("");
-  const focusHistoryRef = useRef(new Set<string>(hydrated.focus ? [hydrated.focus] : []));
-  const topicRef = useRef(initialMaterial?.topic ?? "");
+  const focusHistoryRef = useRef(
+    new Set<string>(
+      resumedRequest?.focus ? [resumedRequest.focus] : hydrated.focus ? [hydrated.focus] : []
+    )
+  );
+  const topicRef = useRef(resumedRequest?.topic ?? initialMaterial?.topic ?? "");
   const categoryRequestRef = useRef<AbortController | null>(null);
   const categoryRequestFingerprintRef = useRef("");
   const categoryDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -648,13 +804,34 @@ export function GenerateForm({
   const focusRequestFingerprintRef = useRef("");
   const activeFocusRequestFingerprintRef = useRef("");
   const focusHeadingRef = useRef<HTMLHeadingElement>(null);
-  const [date, setDate] = useState(hydrated.date);
+  const appliedJobRevisionRef = useRef("");
+  const applyCompletedJobRef = useRef<(job: PublicGenerationJob) => void>(() => undefined);
+  const pendingJobCreateRef = useRef<PendingGenerationJobCreate | null>(null);
+  const [date, setDate] = useState(resumedRequest?.date ?? hydrated.date);
   // 훈련계획 양식(training_plan.hwpx) 전용 폼 입력
-  const [place, setPlace] = useState(hydrated.place);
-  const [conditions, setConditions] = useState(hydrated.conditions);
+  const [place, setPlace] = useState(resumedRequest?.place ?? hydrated.place);
+  const [conditions, setConditions] = useState(
+    resumedRequest?.conditions ?? hydrated.conditions
+  );
   // 자료 제작은 품질 우선 모델을 자동 선택한다. 사용할 수 없을 때만 첫 모델로 폴백한다.
   const model = preferredGenerationModel(models);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(Boolean(pendingJobId && !initialJob));
+  const [activeJob, setActiveJob] = useState<PublicGenerationJob | null>(
+    initialJob ?? null
+  );
+  const [jobConnectionRetry, setJobConnectionRetry] = useState<{
+    attempt: number;
+    retryAt: number;
+  } | null>(null);
+  const [pendingLookupJobId, setPendingLookupJobId] = useState<string | undefined>(
+    initialJob ? undefined : pendingJobId
+  );
+  const [pendingJobLookupActive, setPendingJobLookupActive] = useState(
+    Boolean(pendingJobId && !initialJob)
+  );
+  const pendingJobLookupStartedAtRef = useRef(Date.now());
+  const jobRetryingRef = useRef(false);
+  const [jobRetrying, setJobRetrying] = useState(false);
   const [doc, setDoc] = useState<GeneratedDoc | null>(hydrated.doc);
   const [deck, setDeck] = useState<GeneratedSlideDeck | null>(hydrated.deck);
   const [nlmPrompt, setNlmPrompt] = useState<string | null>(hydrated.nlm);
@@ -682,6 +859,8 @@ export function GenerateForm({
           place: hydrated.place,
           conditions: hydrated.conditions,
         }
+      : initialJob
+        ? resultContextFromRequest(initialJob.request)
       : null
   );
   const [saving, setSaving] = useState(false);
@@ -732,6 +911,8 @@ export function GenerateForm({
   );
 
   const resolvedFocus = topicFocus.status === "resolved" ? topicFocus.focus : "";
+  const jobRunning = isRunningGenerationJob(activeJob);
+  const activeJobId = activeJob?.id;
   const resultDuration = resultContext?.duration ?? duration;
   const broadTopic = isLikelyBroadTrainingTopic(topic);
   topicRef.current = topic;
@@ -859,6 +1040,132 @@ export function GenerateForm({
     },
     []
   );
+
+  // 생성 작업 자체는 서버 Workflow가 계속 맡는다. 이 effect는 현재 상태만 느슨하게 조회하며,
+  // 화면이 닫히거나 입력값이 바뀌어도 취소 API를 호출하지 않는다.
+  useEffect(() => {
+    const recoveringPendingJob =
+      pendingJobLookupActive && Boolean(pendingLookupJobId) && !jobRunning;
+    const jobId = jobRunning
+      ? activeJobId
+      : recoveringPendingJob
+        ? pendingLookupJobId
+        : undefined;
+    if (!jobId || (!jobRunning && !recoveringPendingJob)) return;
+
+    let disposed = false;
+    let inFlight = false;
+    let consecutiveErrors = 0;
+    let timer: number | null = null;
+    let activeRequest: AbortController | null = null;
+
+    const schedule = (delayMs: number) => {
+      if (disposed) return;
+      if (timer) window.clearTimeout(timer);
+      timer = window.setTimeout(() => void poll(), delayMs);
+    };
+
+    const poll = async () => {
+      if (disposed || inFlight) return;
+      inFlight = true;
+      const requestController = new AbortController();
+      activeRequest = requestController;
+      const requestTimeout = window.setTimeout(
+        () => requestController.abort(),
+        DURABLE_POLL_REQUEST_TIMEOUT_MS
+      );
+      try {
+        const response = await fetch(`/api/generate/jobs/${encodeURIComponent(jobId)}`, {
+          cache: "no-store",
+          signal: requestController.signal,
+        });
+        const payload = await response.json().catch(() => null);
+        if (!response.ok) {
+          if (
+            response.status === 404 &&
+            recoveringPendingJob &&
+            Date.now() - pendingJobLookupStartedAtRef.current >= PENDING_JOB_LOOKUP_LEASE_MS
+          ) {
+            setPendingJobLookupActive(false);
+            setPendingLookupJobId(undefined);
+            setLoading(false);
+            setJobConnectionRetry(null);
+            if (pendingJobCreateRef.current?.jobId === jobId) {
+              pendingJobCreateRef.current = null;
+            }
+            removeGenerationJobUrl(jobId);
+            toast.error("접수된 생성 작업을 찾지 못했습니다", {
+              description: "새 자료 생성을 다시 요청해 주세요.",
+            });
+            return;
+          }
+          const message =
+            payload && typeof payload === "object" && typeof payload.error === "string"
+              ? payload.error
+              : "생성 작업 상태를 확인하지 못했습니다.";
+          throw new Error(message);
+        }
+        const nextJob = generationJobFromPayload(payload, jobId);
+        if (!nextJob) throw new Error("생성 작업 상태 응답 형식이 올바르지 않습니다.");
+        if (disposed) return;
+
+        consecutiveErrors = 0;
+        setJobConnectionRetry(null);
+        setPendingJobLookupActive(false);
+        setPendingLookupJobId(undefined);
+        if (pendingJobCreateRef.current?.jobId === jobId) {
+          pendingJobCreateRef.current = null;
+        }
+        if (recoveringPendingJob) setLoading(false);
+        setActiveJob(nextJob);
+        if (isRunningGenerationJob(nextJob)) {
+          schedule(document.visibilityState === "hidden" ? 10_000 : 2_500);
+        }
+      } catch {
+        if (disposed) return;
+        consecutiveErrors += 1;
+        const baseDelay = document.visibilityState === "hidden" ? 10_000 : 2_500;
+        const retryDelay = Math.min(
+          60_000,
+          baseDelay * 2 ** Math.min(consecutiveErrors - 1, 4)
+        );
+        setJobConnectionRetry({
+          attempt: consecutiveErrors,
+          retryAt: Date.now() + retryDelay,
+        });
+        schedule(retryDelay);
+      } finally {
+        window.clearTimeout(requestTimeout);
+        if (activeRequest === requestController) activeRequest = null;
+        inFlight = false;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== "visible" || inFlight) return;
+      if (timer) window.clearTimeout(timer);
+      timer = null;
+      void poll();
+    };
+
+    setJobConnectionRetry(null);
+    schedule(document.visibilityState === "hidden" ? 10_000 : 2_500);
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => {
+      disposed = true;
+      if (timer) window.clearTimeout(timer);
+      activeRequest?.abort();
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [activeJobId, jobRunning, pendingJobLookupActive, pendingLookupJobId]);
+
+  useEffect(() => {
+    if (!isCompletedQualityJob(activeJob)) return;
+    const appliedKey = `${activeJob.id}:${activeJob.revision}`;
+    if (appliedJobRevisionRef.current === appliedKey) return;
+    appliedJobRevisionRef.current = appliedKey;
+    applyCompletedJobRef.current(activeJob);
+  }, [activeJob]);
 
   // 생성 중 사용자가 입력 조건을 바꾸면 이전 조건의 응답이 새 폼에 표시되지 않게 즉시 중단한다.
   useEffect(() => {
@@ -1366,7 +1673,11 @@ export function GenerateForm({
       deckFingerprint: slideDeckFingerprint(expectedDeck),
     };
     qualityRepairRequestRef.current = operation;
-    setQualityRepair({ status: "repairing", issueIndices: requestedIndices });
+    setQualityRepair({
+      status: "repairing",
+      issueIndices: requestedIndices,
+      startedAt: Date.now(),
+    });
 
     const isCurrentOperation = () =>
       isCurrentEvidenceRepairSnapshot({
@@ -1671,7 +1982,11 @@ export function GenerateForm({
       deckFingerprint: slideDeckFingerprint(requestDeck),
     };
     evidenceRepairRequestRef.current = operation;
-    setEvidenceRepair({ status: "repairing", issueIndices: requestedIndices });
+    setEvidenceRepair({
+      status: "repairing",
+      issueIndices: requestedIndices,
+      startedAt: Date.now(),
+    });
 
     const isCurrentOperation = () =>
       isCurrentEvidenceRepairSnapshot({
@@ -1982,12 +2297,339 @@ export function GenerateForm({
     setNlmPrompt(null);
   }
 
+  function applyGenerationResult(
+    json: Record<string, unknown> & { quality?: GenerationQuality },
+    resultType: "plan" | "lesson" | "slides",
+    context: ResultGenerationContext,
+    autoRepair: boolean
+  ) {
+    const { quality: serverQuality, ...generatedResult } = json;
+    if (resultType === "slides") {
+      const generatedDeck = generatedResult as unknown as GeneratedSlideDeck;
+      const normalizedDeck: GeneratedSlideDeck = {
+        ...generatedDeck,
+        mode: resolveSlideDeckMode(generatedDeck.mode ?? context.slideMode),
+      };
+      const checkedQuality = localQuality(
+        "slides",
+        normalizedDeck,
+        context.duration,
+        serverQuality ?? null
+      );
+      const evidenceIssueIndices = slideEvidenceIssueIndices(
+        normalizedDeck,
+        context.duration
+      );
+      const qualityIssueIndices = slideSopIssueIndices(
+        normalizedDeck,
+        context.duration
+      );
+      const hasSopQualityIssues = hasSlideSopQualityIssues(
+        normalizedDeck,
+        context.duration
+      );
+      deckRef.current = normalizedDeck;
+      setDeck(normalizedDeck);
+      setQuality(checkedQuality);
+      setResultKind("slides");
+      setResultContext(context);
+      setEvidenceRepair({
+        status: !autoRepair && evidenceIssueIndices.length > 0 ? "failed" : "idle",
+        issueIndices: evidenceIssueIndices,
+        message:
+          !autoRepair && evidenceIssueIndices.length > 0
+            ? "서버 완료 결과와 브라우저 재검증 결과가 달라 자동 수정을 시작하지 않았습니다."
+            : undefined,
+      });
+      setQualityRepair({
+        status:
+          hasSopQualityIssues &&
+          (qualityIssueIndices.length === 0 || !autoRepair)
+            ? "failed"
+            : "idle",
+        issueIndices: qualityIssueIndices,
+        message:
+          hasSopQualityIssues && qualityIssueIndices.length === 0
+            ? SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE
+            : !autoRepair && qualityIssueIndices.length > 0
+              ? "서버 완료 결과를 브라우저에서 다시 확인했습니다. 필요한 경우 문제 장만 다시 보완해 주세요."
+              : undefined,
+      });
+      // 동기 호환 경로만 브라우저 후속 보완을 실행한다. 영속 작업은 서버 Workflow에서
+      // 품질 통과까지 마친 결과이므로 완료 응답을 받은 뒤 별도 재생성을 자동 시작하지 않는다.
+      if (autoRepair && qualityIssueIndices.length > 0) {
+        void repairSlideSopQuality(normalizedDeck, context, qualityIssueIndices);
+      } else if (autoRepair && !hasSopQualityIssues && evidenceIssueIndices.length > 0) {
+        void repairSlideEvidence(normalizedDeck, context, evidenceIssueIndices);
+      }
+      return;
+    }
+
+    setQuality(serverQuality ?? null);
+    setDoc(generatedResult as unknown as GeneratedDoc);
+    setResultKind(resultType);
+    setResultContext(context);
+  }
+
+  applyCompletedJobRef.current = (job) => {
+    if (!isCompletedQualityJob(job)) return;
+    try {
+      clearPreviousResult();
+      applyGenerationResult(
+        job.result as Record<string, unknown> & { quality?: GenerationQuality },
+        job.request.type,
+        resultContextFromRequest(job.request),
+        false
+      );
+      setLoading(false);
+      toast.success("품질 점검을 통과한 자료가 완성되었습니다");
+    } catch {
+      toast.error("완료된 자료를 화면에 표시하지 못했습니다", {
+        description: "작업 주소를 새로 열어 다시 확인해 주세요.",
+      });
+    }
+  };
+
+  async function startDurableGeneration(requestBody: ValidatedGenerateRequest) {
+    const requestFingerprint = JSON.stringify(requestBody);
+    setLoading(true);
+    let keepLoadingForLookup = false;
+    let uncertainJobId: string | undefined;
+    const beginUncertainLookup = (jobId: string) => {
+      keepLoadingForLookup = true;
+      pendingJobLookupStartedAtRef.current = Date.now();
+      setPendingLookupJobId(jobId);
+      setPendingJobLookupActive(true);
+      setJobConnectionRetry(null);
+      replaceGenerationJobUrl(jobId);
+    };
+    try {
+      const pendingCreate = preparePendingGenerationJobCreate(
+        requestFingerprint,
+        pendingJobCreateRef.current
+      );
+      const { clientRequestId, jobId } = pendingCreate;
+      let deliveryUncertain = pendingCreate.deliveryUncertain;
+      const markDeliveryUncertain = () => {
+        deliveryUncertain = true;
+        uncertainJobId = jobId;
+        if (
+          pendingJobCreateRef.current?.clientRequestId === clientRequestId &&
+          pendingJobCreateRef.current.jobId === jobId
+        ) {
+          pendingJobCreateRef.current = {
+            ...pendingJobCreateRef.current,
+            deliveryUncertain: true,
+          };
+        }
+      };
+      pendingJobCreateRef.current = pendingCreate;
+      const body = JSON.stringify({ ...requestBody, clientRequestId, jobId });
+      let response: Response | null = null;
+      let payload: Record<string, unknown> | null = null;
+      let lastNetworkError: unknown = null;
+      for (let attempt = 0; attempt < DURABLE_CREATE_RETRY_DELAYS_MS.length; attempt += 1) {
+        const delayMs = DURABLE_CREATE_RETRY_DELAYS_MS[attempt];
+        if (delayMs > 0) {
+          await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
+        }
+        const requestController = new AbortController();
+        const requestTimeout = window.setTimeout(
+          () => requestController.abort(),
+          DURABLE_CREATE_REQUEST_TIMEOUT_MS
+        );
+        try {
+          response = await fetch("/api/generate/jobs", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            keepalive: true,
+            body,
+            signal: requestController.signal,
+          });
+          payload = (await response.json().catch(() => null)) as Record<string, unknown> | null;
+          if (response.ok || response.status < 500 || attempt === DURABLE_CREATE_RETRY_DELAYS_MS.length - 1) {
+            break;
+          }
+          // 5xx는 행 저장 뒤 응답 조립에서 났을 수도 있으므로 이후 4xx가 와도 주소를 지우지 않는다.
+          markDeliveryUncertain();
+        } catch (networkError) {
+          // 네트워크 오류는 요청 미전송과 응답 유실을 구분할 수 없다.
+          markDeliveryUncertain();
+          response = null;
+          const safeError =
+            networkError instanceof DOMException && networkError.name === "AbortError"
+              ? new Error("생성 작업 접수 응답이 지연되어 같은 작업 번호로 다시 확인합니다.")
+              : networkError;
+          lastNetworkError = safeError;
+          if (attempt === DURABLE_CREATE_RETRY_DELAYS_MS.length - 1) throw safeError;
+        } finally {
+          window.clearTimeout(requestTimeout);
+        }
+      }
+      if (!response) {
+        throw lastNetworkError instanceof Error
+          ? lastNetworkError
+          : new Error("생성 작업 서버에 연결하지 못했습니다.");
+      }
+      if (!response.ok) {
+        const existingActiveJob =
+          response.status === 409 ? generationJobFromPayload(payload) : null;
+        if (existingActiveJob) {
+          clearPreviousResult();
+          appliedJobRevisionRef.current = "";
+          pendingJobCreateRef.current = null;
+          setActiveJob(existingActiveJob);
+          setPendingJobLookupActive(false);
+          setPendingLookupJobId(undefined);
+          setJobConnectionRetry(null);
+          replaceGenerationJobUrl(existingActiveJob.id);
+          toast.info("이미 진행 중인 품질 우선 작업을 이어서 표시합니다");
+          return;
+        }
+        if (
+          isDefinitiveGenerationJobCreateRejection(
+            response.status,
+            deliveryUncertain
+          )
+        ) {
+          if (
+            pendingJobCreateRef.current?.clientRequestId === clientRequestId &&
+            pendingJobCreateRef.current.jobId === jobId
+          ) {
+            pendingJobCreateRef.current = null;
+          }
+          removeGenerationJobUrl(jobId);
+        }
+        const message =
+          payload && typeof payload === "object" && typeof payload.error === "string"
+            ? payload.error
+            : "잠시 후 다시 시도해 주세요.";
+        if (!isDefinitiveGenerationJobCreateRejection(response.status, deliveryUncertain)) {
+          beginUncertainLookup(jobId);
+          toast.info("생성 작업 접수 결과를 확인하고 있습니다", {
+            description: `${message} 같은 작업 번호로 서버 상태를 자동 확인합니다.`,
+          });
+          return;
+        }
+        toast.error("생성 작업을 시작하지 못했습니다", { description: message });
+        return;
+      }
+      const job = generationJobFromPayload(payload, jobId);
+      if (!job) {
+        markDeliveryUncertain();
+        throw new Error("생성 작업 응답 형식이 올바르지 않습니다.");
+      }
+      clearPreviousResult();
+      appliedJobRevisionRef.current = "";
+      pendingJobCreateRef.current = null;
+      setActiveJob(job);
+      setPendingJobLookupActive(false);
+      setPendingLookupJobId(undefined);
+      setJobConnectionRetry(null);
+      replaceGenerationJobUrl(job.id);
+      if (job.status === "failed") {
+        toast.error("작업은 저장했지만 서버 실행을 시작하지 못했습니다", {
+          description: job.errorMessage ?? "저장된 작업 다시 시도를 눌러 이어갈 수 있습니다.",
+        });
+      } else if (!isGenerationJobDispatchConfirmed(job)) {
+        toast.info("생성 요청을 저장했습니다", {
+          description: "서버 실행 연결을 확인 중입니다. 완료 안내가 보일 때까지 이 화면을 유지해 주세요.",
+        });
+      } else {
+        toast.success("품질 우선 생성 작업을 시작했습니다", {
+          description: "서버 접수가 완료되어 화면을 닫아도 계속 진행됩니다.",
+        });
+      }
+    } catch (error) {
+      if (uncertainJobId) {
+        beginUncertainLookup(uncertainJobId);
+        toast.info("생성 작업 접수 결과를 확인하고 있습니다", {
+          description: "응답이 끊겼지만 같은 작업 번호로 서버 상태를 자동 확인합니다.",
+        });
+      } else {
+        toast.error("생성 작업을 시작하지 못했습니다", {
+          description:
+            error instanceof Error ? error.message : "네트워크 연결을 확인해 주세요.",
+        });
+      }
+    } finally {
+      if (!keepLoadingForLookup) setLoading(false);
+    }
+  }
+
+  async function retryDurableGeneration() {
+    if (!activeJob || jobRetryingRef.current || isRunningGenerationJob(activeJob)) return;
+    const retryJobId = activeJob.id;
+    jobRetryingRef.current = true;
+    setJobRetrying(true);
+    const requestController = new AbortController();
+    const requestTimeout = window.setTimeout(
+      () => requestController.abort(),
+      DURABLE_RETRY_REQUEST_TIMEOUT_MS
+    );
+    try {
+      const response = await fetch(
+        `/api/generate/jobs/${encodeURIComponent(activeJob.id)}/retry`,
+        { method: "POST", signal: requestController.signal }
+      );
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        const message =
+          payload && typeof payload === "object" && typeof payload.error === "string"
+            ? payload.error
+            : "잠시 후 다시 시도해 주세요.";
+        toast.error("저장된 작업을 다시 시작하지 못했습니다", { description: message });
+        if (response.status === 409 || response.status >= 500) {
+          pendingJobLookupStartedAtRef.current = Date.now();
+          setPendingLookupJobId(retryJobId);
+          setPendingJobLookupActive(true);
+          setJobConnectionRetry(null);
+        }
+        return;
+      }
+      const job = generationJobFromPayload(payload, activeJob.id);
+      if (!job) throw new Error("재시도 응답 형식이 올바르지 않습니다.");
+      appliedJobRevisionRef.current = "";
+      setActiveJob(job);
+      setPendingJobLookupActive(false);
+      setPendingLookupJobId(undefined);
+      setJobConnectionRetry(null);
+      replaceGenerationJobUrl(job.id);
+      if (job.status === "failed") {
+        toast.error("재시도 작업을 저장했지만 서버 실행을 시작하지 못했습니다", {
+          description: job.errorMessage ?? "잠시 후 다시 시도해 주세요.",
+        });
+      } else {
+        toast.success("저장된 단계에서 품질 점검을 다시 시작했습니다");
+      }
+    } catch (error) {
+      pendingJobLookupStartedAtRef.current = Date.now();
+      setPendingLookupJobId(retryJobId);
+      setPendingJobLookupActive(true);
+      setJobConnectionRetry(null);
+      toast.error("저장된 작업을 다시 시작하지 못했습니다", {
+        description:
+          error instanceof DOMException && error.name === "AbortError"
+            ? "서버 응답이 지연되었습니다. 작업 상태를 다시 확인한 뒤 재시도해 주세요."
+            : error instanceof Error
+              ? error.message
+              : "네트워크 연결을 확인해 주세요.",
+      });
+    } finally {
+      window.clearTimeout(requestTimeout);
+      jobRetryingRef.current = false;
+      setJobRetrying(false);
+    }
+  }
+
   async function runGeneration(focus?: string) {
     // 저장 응답이 돌아오기 전에 결과를 교체하면 이전 행 id가 새 결과에 연결될 수 있다.
     // 저장·부분 재생성 중에는 어떤 진입점(자동 통과·우회 버튼 포함)에서도 전체 생성을 시작하지 않는다.
     if (
       !category ||
       !categoryConfirmed ||
+      jobRunning ||
+      loading ||
       savingRef.current ||
       regenRequestRef.current ||
       evidenceRepairRequestRef.current ||
@@ -2006,7 +2648,6 @@ export function GenerateForm({
       place: type === "plan" ? place.trim() : "",
       conditions: conditions.trim(),
     };
-    clearPreviousResult();
     if (safeFocus) {
       focusHistoryRef.current.add(safeFocus);
       setTopicFocus({ status: "resolved", focus: safeFocus });
@@ -2018,6 +2659,10 @@ export function GenerateForm({
 
     // NotebookLM 프롬프트는 AI 호출 없이 즉시 조립 — 인덱싱된 자료 목록 포함
     if (type === "notebooklm") {
+      clearPreviousResult();
+      setActiveJob(null);
+      setJobConnectionRetry(null);
+      removeGenerationJobUrl();
       generationRequestRef.current?.abort();
       generationRequestRef.current = null;
       setNlmPrompt(buildNotebookLmPrompt(requestBody, docsByCategory[category] ?? []));
@@ -2026,6 +2671,15 @@ export function GenerateForm({
       return;
     }
 
+    if (durableGenerationEnabled) {
+      await startDurableGeneration(requestBody as ValidatedGenerateRequest);
+      return;
+    }
+
+    clearPreviousResult();
+    setActiveJob(null);
+    setJobConnectionRetry(null);
+    removeGenerationJobUrl();
     generationRequestRef.current?.abort();
     const controller = new AbortController();
     generationRequestRef.current = controller;
@@ -2054,57 +2708,7 @@ export function GenerateForm({
       const json = (await res.json()) as Record<string, unknown> & {
         quality?: GenerationQuality;
       };
-      if (type === "slides") {
-        const { quality: serverQuality, ...generatedResult } = json;
-        const generatedDeck = generatedResult as unknown as GeneratedSlideDeck;
-        const normalizedDeck: GeneratedSlideDeck = {
-          ...generatedDeck,
-          mode: resolveSlideDeckMode(generatedDeck.mode ?? slideMode),
-        };
-        const checkedQuality = localQuality(
-          "slides",
-          normalizedDeck,
-          requestContext.duration,
-          serverQuality ?? null
-        );
-        const evidenceIssueIndices = slideEvidenceIssueIndices(
-          normalizedDeck,
-          requestContext.duration
-        );
-        const qualityIssueIndices = slideSopIssueIndices(
-          normalizedDeck,
-          requestContext.duration
-        );
-        const hasSopQualityIssues = hasSlideSopQualityIssues(
-          normalizedDeck,
-          requestContext.duration
-        );
-        deckRef.current = normalizedDeck;
-        setDeck(normalizedDeck);
-        setQuality(checkedQuality);
-        setResultKind("slides");
-        setResultContext(requestContext);
-        setEvidenceRepair({ status: "idle", issueIndices: evidenceIssueIndices });
-        setQualityRepair({
-          status: hasSopQualityIssues && qualityIssueIndices.length === 0 ? "failed" : "idle",
-          issueIndices: qualityIssueIndices,
-          message:
-            hasSopQualityIssues && qualityIssueIndices.length === 0
-              ? SOP_REPAIR_TARGET_UNAVAILABLE_MESSAGE
-              : undefined,
-        });
-        // SOP 문장·근거를 먼저 확정해야 후속 출처 보완이 재생성된 장을 덮지 않는다.
-        if (qualityIssueIndices.length > 0) {
-          void repairSlideSopQuality(normalizedDeck, requestContext, qualityIssueIndices);
-        } else if (!hasSopQualityIssues && evidenceIssueIndices.length > 0) {
-          void repairSlideEvidence(normalizedDeck, requestContext, evidenceIssueIndices);
-        }
-      } else {
-        setQuality(json.quality ?? null);
-        setDoc(json as unknown as GeneratedDoc);
-        setResultKind(type);
-        setResultContext(requestContext);
-      }
+      applyGenerationResult(json, type, requestContext, true);
     } catch (error) {
       if (error instanceof DOMException && error.name === "AbortError") return;
       toast.error("생성 중 오류가 발생했습니다.");
@@ -2170,6 +2774,9 @@ export function GenerateForm({
         ? { status: "refreshing", ...previousChoice }
         : { status: "loading", options: [], similarMaterials: [] }
     );
+    // 트리거 버튼은 로딩 패널로 교체된다. 응답을 기다리는 동안 키보드 포커스가
+    // body로 빠지지 않도록 즉시 새 패널 제목으로 옮긴다.
+    requestAnimationFrame(() => focusHeadingRef.current?.focus());
 
     try {
       const response = await fetch("/api/generate/focus", {
@@ -2179,7 +2786,9 @@ export function GenerateForm({
         body: JSON.stringify({
           category,
           topic: trimmedTopic,
-          model,
+          // 세부 방향 추천은 짧은 선택 보조 작업이다. 정밀 모델 시간은 실제 계획·교안·PPT
+          // 초안에 집중하고, 추천은 빠른 모델과 서버 근거 필터로 처리한다.
+          model: model === "gemini-pro" ? "gemini-flash" : model,
           excludeFocuses: Array.from(focusHistoryRef.current).slice(-60),
         }),
       });
@@ -2471,8 +3080,27 @@ export function GenerateForm({
         }),
       });
       if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        toast.error("저장 실패", { description: err?.error ?? "잠시 후 다시 시도해 주세요." });
+        const err = (await res.json().catch(() => null)) as {
+          code?: unknown;
+          error?: unknown;
+        } | null;
+        const description =
+          typeof err?.error === "string" ? err.error : "잠시 후 다시 시도해 주세요.";
+        if (
+          res.status === 409 &&
+          err?.code === "material_revision_conflict" &&
+          saveLoadedId
+        ) {
+          toast.warning("최신 저장본을 보호했습니다", {
+            description,
+            action: {
+              label: "최신본 열기",
+              onClick: () => window.location.assign(`/generate?m=${saveLoadedId}`),
+            },
+          });
+        } else {
+          toast.error("저장 실패", { description });
+        }
         return;
       }
       // 신규 저장이면 id 를 받아 이후 저장은 같은 행을 수정(중복 저장 방지).
@@ -2663,6 +3291,11 @@ export function GenerateForm({
   }
 
   const typeMeta = GEN_TYPES.find((t) => t.key === type)!;
+  const activeJobType = activeJob?.request.type ?? type;
+  const timedActiveJobType: "plan" | "lesson" | "slides" =
+    activeJob?.request.type ?? (type === "notebooklm" ? "plan" : type);
+  const activeJobTypeMeta = GEN_TYPES.find((item) => item.key === activeJobType)!;
+  const showDurableJobStatus = Boolean(activeJob && !isCompletedQualityJob(activeJob));
   const categoryBusy = categoryRecommendation.status === "loading";
   const focusBusy = topicFocus.status === "loading" || topicFocus.status === "refreshing";
   const evidenceRepairing = evidenceRepair.status === "repairing";
@@ -2939,12 +3572,23 @@ export function GenerateForm({
             />
 
             {categoryConfirmed && broadTopic && topicFocus.status === "idle" && (
-              <div className="rounded-lg border border-amber-300/60 bg-amber-50/70 px-3 py-2.5 text-sm leading-relaxed text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/20 dark:text-amber-100">
-                <p className="font-semibold">이 주제는 여러 훈련 방향으로 나눌 수 있습니다.</p>
-                <p className="mt-0.5">
-                  만들기를 누르면 연결 교범에서 세부 방향을 먼저 찾아, 매번 같은 내용이 반복되는
-                  가능성을 줄입니다.
-                </p>
+              <div className="flex flex-col gap-3 rounded-lg border border-amber-300/60 bg-amber-50/70 px-3 py-3 text-sm leading-relaxed text-amber-900 dark:border-amber-700/50 dark:bg-amber-950/20 dark:text-amber-100 sm:flex-row sm:items-center sm:justify-between">
+                <div className="min-w-0">
+                  <p className="font-semibold">이 주제는 여러 훈련 방향으로 나눌 수 있습니다.</p>
+                  <p className="mt-0.5">
+                    연결 교범에서 실습·평가로 구성하기 좋은 세부 방향을 추천받을 수 있습니다.
+                  </p>
+                </div>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-12 shrink-0 border-amber-400/70 bg-background px-4 text-amber-950 hover:bg-amber-100 dark:text-amber-100 dark:hover:bg-amber-950/50"
+                  disabled={resultMutationLocked || loading || categoryBusy || focusBusy}
+                  onClick={() => void requestTrainingFocus(false)}
+                >
+                  <Lightbulb className="h-4 w-4" aria-hidden="true" />
+                  훈련주제 도움받기
+                </Button>
               </div>
             )}
 
@@ -3188,6 +3832,8 @@ export function GenerateForm({
               onClick={handleGenerate}
               disabled={
                 loading ||
+                jobRunning ||
+                jobRetrying ||
                 focusBusy ||
                 regenLoading !== null ||
                 evidenceRepairing ||
@@ -3197,13 +3843,17 @@ export function GenerateForm({
                 docExporting !== null
               }
             >
-              {loading || focusBusy || categoryBusy ? (
+              {loading || jobRunning || focusBusy || categoryBusy ? (
                 <Loader2 className="h-5 w-5 animate-spin motion-reduce:animate-none" />
               ) : (
                 <Wand2 className="h-5 w-5" />
               )}
               {loading
-                ? "자료를 찾고 초안을 점검하는 중…"
+                ? durableGenerationEnabled && type !== "notebooklm"
+                  ? "품질 우선 작업을 등록하는 중…"
+                  : "자료를 찾고 초안을 점검하는 중…"
+                : jobRunning
+                  ? "서버에서 품질 우선 생성 중…"
                 : categoryBusy
                   ? "주제에 맞는 분야를 확인하는 중…"
                   : focusBusy
@@ -3218,7 +3868,26 @@ export function GenerateForm({
         </CardContent>
       </Card>
 
-      {loading && <ResultSkeleton accent={accent} label={typeMeta.label} />}
+      {((loading && type !== "notebooklm") || showDurableJobStatus) && (
+        <ResultSkeleton
+          key={activeJob?.id ?? "synchronous-generation"}
+          accent={
+            activeJob ? categoryStyle(activeJob.request.category).hex : accent
+          }
+          label={activeJobTypeMeta.label}
+          type={timedActiveJobType}
+          duration={activeJob?.request.duration ?? duration}
+          job={activeJob}
+          connectionRetry={jobConnectionRetry}
+          verifyingDelivery={pendingJobLookupActive}
+          retrying={jobRetrying}
+          onRetry={
+            activeJob?.status === "failed" || activeJob?.status === "needs_attention"
+              ? () => void retryDurableGeneration()
+              : undefined
+          }
+        />
+      )}
 
       {/* 2-a. NotebookLM 프롬프트 결과 */}
       {nlmPrompt && (

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -196,6 +196,14 @@ export function SavedList({
   const [openId, setOpenId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
 
+  // 충돌 뒤 router.refresh()로 받은 최신 서버 목록을 로컬 상태에도 반영한다.
+  useEffect(() => {
+    setItems(initial);
+    setOpenId((current) =>
+      current !== null && initial.some((item) => item.id === current) ? current : null
+    );
+  }, [initial]);
+
   // 목록이 다시 그려질 때마다 여러 차례 전체 품질검사를 반복하지 않는다.
   const diagnostics = useMemo(
     () =>
@@ -300,17 +308,25 @@ export function SavedList({
     }
   }
 
-  async function handleDelete(id: number) {
+  async function handleDelete(it: SavedMaterial) {
     if (!window.confirm("이 자료를 삭제할까요? 되돌릴 수 없습니다.")) return;
-    setBusyId(id);
+    setBusyId(it.id);
     try {
-      const res = await fetch(`/api/generate/save?id=${id}`, { method: "DELETE" });
+      const params = new URLSearchParams({
+        id: String(it.id),
+        revision: String(it.revision),
+      });
+      const res = await fetch(`/api/generate/save?${params}`, { method: "DELETE" });
       if (!res.ok) {
-        toast.error("삭제에 실패했습니다");
+        const payload = (await res.json().catch(() => null)) as { error?: unknown } | null;
+        toast.error(
+          typeof payload?.error === "string" ? payload.error : "삭제에 실패했습니다"
+        );
+        if (res.status === 409) router.refresh();
         return;
       }
-      setItems((prev) => prev.filter((it) => it.id !== id));
-      if (openId === id) setOpenId(null);
+      setItems((prev) => prev.filter((item) => item.id !== it.id));
+      if (openId === it.id) setOpenId(null);
       toast.success("삭제했습니다");
     } catch {
       toast.error("삭제 중 오류가 발생했습니다");
@@ -568,7 +584,7 @@ export function SavedList({
                       size="sm"
                       className="ml-auto gap-1.5 text-destructive hover:text-destructive"
                       disabled={busy}
-                      onClick={() => handleDelete(it.id)}
+                      onClick={() => handleDelete(it)}
                     >
                       <Trash2 className="h-4 w-4" /> 삭제
                     </Button>

@@ -4,6 +4,7 @@ import { google } from "@ai-sdk/google";
 
 // 임베딩 차원 — DB 스키마 vector(1024) 와 반드시 일치해야 한다.
 export const EMBEDDING_DIM = 1024;
+const REMOTE_EMBEDDING_TIMEOUT_MS = 45_000;
 
 type Provider = "auto" | "google" | "openai" | "bge" | "ollama";
 
@@ -102,6 +103,7 @@ async function embedGoogle(text: string): Promise<number[]> {
       taskType: "RETRIEVAL_QUERY",
     }),
     value: text,
+    abortSignal: AbortSignal.timeout(REMOTE_EMBEDDING_TIMEOUT_MS),
   });
   return embedding;
 }
@@ -119,11 +121,14 @@ function openaiClient(): OpenAI {
 
 async function embedOpenAI(text: string): Promise<number[]> {
   const model = process.env.OPENAI_EMBEDDING_MODEL || "text-embedding-3-small";
-  const res = await openaiClient().embeddings.create({
-    model,
-    input: text,
-    dimensions: EMBEDDING_DIM, // text-embedding-3-* 는 차원 축소 지원
-  });
+  const res = await openaiClient().embeddings.create(
+    {
+      model,
+      input: text,
+      dimensions: EMBEDDING_DIM, // text-embedding-3-* 는 차원 축소 지원
+    },
+    { signal: AbortSignal.timeout(REMOTE_EMBEDDING_TIMEOUT_MS) }
+  );
   const vec = res.data?.[0]?.embedding;
   if (!vec) throw new Error("OpenAI 임베딩 응답이 비어 있습니다.");
   return vec;
@@ -139,6 +144,7 @@ async function embedBGE(text: string): Promise<number[]> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ texts: [text] }),
+    signal: AbortSignal.timeout(REMOTE_EMBEDDING_TIMEOUT_MS),
   });
   if (!res.ok) {
     throw new Error(`BGE 임베딩 서비스 오류: ${res.status} ${await res.text()}`);

@@ -66,3 +66,4 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 | `20260829160624_allow_common_sop_generation_evidence.sql` | 현장지휘·공통 SOP의 교차 분야 생성·저장·공유 검증 허용(공통 일반자료 차단) |
 | `20260829163049_protect_generated_material_quality_and_revision.sql` | 생성물 핵심 품질 DB 강제 + 공동계정 재편집 충돌 방지 revision |
 | `20260902021457_add_login_access_counter.sql` | 로그인 후 KST 일일 고유 접속 집계 + 공개 숫자 전용 최소 권한 RPC |
+| `20260902094825_durable_generation_jobs.sql` | 장시간 정밀 자료제작 작업 원장 + 저장 지점·품질 게이트·소유자 공개 조회 RLS |

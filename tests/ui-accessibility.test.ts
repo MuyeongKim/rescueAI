@@ -17,6 +17,7 @@ import { DocResult } from "@/components/generate/DocResult";
 import {
   blockingDeckQualityIssues,
   blockingSlideQualityIssueGroups,
+  ResultSkeleton,
   type EvidenceRepairState,
   type GenerationQuality,
   type QualityRepairState,
@@ -31,6 +32,7 @@ import type {
   GeneratedSlideDeck,
   GenerationQualityIssue,
 } from "@/lib/generate";
+import type { PublicGenerationJob } from "@/lib/generation-job";
 
 const sampleSlide: GeneratedSlide = {
   title: "화학보호복 착용 전 점검",
@@ -198,6 +200,112 @@ describe("공통 UI 접근성", () => {
     expect(html).toContain("min-w-11");
     expect(html).not.toContain("md:min-h-0");
     expect(html).not.toContain("md:min-w-0");
+  });
+
+  it("정밀 생성 대기 중 경과시간·예상 완료·예상 단계를 함께 안내한다", () => {
+    const html = renderToStaticMarkup(
+      createElement(ResultSkeleton, {
+        accent: "#b91c1c",
+        label: "슬라이드(PPTX)",
+        type: "slides",
+        duration: "4시간",
+      })
+    );
+
+    expect(html).toContain("경과 시간");
+    expect(html).toContain("00:00");
+    expect(html).toContain("1차 결과 예상 완료");
+    expect(html).toContain("통상 예상 20분 내외");
+    expect(html).toContain("예상 단계");
+    expect(html).toContain('aria-live="polite"');
+  });
+
+  it("영속 생성 작업은 실제 서버 단계·진행률과 화면 종료 후 계속 진행됨을 안내한다", () => {
+    const job: PublicGenerationJob = {
+      id: "019cbe63-acde-7000-8000-000000000001",
+      status: "reviewing",
+      stage: "교안 구성과 안전 기준 점검",
+      progress: 72,
+      attempt: 1,
+      estimatedSeconds: 540,
+      qualityPassed: false,
+      request: {
+        type: "lesson",
+        category: "화재",
+        audience: "신임 대원",
+        duration: "1시간",
+        topic: "공기호흡기 점검",
+      },
+      result: null,
+      errorMessage: null,
+      workflowRunId: "run-1",
+      revision: 3,
+      createdAt: "2026-09-02T01:00:00.000Z",
+      startedAt: "2026-09-02T01:00:01.000Z",
+      updatedAt: "2026-09-02T01:04:00.000Z",
+      completedAt: null,
+    };
+
+    const html = renderToStaticMarkup(
+      createElement(ResultSkeleton, {
+        accent: "#b91c1c",
+        label: "교안",
+        type: "lesson",
+        duration: "1시간",
+        job,
+        connectionRetry: { attempt: 2, retryAt: Date.now() + 5_000 },
+      })
+    );
+
+    expect(html).toContain("현재 단계");
+    expect(html).toContain("교안 구성과 안전 기준 점검");
+    expect(html).toContain("72%");
+    expect(html).toContain('role="progressbar"');
+    expect(html).toContain("서버 접수가 완료되어 화면을 닫아도 계속 진행됩니다");
+    expect(html).toContain("서버 상태 연결을 다시 시도합니다");
+  });
+
+  it("품질 미통과 영속 작업은 저장 지점 재시도만 제공한다", () => {
+    const failedJob: PublicGenerationJob = {
+      id: "019cbe63-acde-7000-8000-000000000002",
+      status: "needs_attention",
+      stage: "품질 기준 확인 필요",
+      progress: 88,
+      attempt: 2,
+      estimatedSeconds: 720,
+      qualityPassed: false,
+      request: {
+        type: "slides",
+        category: "화재",
+        audience: "일반 대원",
+        duration: "2시간",
+        topic: "고립소방관 구조 절차",
+      },
+      result: null,
+      errorMessage: "일부 슬라이드의 근거를 다시 확인해야 합니다.",
+      workflowRunId: "run-2",
+      revision: 5,
+      createdAt: "2026-09-02T01:00:00.000Z",
+      startedAt: "2026-09-02T01:00:01.000Z",
+      updatedAt: "2026-09-02T01:10:00.000Z",
+      completedAt: "2026-09-02T01:10:00.000Z",
+    };
+
+    const html = renderToStaticMarkup(
+      createElement(ResultSkeleton, {
+        accent: "#b91c1c",
+        label: "슬라이드(PPTX)",
+        type: "slides",
+        duration: "2시간",
+        job: failedJob,
+        onRetry: () => undefined,
+      })
+    );
+
+    expect(html).toContain("추가 품질 점검이 필요합니다");
+    expect(html).toContain("일부 슬라이드의 근거를 다시 확인해야 합니다.");
+    expect(html).toContain("저장된 작업 다시 시도");
+    expect(html).not.toContain("서버 접수가 완료되어 화면을 닫아도 계속 진행됩니다");
   });
 });
 
@@ -406,6 +514,8 @@ describe("슬라이드 편집 접근성과 상태", () => {
     expect(html).toContain('aria-live="polite"');
     expect(html).toContain('aria-busy="true"');
     expect(html).toContain("문제 슬라이드 보완 중…");
+    expect(html).toContain("경과 시간");
+    expect(html).toContain("예상 완료");
   });
 
   it("슬라이드 근거 확인 중에는 대상 장 번호를 알리고 저장·PPTX를 잠근다", () => {
