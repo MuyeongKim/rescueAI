@@ -10,6 +10,7 @@ import { createClient } from "@/lib/supabase/server";
 import { requireApiUser } from "@/lib/auth";
 import { prepareChatAnswerText, uniqueChatSources } from "@/lib/chat-answer";
 import { trimChatHistory } from "@/lib/chat-history";
+import { buildRetrievalQuestion } from "@/lib/chat-retrieval-query";
 import { searchContext, buildSystemPrompt, NOT_FOUND_MESSAGE } from "@/lib/rag";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { DEMO, demoChatAnswer, demoChatSources } from "@/lib/demo";
@@ -71,6 +72,9 @@ export async function POST(req: Request) {
   const lastUser = [...messages].reverse().find((m) => m.role === "user");
   const question = (lastUser?.content ?? "").toString().trim();
   if (!question) return new Response("질문이 비어 있습니다.", { status: 400 });
+  // 사용자는 분야나 검색어를 다시 지정하지 않아도 된다. "준비물은?" 같은 후속 질문은
+  // 최근 독립 주제를 서버가 복원해 검색하고, LLM에는 원래 대화 흐름을 그대로 전달한다.
+  const retrievalQuestion = buildRetrievalQuestion(messages);
 
   // 1~3) RAG 검색 + 컨텍스트 조립 (실패 시 빈 컨텍스트로 우아하게 강등)
   // ragFailed: 검색 인프라 장애(임베딩/DB 예외)와 "근거 없음"(정상 검색·결과 0)을 구분한다.
@@ -79,7 +83,7 @@ export async function POST(req: Request) {
   let sources: DocSource[] = [];
   let ragFailed = false;
   try {
-    const r = await searchContext(question, category);
+    const r = await searchContext(retrievalQuestion, category);
     contextText = r.contextText;
     sources = r.sources;
     ragFailed = r.degraded ?? false;

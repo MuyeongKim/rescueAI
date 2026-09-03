@@ -94,6 +94,29 @@ describe("buildTopicSearchPlans", () => {
     );
   });
 
+  it("인명구조사 2급의 등급을 보존하고 평가 세부 근거를 분리 검색한다", () => {
+    const plans = buildTopicSearchPlans("인명구조사 2급 관련 정보?");
+
+    expect(plans.every((plan) => plan.subject === "인명구조사 2급")).toBe(true);
+    expect(plans.map((plan) => plan.id)).toEqual(
+      expect.arrayContaining([
+        "qualification-items",
+        "qualification-process",
+        "qualification-equipment",
+        "qualification-scoring",
+      ])
+    );
+    expect(plans.find((plan) => plan.id === "qualification-items")?.queries).toEqual(
+      expect.arrayContaining(["인명구조사 2급 평가 항목", "인명구조사 2급 평가 종목"])
+    );
+    expect(plans.find((plan) => plan.id === "qualification-equipment")?.queries).toContain(
+      "인명구조사 2급 준비물"
+    );
+    expect(plans.find((plan) => plan.id === "qualification-scoring")?.queries).toEqual(
+      expect.arrayContaining(["인명구조사 2급 감점", "인명구조사 2급 실격"])
+    );
+  });
+
   it.each([
     [
       "화학보호복을 입기 전에 대원이 점검해야 할 항목을 순서대로 알려줘",

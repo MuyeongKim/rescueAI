@@ -320,6 +320,42 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(result.degraded).toBe(false);
   });
 
+  it("분야 미선택 인명구조사 질문은 문서 근거로 분야를 자동 판정해 벡터 검색한다", async () => {
+    const qualificationRow = row(220, {
+      id: "rescue-technician-level-2",
+      content:
+        "인명구조사 2급 실기평가는 기본역량 2개와 구조기술 7개 종목으로 구성되며 준비물, 감점 및 실격 기준을 평가표에서 확인한다.",
+      metadata: {
+        source: "2022년 인명구조사 2급 실기평가표 개정(최종본).pdf",
+        document_id: 220,
+        page_num: 4,
+        "Header 2": "인명구조사 2급 실기평가 종목",
+        edu_category: "일반구조",
+      },
+    });
+    const supabase = createSupabaseMock(() => ({
+      data: [qualificationRow],
+      error: null,
+    }));
+    supabase.client.rpc.mockResolvedValue({ data: [qualificationRow], error: null });
+
+    const result = await searchExternalRag(
+      "인명구조사 2급 관련 정보?",
+      [0.1],
+      8,
+      null,
+      [],
+      supabase.client as never
+    );
+
+    expect(supabase.client.rpc).toHaveBeenCalledTimes(1);
+    expect(supabase.client.rpc.mock.calls[0]?.[1]?.filter).toEqual({
+      edu_category: "일반구조",
+    });
+    expect(result.contextText).toContain("인명구조사 2급 실기평가 종목");
+    expect(result.sources[0]?.doc).toContain("인명구조사 2급 실기평가표");
+  });
+
   it("자료제작 일반 교재는 분야 후보가 0건이어도 전 분야로 넓히지 않는다", async () => {
     const supabase = createSupabaseMock((record) => {
       if (record.table === "rag_embedding_config") {

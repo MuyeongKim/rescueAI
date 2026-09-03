@@ -65,14 +65,14 @@ export function ChatInterface({
   initialMessages?: Message[];
   /** 입력창 프리필 (예: /chat?q=…) */
   initialInput?: string;
-  /** 분야 필터 선택지 ("전체" 제외) — 서버에서 실제 자료 기준으로 전달 */
+  /** 분야 필터 선택지 ("자동" 제외) — 서버에서 실제 자료 기준으로 전달 */
   categories?: string[];
   /** 사용 가능한 LLM 모델(자격증명 있는 것만) — 서버 availableModels() */
   models?: { key: string; label: string; note?: string }[];
   /** 인기 질문(대원들이 자주 묻는 것) — 없으면 기본 예시로 폴백 */
   popular?: string[];
 }) {
-  const [category, setCategory] = useState<string>("전체");
+  const [category, setCategory] = useState<string>("자동");
   const [model, setModel] = useState<string>(models[0]?.key ?? "");
   const convIdRef = useRef<string | undefined>(conversationId);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -127,7 +127,7 @@ export function ChatInterface({
 
   const requestBody = () => ({
     conversationId: convIdRef.current,
-    category: category === "전체" ? null : category,
+    category: category === "자동" ? null : category,
     model: model || undefined,
   });
 
@@ -175,10 +175,10 @@ export function ChatInterface({
                 className="h-10 w-28 border-slate-600 bg-ops-navy-deep text-white"
                 aria-label="분야 선택"
               >
-                <SelectValue placeholder="전체" />
+                <SelectValue placeholder="자동" />
               </SelectTrigger>
               <SelectContent>
-                {["전체", ...(categories?.length ? categories : DEFAULT_CATEGORIES)].map(
+                {["자동", ...(categories?.length ? categories : DEFAULT_CATEGORIES)].map(
                   (c) => (
                     <SelectItem key={c} value={c}>
                       {c}
@@ -227,7 +227,7 @@ export function ChatInterface({
                 <p className="text-xs font-bold text-primary">AI 튜터</p>
                 <SheetTitle className="text-xl font-extrabold">질문 설정</SheetTitle>
                 <SheetDescription>
-                  질문 분야와 답변의 속도·상세도를 선택합니다.
+                  분야는 질문 내용에 맞춰 자동으로 찾으며, 필요할 때만 직접 바꿀 수 있습니다.
                 </SheetDescription>
               </SheetHeader>
               <div className="mt-5 space-y-4">
@@ -240,10 +240,10 @@ export function ChatInterface({
                       className="h-12 w-full"
                       aria-labelledby="mobile-chat-category-label"
                     >
-                      <SelectValue placeholder="전체" />
+                      <SelectValue placeholder="자동" />
                     </SelectTrigger>
                     <SelectContent>
-                      {["전체", ...(categories?.length ? categories : DEFAULT_CATEGORIES)].map(
+                      {["자동", ...(categories?.length ? categories : DEFAULT_CATEGORIES)].map(
                         (c) => (
                           <SelectItem key={c} value={c}>
                             {c}

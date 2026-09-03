@@ -538,6 +538,32 @@ export const MAX_KEYWORD_SEARCH_QUERIES = 10;
 // 절차형 질문의 공통 단계. 화학보호복뿐 아니라 공기호흡기·로프·펌프·잠수장비에도
 // 같은 분해 규칙을 적용하고, OCR 별칭은 실제 적재 자료에서 확인된 최소 범위만 둔다.
 const PROCEDURE_FACETS: readonly FacetDefinition[] = [
+  // 자격·실기평가를 포괄적으로 물어도 개요 한 쪽만 답하지 않도록, 실제 사용자가
+  // 확인하는 평가 종목·진행·준비물·감점/실격을 독립 근거 슬롯으로 회수한다.
+  {
+    id: "qualification-items",
+    triggers: /인명구조사|자격(?:시험|평가)?|실기평가|평가표/,
+    queryTerms: [["평가", "항목"], ["평가", "종목"]],
+    recallTerms: ["평가항목", "평가종목", "종목"],
+  },
+  {
+    id: "qualification-process",
+    triggers: /인명구조사|자격(?:시험|평가)?|실기평가|평가표/,
+    queryTerms: [["평가", "방법"]],
+    recallTerms: ["평가방법", "진행방법", "진행"],
+  },
+  {
+    id: "qualification-equipment",
+    triggers: /인명구조사|자격(?:시험|평가)?|실기평가|평가표/,
+    queryTerms: [["준비물"]],
+    recallTerms: ["준비물", "장비", "복장"],
+  },
+  {
+    id: "qualification-scoring",
+    triggers: /인명구조사|자격(?:시험|평가)?|실기평가|평가표/,
+    queryTerms: [["감점"], ["실격"]],
+    recallTerms: ["감점", "실격", "배점", "합격"],
+  },
   {
     id: "selection",
     triggers: /등급|레벨|선정|선택|적용범위/,
@@ -585,7 +611,22 @@ const PROCEDURE_FACETS: readonly FacetDefinition[] = [
   },
 ] as const;
 
-const SUBJECT_STOP_WORDS = new Set(["관련", "관한", "대해", "대한", "시", "전", "후"]);
+const SUBJECT_STOP_WORDS = new Set([
+  "관련",
+  "관한",
+  "대해",
+  "대한",
+  "내용",
+  "사항",
+  "상세",
+  "세부",
+  "설명",
+  "알려줘",
+  "정보",
+  "시",
+  "전",
+  "후",
+]);
 const GENERIC_SUBJECTS = new Set([
   "개요",
   "관련",
@@ -647,12 +688,20 @@ function inferTopicSubject(topic: string): string {
   const actionIndex = tokens.findIndex((token) =>
     PROCEDURE_FACETS.some((facet) => facet.triggers.test(token))
   );
-  const subjectToken = (actionIndex > 0 ? tokens.slice(0, actionIndex) : tokens)
-    .map(stripKoreanParticle)
-    .find((token) => token.length >= 2 && !SUBJECT_STOP_WORDS.has(token));
+  const subjectCandidates = (actionIndex > 0 ? tokens.slice(0, actionIndex) : tokens)
+    .map(stripKoreanParticle);
+  const subjectIndex = subjectCandidates.findIndex(
+    (token) => token.length >= 2 && !SUBJECT_STOP_WORDS.has(token)
+  );
+  const subjectToken = subjectCandidates[subjectIndex];
   // 수식어·행동 표현까지 subject에 붙이면 실제 청크에 없는 과구체 문구가 되어 전부 D로
-  // 탈락한다. 첫 핵심어만 쓰고, 띄어쓴 짧은 주제는 affinity가 legacy로 안전하게 우회한다.
-  return subjectToken ?? "";
+  // 탈락한다. 다만 자격의 1급·2급은 문서와 평가표를 가르는 핵심 식별자이므로 바로 뒤의
+  // 등급만 보존한다(예: "인명구조사 2급").
+  if (!subjectToken) return "";
+  const grade = subjectCandidates
+    .slice(subjectIndex + 1, subjectIndex + 3)
+    .find((token) => /^(?:전문|특급|[1-9]급)$/.test(token));
+  return grade ? `${subjectToken} ${grade}` : subjectToken;
 }
 
 function compactSearchText(text: string, contextHint = ""): string {
@@ -1040,6 +1089,66 @@ async function keywordRowsForPlan(
   };
 }
 
+// 분야를 고르지 않은 질문은 정밀 키워드 결과의 문서명·제목·본문에서 분야를 먼저 찾는다.
+// 명확한 문서명이 있는 질의를 거대한 전역 벡터 검색으로 보내지 않아 시간 초과를 줄이고,
+// 사용자가 UI에서 분야를 추측해 선택해야 하는 부담을 없앤다.
+function inferCategoryFromKeywordRows(
+  plans: readonly TopicSearchPlan[],
+  keywordLists: readonly RagRow[][]
+): string | null {
+  const scores = new Map<
+    string,
+    { score: number; sourceMatches: number; rowIds: Set<string> }
+  >();
+
+  plans.forEach((plan, index) => {
+    if (plan.mode !== "precise" || !isSpecificTopicSubject(plan.subject)) return;
+    for (const row of keywordLists[index] ?? []) {
+      const category = row.metadata?.[CATEGORY_FIELD];
+      if (typeof category !== "string" || !category.trim()) continue;
+
+      const sourceMatches = textMatchesSubject(
+        row.metadata?.source ?? "",
+        plan.subject,
+        row.metadata?.["Header 2"] ?? ""
+      );
+      const pageMatches = textMatchesSubject(
+        `${row.metadata?.["Header 2"] ?? ""} ${row.content}`,
+        plan.subject,
+        row.metadata?.source ?? ""
+      );
+      if (!sourceMatches && !pageMatches) continue;
+
+      const key = category.trim();
+      const current = scores.get(key) ?? {
+        score: 0,
+        sourceMatches: 0,
+        rowIds: new Set<string>(),
+      };
+      if (!current.rowIds.has(row.id)) {
+        current.rowIds.add(row.id);
+        current.score += sourceMatches ? 6 : 1;
+        if (sourceMatches) current.sourceMatches += 1;
+      }
+      scores.set(key, current);
+    }
+  });
+
+  const ranked = Array.from(scores.entries()).sort(
+    (a, b) =>
+      b[1].score - a[1].score ||
+      b[1].sourceMatches - a[1].sourceMatches ||
+      b[1].rowIds.size - a[1].rowIds.size
+  );
+  const best = ranked[0];
+  if (!best) return null;
+  // 파일명 자체가 주제와 맞거나, 서로 다른 두 청크가 같은 분야를 지지할 때만 자동 적용한다.
+  // 한 페이지의 우연한 본문 일치로 분야를 좁히는 오판은 피한다.
+  if (best[1].sourceMatches === 0 && best[1].rowIds.size < 2) return null;
+  if (ranked[1] && ranked[1][1].score === best[1].score) return null;
+  return best[0];
+}
+
 // 하이브리드 후보 검색:
 // ① 벡터 1회 + ② 전체 OR/하위주제 AND 키워드 검색 병렬
 // ③ 하위주제별 우선 병합 + ④ RRF 보강.
@@ -1052,33 +1161,50 @@ async function hybridCandidates(
   candidateCount: number
 ): Promise<{ rows: RagRow[]; degraded: boolean; protectedIds: string[] }> {
   const queryLimit = Math.max(48, Math.min(candidateCount, 80));
-  const [vecResult, ...keywordResults] = await Promise.all([
-    (async () => {
-      if (!embedding) return { rows: [] as RagRow[], degraded: false };
-      try {
-        const { data, error } = await withRagDbTimeout(
-          (supabase.rpc as CallableFunction)(MATCH_FN, {
-            query_embedding: toPgVector(embedding),
-            match_count: candidateCount,
-            match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
-            filter: category ? { [CATEGORY_FIELD]: category } : {},
-          })
-        );
-        if (error) {
-          console.error("[rag-external] vector error:", error.message);
-          return { rows: [] as RagRow[], degraded: true };
-        }
-        return { rows: (data ?? []) as RagRow[], degraded: false };
-      } catch (error) {
-        console.error(
-          "[rag-external] vector request failed:",
-          error instanceof Error ? error.message : error
-        );
+  const vectorRows = async (resolvedCategory: string | null | undefined) => {
+    if (!embedding) return { rows: [] as RagRow[], degraded: false };
+    try {
+      const { data, error } = await withRagDbTimeout(
+        (supabase.rpc as CallableFunction)(MATCH_FN, {
+          query_embedding: toPgVector(embedding),
+          match_count: candidateCount,
+          match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
+          filter: resolvedCategory ? { [CATEGORY_FIELD]: resolvedCategory } : {},
+        })
+      );
+      if (error) {
+        console.error("[rag-external] vector error:", error.message);
         return { rows: [] as RagRow[], degraded: true };
       }
-    })(),
-    ...plans.map((plan) => keywordRowsForPlan(supabase, plan, category, queryLimit)),
-  ]);
+      return { rows: (data ?? []) as RagRow[], degraded: false };
+    } catch (error) {
+      console.error(
+        "[rag-external] vector request failed:",
+        error instanceof Error ? error.message : error
+      );
+      return { rows: [] as RagRow[], degraded: true };
+    }
+  };
+
+  let vecResult: { rows: RagRow[]; degraded: boolean };
+  let keywordResults: { rows: RagRow[]; degraded: boolean }[];
+  if (category?.trim()) {
+    [vecResult, ...keywordResults] = await Promise.all([
+      vectorRows(category),
+      ...plans.map((plan) => keywordRowsForPlan(supabase, plan, category, queryLimit)),
+    ]);
+  } else {
+    // 자동 모드에서는 빠른 FTS 결과로 분야를 정한 뒤 벡터 검색을 보낸다. 정확한 문서명이
+    // 있는 질문이 filter={} 전역 검색 시간 초과로 키워드 전용으로 강등되는 것을 막는다.
+    keywordResults = await Promise.all(
+      plans.map((plan) => keywordRowsForPlan(supabase, plan, null, queryLimit))
+    );
+    const inferredCategory = inferCategoryFromKeywordRows(
+      plans,
+      keywordResults.map((result) => result.rows)
+    );
+    vecResult = await vectorRows(inferredCategory);
+  }
 
   const keywordLists = keywordResults.map((result) => result.rows);
   const precisePlans = plans.filter((plan) => plan.mode === "precise");
