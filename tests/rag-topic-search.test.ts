@@ -25,6 +25,8 @@ describe("buildTopicSearchPlans", () => {
       "doffing",
       "decontamination",
       "emergency",
+      "procedure-steps",
+      "procedure-safety",
     ]);
     expect(plans.find((plan) => plan.id === "precheck")?.queries).toContain(
       "화학보호복 점검"
@@ -63,30 +65,44 @@ describe("buildTopicSearchPlans", () => {
     );
   });
 
-  it("절차 단서가 없는 검색어도 OR 검색과 원문 AND 검색을 함께 만든다", () => {
+  it("표준작전절차 질문은 전체 검색에 행동절차·안전 근거를 보탠다", () => {
     const plans = buildTopicSearchPlans("소방드론 표준작전절차");
 
-    expect(plans).toHaveLength(2);
+    expect(plans).toHaveLength(3);
     expect(plans[0].mode).toBe("recall");
-    expect(plans[1]).toMatchObject({ id: "topic", mode: "precise" });
+    expect(plans.map((plan) => plan.id)).toEqual([
+      "recall",
+      "procedure-steps",
+      "procedure-safety",
+    ]);
   });
 
-  it("암모니아 누출 주제를 누출·누설·유출·차단·중화 검색으로 확장한다", () => {
+  it("암모니아 누출 주제를 물질·보호·구역·차단·제독 근거로 확장한다", () => {
     const plans = buildTopicSearchPlans("암모니아 누출시 대응");
     const leakPlan = plans.find((plan) => plan.id === "leak-control");
+    const queries = plans.flatMap((plan) => plan.queries);
 
     expect(leakPlan).toMatchObject({
       mode: "precise",
       subject: "암모니아",
       protect: true,
     });
-    expect(leakPlan?.queries).toEqual(
+    expect(plans.map((plan) => plan.id)).toEqual(
       expect.arrayContaining([
-        "암모니아 누출",
-        "암모니아 누설",
-        "암모니아 유출",
-        "암모니아 차단",
+        "chemical-identification",
+        "chemical-ppe",
+        "chemical-zoning",
+        "chemical-control",
+        "chemical-decontamination",
+      ])
+    );
+    expect(queries).toEqual(
+      expect.arrayContaining([
+        "보호장비",
+        "통제구역",
+        "암모니아 누출 차단",
         "암모니아 중화",
+        "암모니아 제독",
       ])
     );
     expect(plans.flatMap((plan) => plan.queries).length).toBeLessThanOrEqual(
@@ -233,6 +249,18 @@ describe("classifyTopicSubjectAffinity", () => {
     expect(classifyTopicSubjectAffinity("고층", ["점검"], "점검", "본문")).toBe(
       "legacy"
     );
+  });
+
+  it("정확한 문서명이 주제를 담으면 일반 Page 헤더도 해당 문서 근거로 인정한다", () => {
+    expect(
+      classifyTopicSubjectAffinity(
+        "인명구조사 2급",
+        ["준비물", "장비"],
+        "Page 6",
+        "평가에 필요한 준비물과 장비를 확인한다.",
+        "2022년 인명구조사 2급 실기평가표.pdf"
+      )
+    ).toBe("A");
   });
 });
 

@@ -61,6 +61,17 @@ describe("buildSystemPrompt (환각 가드레일)", () => {
     expect(prompt).toContain("참고 자료에 없는 문서명·페이지는 만들지 마세요");
   });
 
+  it("질문별 답변 구성은 참고자료 앞에 두되 기존 근거 경계를 유지한다", () => {
+    const guidance = "[답변 유형: 현장 절차형]\n1. 준비·사전점검\n2. 단계별 행동절차";
+    const prompt = buildSystemPrompt("자료 본문", guidance);
+
+    expect(prompt).toContain(`[질문별 답변 구성]\n${guidance}`);
+    expect(prompt.indexOf("[질문별 답변 구성]")).toBeLessThan(
+      prompt.indexOf("[참고 자료]")
+    );
+    expect(prompt).toContain("지어내지 마세요");
+  });
+
   it("표준 문구가 실수로 비워지지 않았다", () => {
     expect(NOT_FOUND_MESSAGE.trim().length).toBeGreaterThan(10);
     expect(NOT_FOUND_MESSAGE).toContain("확인되지 않습니다");

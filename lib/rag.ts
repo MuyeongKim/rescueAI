@@ -123,7 +123,7 @@ export async function searchContext(
 }
 
 // §9.2 시스템 프롬프트 — 환각 가드레일의 단일 출처(single source of truth)
-export function buildSystemPrompt(contextText: string): string {
+export function buildSystemPrompt(contextText: string, answerGuidance = ""): string {
   const reference =
     contextText.trim().length > 0
       ? contextText
@@ -151,6 +151,8 @@ export function buildSystemPrompt(contextText: string): string {
    검증된 출처는 시스템이 답변 맨 아래의 '근거 자료' 영역에 중복 없이 한 번만 자동 표시합니다.
    따라서 별도의 출처 목록도 작성하지 말고, 참고 자료에 없는 문서명·페이지는 만들지 마세요.
 9. 답변을 풍부하게 만들기 위해 일반 상식이나 추측을 덧붙이지 마세요. 내용이 부족하면 부족한 범위를 명확히 밝히세요.
+
+${answerGuidance ? `[질문별 답변 구성]\n${answerGuidance}\n` : ""}
 
 [참고 자료]
 ${reference}`;

@@ -351,6 +351,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(supabase.client.rpc).toHaveBeenCalledTimes(1);
     expect(supabase.client.rpc.mock.calls[0]?.[1]?.filter).toEqual({
       edu_category: "일반구조",
+      source: "2022년 인명구조사 2급 실기평가표 개정(최종본).pdf",
     });
     expect(result.contextText).toContain("인명구조사 2급 실기평가 종목");
     expect(result.sources[0]?.doc).toContain("인명구조사 2급 실기평가표");
@@ -706,10 +707,9 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     try {
       const result = await searchExternalRag(TOPIC, null, 8, "화학사고");
 
-      // recall(0) 다음의 selection·precheck·donning·doffing·decon·emergency 첫 행.
-      for (const page of [41, 42, 43, 44, 46, 48]) {
-        expect(result.contextText).toContain(`p.${page}]`);
-      }
+      expect(result.contextText).toContain("[확인 항목: 사전점검]");
+      expect(result.contextText).toContain("[확인 항목: 단계별 행동절차]");
+      expect(result.contextText).toContain("[확인 항목: 안전·중단 기준]");
       expect(result.matched).toBe(8);
       expect(mocks.generateObject).toHaveBeenCalledTimes(1);
     } finally {

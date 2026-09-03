@@ -11,6 +11,7 @@ import { requireApiUser } from "@/lib/auth";
 import { prepareChatAnswerText, uniqueChatSources } from "@/lib/chat-answer";
 import { trimChatHistory } from "@/lib/chat-history";
 import { buildRetrievalQuestion } from "@/lib/chat-retrieval-query";
+import { answerPlanGuidance, buildChatAnswerPlan } from "@/lib/chat-answer-plan";
 import { searchContext, buildSystemPrompt, NOT_FOUND_MESSAGE } from "@/lib/rag";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { DEMO, demoChatAnswer, demoChatSources } from "@/lib/demo";
@@ -122,7 +123,10 @@ export async function POST(req: Request) {
   }
 
   const startedAt = Date.now();
-  const system = buildSystemPrompt(contextText);
+  const system = buildSystemPrompt(
+    contextText,
+    answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion))
+  );
 
   // 4~5) Claude 스트리밍 + 메타데이터(conversationId, sources) 전달
   return createDataStreamResponse({

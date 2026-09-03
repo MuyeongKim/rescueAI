@@ -1,5 +1,5 @@
 // 통합 테스트(실제 Gemini·Supabase 호출): 사용자가 "드론 운용" 분야를 선택해도
-// 현장지휘·공통으로 분류된 SOP 운용 절차를 전 분야 안전 폴백으로 회수하는지 검증한다.
+// 실제 자료의 운용 절차를 전 분야 안전 폴백으로 회수하는지 검증한다.
 import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -47,7 +47,7 @@ function loadEnv(snapshot: EnvSnapshot): void {
 // 기본 `npm test`에서는 건너뛰고, RUN_RAG_INTEGRATION=1 일 때만 실행한다.
 //   RUN_RAG_INTEGRATION=1 npx vitest run tests/rag-drone.integration.test.ts
 describe.skipIf(process.env.RUN_RAG_INTEGRATION !== "1")(
-  "RAG: 드론 운용 분야 선택 시 SOP 본문 검색(통합)",
+  "RAG: 드론 운용 분야 선택 시 운용 절차 본문 검색(통합)",
   () => {
     const envSnapshot: EnvSnapshot = new Map();
 
@@ -77,9 +77,11 @@ describe.skipIf(process.env.RUN_RAG_INTEGRATION !== "1")(
       // 제목·본문 주제순도 필터가 저관련 청크로 topK를 강제 충전하지 않아도 실제 근거는 남아야 한다.
       expect(result.matched).toBeGreaterThan(0);
       expect(hasBody).toBe(true);
-      expect(result.contextText).toMatch(/기체점검|기체\s*점검/);
-      expect(result.contextText).toMatch(/배터리\s*충전상태|배터리\s*상태/);
-      expect(result.contextText).toMatch(/장애물.*기상|기상.*비행가능여부/s);
+      expect(result.contextText).toMatch(/기체.{0,30}점검|기체점검/s);
+      expect(result.contextText).toMatch(/배터리.{0,20}(?:잔량|충전|상태)/s);
+      expect(result.contextText).toMatch(
+        /장애물.*(?:기상|날씨)|(?:기상|날씨).*장애물/s
+      );
       expect(result.degraded).toBe(true);
     }, 60_000);
   }

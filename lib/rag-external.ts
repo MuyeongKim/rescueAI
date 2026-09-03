@@ -522,6 +522,8 @@ export type TopicSearchPlan = {
   subject: string;
   facetTerms: string[];
   protect: boolean;
+  allowFacetOnly: boolean;
+  scopeTerms: string[];
 };
 
 type FacetDefinition = {
@@ -529,11 +531,46 @@ type FacetDefinition = {
   triggers: RegExp;
   queryTerms: string[][];
   recallTerms: string[];
+  queryWithoutSubject?: boolean;
+  allowFacetOnly?: boolean;
+  scopeTerms?: string[];
+};
+
+const FACET_DISPLAY_LABELS: Record<string, string> = {
+  "qualification-items": "평가 종목",
+  "qualification-process": "평가 진행",
+  "qualification-equipment": "준비물·장비",
+  "qualification-scoring": "감점·실격",
+  "chemical-identification": "물질 확인",
+  "chemical-ppe": "보호장비",
+  "chemical-zoning": "위험구역·통제",
+  "chemical-control": "누출원 차단",
+  "chemical-decontamination": "제독·오염통제",
+  "training-roles": "팀 편성·역할",
+  "training-equipment": "훈련 장비",
+  "training-procedure": "훈련 행동절차",
+  "training-safety": "안전통제",
+  "training-evaluation": "훈련 평가",
+  "procedure-steps": "단계별 행동절차",
+  "procedure-safety": "안전·중단 기준",
+  precheck: "사전점검",
+  donning: "착용",
+  doffing: "탈의",
+  decontamination: "제독",
+  "leak-control": "누출 대응",
+  emergency: "이상 시 조치",
+};
+
+type HybridCandidateResult = {
+  rows: RagRow[];
+  degraded: boolean;
+  protectedIds: string[];
+  protectedFacets: Record<string, string[]>;
 };
 
 // 전체 OR 질의까지 포함한 실제 Supabase textSearch 호출 수 상한.
 // 5~6명 동시 시범운영에서도 한 질문이 과도한 병렬 요청을 만들지 않게 고정한다.
-export const MAX_KEYWORD_SEARCH_QUERIES = 10;
+export const MAX_KEYWORD_SEARCH_QUERIES = 12;
 
 // 절차형 질문의 공통 단계. 화학보호복뿐 아니라 공기호흡기·로프·펌프·잠수장비에도
 // 같은 분해 규칙을 적용하고, OCR 별칭은 실제 적재 자료에서 확인된 최소 범위만 둔다.
@@ -564,6 +601,77 @@ const PROCEDURE_FACETS: readonly FacetDefinition[] = [
     queryTerms: [["감점"], ["실격"]],
     recallTerms: ["감점", "실격", "배점", "합격"],
   },
+  // 화학물질 누출 질문은 '차단' 한 페이지만 찾지 않고 물질확인→보호→구역통제→
+  // 차단→제독의 현장 흐름을 각각 검색한다. 특정 물질명이 있을 때만 켜 과확장을 막는다.
+  {
+    id: "chemical-identification",
+    triggers: /암모니아|염소|황화수소|화학물질|유해물질/,
+    queryTerms: [["물질", "특성"]],
+    recallTerms: ["물질확인", "물질식별", "물질특성", "측정"],
+  },
+  {
+    id: "chemical-ppe",
+    triggers: /암모니아|염소|황화수소|화학물질|유해물질/,
+    queryTerms: [["보호장비"]],
+    recallTerms: ["개인보호장비", "보호복", "공기호흡기", "보호장비"],
+    queryWithoutSubject: true,
+    allowFacetOnly: true,
+    scopeTerms: ["화학", "유해물질", "오염", "누출"],
+  },
+  {
+    id: "chemical-zoning",
+    triggers: /암모니아|염소|황화수소|화학물질|유해물질/,
+    queryTerms: [["통제구역"], ["위험구역"]],
+    recallTerms: ["통제구역", "위험구역", "Hot zone", "Warm zone", "Cold zone"],
+    // 통제구역은 특정 물질 페이지가 아니라 화학사고 공통 절차에 설명되는 경우가 많다.
+    queryWithoutSubject: true,
+    allowFacetOnly: true,
+    scopeTerms: ["화학", "유해물질", "오염", "누출"],
+  },
+  {
+    id: "chemical-control",
+    triggers: /암모니아|염소|황화수소|화학물질|유해물질/,
+    queryTerms: [["누출", "차단"], ["중화"]],
+    recallTerms: ["누출원", "차단", "봉쇄", "밸브", "중화"],
+  },
+  {
+    id: "chemical-decontamination",
+    triggers: /암모니아|염소|황화수소|화학물질|유해물질/,
+    queryTerms: [["제독"]],
+    recallTerms: ["제독", "오염통제", "오염도", "2차오염"],
+  },
+  // 넓은 훈련 주제도 역할·장비·행동·안전·평가를 각각 확보해, 자료 한두 페이지를
+  // 요약하는 수준이 아니라 실제 훈련안을 설명할 수 있는 근거 묶음으로 만든다.
+  {
+    id: "training-roles",
+    triggers: /훈련|교육|숙달|교안/,
+    queryTerms: [["역할"]],
+    recallTerms: ["역할", "임무", "지휘", "팀"],
+  },
+  {
+    id: "training-equipment",
+    triggers: /훈련|교육|숙달|교안/,
+    queryTerms: [["장비"]],
+    recallTerms: ["준비물", "장비", "점검"],
+  },
+  {
+    id: "training-procedure",
+    triggers: /훈련|교육|숙달|교안/,
+    queryTerms: [["절차"]],
+    recallTerms: ["행동절차", "절차", "단계"],
+  },
+  {
+    id: "training-safety",
+    triggers: /훈련|교육|숙달|교안/,
+    queryTerms: [["안전"]],
+    recallTerms: ["안전", "위험", "중단", "통제"],
+  },
+  {
+    id: "training-evaluation",
+    triggers: /훈련|교육|숙달|교안/,
+    queryTerms: [["평가"]],
+    recallTerms: ["평가", "숙달", "확인", "종료"],
+  },
   {
     id: "selection",
     triggers: /등급|레벨|선정|선택|적용범위/,
@@ -572,7 +680,7 @@ const PROCEDURE_FACETS: readonly FacetDefinition[] = [
   },
   {
     id: "precheck",
-    triggers: /점검|검사|확인|사전|착용\s*전/,
+    triggers: /점검|검사|확인|사전|준비|착용\s*전/,
     queryTerms: [["점검"]],
     recallTerms: ["점검", "검사", "확인"],
   },
@@ -608,6 +716,19 @@ const PROCEDURE_FACETS: readonly FacetDefinition[] = [
     triggers: /중단|철수|비상|이상|파손|누설|고갈|보고/,
     queryTerms: [["이상", "보고"], ["파손"]],
     recallTerms: ["중단", "철수", "비상", "이상", "파손", "누설", "보고"],
+  },
+  // 도메인별 세부 계획을 먼저 채운 뒤 남는 검색 예산에서 일반 절차·안전 근거를 보완한다.
+  {
+    id: "procedure-steps",
+    triggers: /방법|절차|순서|어떻게|착용|탈의|운용|사용/,
+    queryTerms: [["절차"]],
+    recallTerms: ["준비", "절차", "순서", "완료"],
+  },
+  {
+    id: "procedure-safety",
+    triggers: /방법|절차|순서|어떻게|착용|탈의|운용|사용/,
+    queryTerms: [["안전"]],
+    recallTerms: ["안전", "주의", "이상", "중단", "보고"],
   },
 ] as const;
 
@@ -704,6 +825,15 @@ function inferTopicSubject(topic: string): string {
   return grade ? `${subjectToken} ${grade}` : subjectToken;
 }
 
+function facetSearchSubject(subject: string): string {
+  const normalized = normalizeSearchText(subject);
+  if (!normalized.includes(" ") && normalized.endsWith("사고")) {
+    const root = normalized.slice(0, -2);
+    if (root.length >= 2) return root;
+  }
+  return normalized;
+}
+
 function compactSearchText(text: string, contextHint = ""): string {
   return normalizeKnownOcrErrors(text, contextHint)
     .toLowerCase()
@@ -753,6 +883,20 @@ function textMatchesSubject(text: string, subject: string, contextHint = ""): bo
     return true;
   }
 
+  // 산악사고·화학사고처럼 문서 제목에서는 '사고'가 생략되고 분야명만 쓰이는 경우를
+  // 허용한다. 두 글자 이상의 단일 분야 어근에만 적용해 일반 '사고' 과매칭을 막는다.
+  const incidentRoot =
+    subjectTokens.length === 1 && subjectTokens[0].endsWith("사고")
+      ? subjectTokens[0].slice(0, -2)
+      : "";
+  if (
+    incidentRoot.length >= 2 &&
+    !GENERIC_SUBJECTS.has(incidentRoot) &&
+    target.includes(incidentRoot)
+  ) {
+    return true;
+  }
+
   // OCR 청크 경계에서 복합 장비명의 앞부분이 잘린 경우에도 핵심 명칭을 살린다.
   // 5자 이상의 단일 복합어만 뒤 3자를 사용해 짧은 일반어 과매칭을 피한다.
   return subjectTokens.length === 1 &&
@@ -778,11 +922,15 @@ export function classifyTopicSubjectAffinity(
   subject: string,
   facetTerms: readonly string[],
   header: string,
-  content: string
+  content: string,
+  source = ""
 ): TopicSubjectAffinity {
   if (!isSpecificTopicSubject(subject)) return "legacy";
 
-  const headerHasSubject = textMatchesSubject(header, subject, content);
+  // 파일명이 질문 주제와 정확히 맞는 문서는 Page 3 같은 일반 헤더여도 주제 문서로 인정한다.
+  // 단, 절차 facet 자체는 해당 페이지 본문이나 헤더에 있어야 A가 되므로 파일명만으로
+  // 관련 없는 페이지가 보호되는 일은 없다.
+  const headerHasSubject = textMatchesSubject(`${source} ${header}`, subject, content);
   const bodyHasSubject = textMatchesSubject(content, subject, header);
   const headerHasFacet = textMatchesFacet(header, facetTerms, content);
   const bodyHasFacet = textMatchesFacet(content, facetTerms, header);
@@ -793,6 +941,27 @@ export function classifyTopicSubjectAffinity(
   if (headerHasFacet) return "B";
   if (facetTerms.length === 0 || bodyHasFacet) return "C";
   return "D";
+}
+
+function classifyRowForSearchPlan(
+  plan: TopicSearchPlan,
+  row: RagRow
+): TopicSubjectAffinity {
+  const affinity = classifyTopicSubjectAffinity(
+    plan.subject,
+    plan.facetTerms,
+    row.metadata?.["Header 2"] ?? "",
+    row.content,
+    row.metadata?.source ?? ""
+  );
+  if (affinity !== "D" || !plan.allowFacetOnly) return affinity;
+
+  const pageText = `${row.metadata?.["Header 2"] ?? ""} ${row.content}`;
+  const scopeText = `${row.metadata?.source ?? ""} ${pageText}`;
+  return textMatchesFacet(pageText, plan.facetTerms) &&
+    textMatchesFacet(scopeText, plan.scopeTerms)
+    ? "B"
+    : "D";
 }
 
 function preciseKeywordQuery(terms: string[]): string {
@@ -839,6 +1008,8 @@ export function buildTopicSearchPlans(
           subject,
           facetTerms: [],
           protect: false,
+          allowFacetOnly: false,
+          scopeTerms: [],
         },
       ]
     : [];
@@ -851,7 +1022,12 @@ export function buildTopicSearchPlans(
     const queries = Array.from(
       new Set(
         facet.queryTerms
-          .map((terms) => preciseKeywordQuery([subject, ...terms]))
+          .map((terms) =>
+            preciseKeywordQuery([
+              ...(facet.queryWithoutSubject ? [] : [facetSearchSubject(subject)]),
+              ...terms,
+            ])
+          )
           .filter(Boolean)
       )
     ).slice(0, MAX_KEYWORD_SEARCH_QUERIES - queryCount);
@@ -865,6 +1041,8 @@ export function buildTopicSearchPlans(
       facetTerms: [...facet.recallTerms],
       // LLM 확장어로만 생긴 보조 facet은 회수에는 쓰되 최종 슬롯을 강제로 잠그지 않는다.
       protect: explicitFacet,
+      allowFacetOnly: facet.allowFacetOnly ?? false,
+      scopeTerms: facet.scopeTerms ?? [],
     });
     queryCount += queries.length;
   }
@@ -885,6 +1063,8 @@ export function buildTopicSearchPlans(
         subject,
         facetTerms: [],
         protect: true,
+        allowFacetOnly: false,
+        scopeTerms: [],
       });
     }
   }
@@ -1089,17 +1269,23 @@ async function keywordRowsForPlan(
   };
 }
 
-// 분야를 고르지 않은 질문은 정밀 키워드 결과의 문서명·제목·본문에서 분야를 먼저 찾는다.
-// 명확한 문서명이 있는 질의를 거대한 전역 벡터 검색으로 보내지 않아 시간 초과를 줄이고,
-// 사용자가 UI에서 분야를 추측해 선택해야 하는 부담을 없앤다.
-function inferCategoryFromKeywordRows(
+type InferredSearchScope = {
+  category: string | null;
+  primarySource: string | null;
+};
+
+// 분야를 고르지 않은 질문은 정밀 키워드 결과에서 분야와 주 문서를 먼저 찾는다.
+// 문서명이 주제와 정확히 맞으면 그 문서 안에서 벡터 검색하고, 제목 일치가 약하면 분야만
+// 적용한다. 한 페이지의 우연한 본문 일치로 문서를 고정하지 않는다.
+function inferSearchScopeFromKeywordRows(
   plans: readonly TopicSearchPlan[],
   keywordLists: readonly RagRow[][]
-): string | null {
+): InferredSearchScope {
   const scores = new Map<
     string,
     { score: number; sourceMatches: number; rowIds: Set<string> }
   >();
+  const sourceScores = new Map<string, { score: number; rowIds: Set<string> }>();
 
   plans.forEach((plan, index) => {
     if (plan.mode !== "precise" || !isSpecificTopicSubject(plan.subject)) return;
@@ -1118,6 +1304,16 @@ function inferCategoryFromKeywordRows(
         row.metadata?.source ?? ""
       );
       if (!sourceMatches && !pageMatches) continue;
+
+      const source = row.metadata?.source?.trim();
+      if (source && sourceMatches) {
+        const sourceScore = sourceScores.get(source) ?? { score: 0, rowIds: new Set<string>() };
+        if (!sourceScore.rowIds.has(row.id)) {
+          sourceScore.rowIds.add(row.id);
+          sourceScore.score += 1;
+        }
+        sourceScores.set(source, sourceScore);
+      }
 
       const key = category.trim();
       const current = scores.get(key) ?? {
@@ -1141,12 +1337,27 @@ function inferCategoryFromKeywordRows(
       b[1].rowIds.size - a[1].rowIds.size
   );
   const best = ranked[0];
-  if (!best) return null;
+  let category: string | null = null;
   // 파일명 자체가 주제와 맞거나, 서로 다른 두 청크가 같은 분야를 지지할 때만 자동 적용한다.
   // 한 페이지의 우연한 본문 일치로 분야를 좁히는 오판은 피한다.
-  if (best[1].sourceMatches === 0 && best[1].rowIds.size < 2) return null;
-  if (ranked[1] && ranked[1][1].score === best[1].score) return null;
-  return best[0];
+  if (
+    best &&
+    (best[1].sourceMatches > 0 || best[1].rowIds.size >= 2) &&
+    (!ranked[1] || ranked[1][1].score !== best[1].score)
+  ) {
+    category = best[0];
+  }
+
+  const rankedSources = Array.from(sourceScores.entries()).sort(
+    (a, b) => b[1].score - a[1].score || b[1].rowIds.size - a[1].rowIds.size
+  );
+  const bestSource = rankedSources[0];
+  const primarySource =
+    bestSource &&
+    (!rankedSources[1] || rankedSources[1][1].score !== bestSource[1].score)
+      ? bestSource[0]
+      : null;
+  return { category, primarySource };
 }
 
 // 하이브리드 후보 검색:
@@ -1159,9 +1370,12 @@ async function hybridCandidates(
   plans: TopicSearchPlan[],
   category: string | null | undefined,
   candidateCount: number
-): Promise<{ rows: RagRow[]; degraded: boolean; protectedIds: string[] }> {
+): Promise<HybridCandidateResult> {
   const queryLimit = Math.max(48, Math.min(candidateCount, 80));
-  const vectorRows = async (resolvedCategory: string | null | undefined) => {
+  const vectorRows = async (
+    resolvedCategory: string | null | undefined,
+    primarySource: string | null = null
+  ) => {
     if (!embedding) return { rows: [] as RagRow[], degraded: false };
     try {
       const { data, error } = await withRagDbTimeout(
@@ -1169,7 +1383,10 @@ async function hybridCandidates(
           query_embedding: toPgVector(embedding),
           match_count: candidateCount,
           match_threshold: 0.3, // 약한 벡터 매칭 차단(정상 0.5+)
-          filter: resolvedCategory ? { [CATEGORY_FIELD]: resolvedCategory } : {},
+          filter: {
+            ...(resolvedCategory ? { [CATEGORY_FIELD]: resolvedCategory } : {}),
+            ...(primarySource ? { source: primarySource } : {}),
+          },
         })
       );
       if (error) {
@@ -1199,11 +1416,28 @@ async function hybridCandidates(
     keywordResults = await Promise.all(
       plans.map((plan) => keywordRowsForPlan(supabase, plan, null, queryLimit))
     );
-    const inferredCategory = inferCategoryFromKeywordRows(
+    const inferredScope = inferSearchScopeFromKeywordRows(
       plans,
       keywordResults.map((result) => result.rows)
     );
-    vecResult = await vectorRows(inferredCategory);
+    if (inferredScope.primarySource || inferredScope.category) {
+      keywordResults = keywordResults.map((result) => ({
+        ...result,
+        rows: [...result.rows].sort((a, b) => {
+          const scopeScore = (row: RagRow): number =>
+            (inferredScope.primarySource &&
+            row.metadata?.source === inferredScope.primarySource
+              ? 2
+              : 0) +
+            (inferredScope.category &&
+            row.metadata?.[CATEGORY_FIELD] === inferredScope.category
+              ? 1
+              : 0);
+          return scopeScore(b) - scopeScore(a);
+        }),
+      }));
+    }
+    vecResult = await vectorRows(inferredScope.category, inferredScope.primarySource);
   }
 
   const keywordLists = keywordResults.map((result) => result.rows);
@@ -1224,12 +1458,7 @@ async function hybridCandidates(
     const bRows: RagRow[] = [];
     const fallbackRows: RagRow[] = [];
     for (const row of rows) {
-      const affinity = classifyTopicSubjectAffinity(
-        plan.subject,
-        plan.facetTerms,
-        row.metadata?.["Header 2"] ?? "",
-        row.content
-      );
+      const affinity = classifyRowForSearchPlan(plan, row);
       if (affinity === "A") aRows.push(row);
       else if (affinity === "B") bRows.push(row);
       else if (affinity === "C") fallbackRows.push(row);
@@ -1239,10 +1468,9 @@ async function hybridCandidates(
   const preciseLists = affinityPlanRows
     .map(({ priorityRows }) => priorityRows)
     .filter((rows) => rows.length > 0);
-  const protectedLists = affinityPlanRows
-    .filter(({ plan }) => plan.protect)
-    .map(({ priorityRows }) => priorityRows)
-    .filter((rows) => rows.length > 0);
+  const protectedPlanRows = affinityPlanRows.filter(
+    ({ plan, priorityRows }) => plan.protect && priorityRows.length > 0
+  );
 
   const requiredFacetPlans = precisePlans.filter(
     (plan) => plan.protect && plan.facetTerms.length > 0
@@ -1282,11 +1510,13 @@ async function hybridCandidates(
   // 각 하위주제의 첫 유효 근거는 최종 재순위·문서 다양성 단계에서도 보호한다.
   const protectedRows: RagRow[] = [];
   const protectedSeen = new Set<string>();
-  for (const rows of protectedLists) {
-    const representative = rows.find((row) => !protectedSeen.has(row.id));
+  const protectedFacets = new Map<string, string[]>();
+  for (const { plan, priorityRows } of protectedPlanRows) {
+    const representative = priorityRows.find((row) => !protectedSeen.has(row.id));
     if (!representative) continue;
     protectedSeen.add(representative.id);
     protectedRows.push(representative);
+    protectedFacets.set(representative.id, [plan.id]);
   }
 
   // 각 하위주제에서 상위 3개까지 우선 병합한 뒤 벡터/RRF 결과로 나머지를 채운다.
@@ -1311,12 +1541,7 @@ async function hybridCandidates(
     for (const row of fused) {
       let hasPriorityAffinity = false;
       for (const plan of precisePlans) {
-        const affinity = classifyTopicSubjectAffinity(
-          plan.subject,
-          plan.facetTerms,
-          row.metadata?.["Header 2"] ?? "",
-          row.content
-        );
+        const affinity = classifyRowForSearchPlan(plan, row);
         if (affinity === "A" || affinity === "B") {
           hasPriorityAffinity = true;
           break;
@@ -1329,12 +1554,7 @@ async function hybridCandidates(
       if (
         fallbackPlans.some(
           (plan) =>
-            classifyTopicSubjectAffinity(
-              plan.subject,
-              plan.facetTerms,
-              row.metadata?.["Header 2"] ?? "",
-              row.content
-            ) === "C"
+            classifyRowForSearchPlan(plan, row) === "C"
         )
       ) {
         fusedFallback.push(row);
@@ -1369,6 +1589,7 @@ async function hybridCandidates(
   return {
     rows: rows.slice(0, candidateCount),
     protectedIds: protectedRows.map((row) => row.id),
+    protectedFacets: Object.fromEntries(protectedFacets),
     degraded:
       vecResult.degraded || keywordResults.some((result) => result.degraded),
   };
@@ -1383,7 +1604,7 @@ async function hybridCandidatesWithCategoryFallback(
   plans: TopicSearchPlan[],
   category: string | null | undefined,
   candidateCount: number
-): Promise<{ rows: RagRow[]; degraded: boolean; protectedIds: string[] }> {
+): Promise<HybridCandidateResult> {
   const primary = await hybridCandidates(
     supabase,
     embedding,
@@ -1478,7 +1699,14 @@ export async function searchExternalRag(
   const top = [...protectedRows, ...reranked].slice(0, keep);
 
   const contextText = top
-    .map((r) => `[${labelOf(r.meta)}]\n${r.text}`)
+    .map((r) => {
+      const purposes = (candidates.protectedFacets[r.id] ?? [])
+        .map((facet) => FACET_DISPLAY_LABELS[facet] ?? facet)
+        .filter(Boolean);
+      const purposeLine =
+        purposes.length > 0 ? `\n[확인 항목: ${purposes.join(" · ")}]` : "";
+      return `[${labelOf(r.meta)}]${purposeLine}\n${r.text}`;
+    })
     .join("\n\n---\n\n");
 
   // 출처는 문서/페이지 단위 중복 제거, 최대 3개. 자료실 문서가 있으면 원문 링크를 연결한다.
