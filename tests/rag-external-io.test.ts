@@ -31,6 +31,7 @@ import {
   COMMON_SOP_CATEGORY,
   fetchExternalRagContext,
   fetchExternalSopContext,
+  MAX_CONCURRENT_KEYWORD_SEARCHES,
   MAX_KEYWORD_SEARCH_QUERIES,
   searchExternalRag,
   sopCategoryScope,
@@ -139,7 +140,7 @@ function hasCategoryFilter(record: QueryRecord, category: string): boolean {
 }
 
 function createSupabaseMock(
-  respond: (record: QueryRecord) => QueryResponse
+  respond: (record: QueryRecord) => QueryResponse | Promise<QueryResponse>
 ): { client: { from: ReturnType<typeof vi.fn>; rpc: ReturnType<typeof vi.fn> }; records: QueryRecord[] } {
   const records: QueryRecord[] = [];
   const from = vi.fn((table: string) => {
@@ -259,6 +260,26 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       expect(query.eqs).toContainEqual(["is_active", true]);
       expect(query.eqs).toContainEqual(["metadata->>edu_category", "화학사고"]);
     }
+  });
+
+  it("다중 facet 검색도 Supabase FTS 동시 요청 수를 제한한다", async () => {
+    let active = 0;
+    let peak = 0;
+    const supabase = createSupabaseMock(async (record) => {
+      if (record.keyword === undefined) return { data: [], error: null };
+      active += 1;
+      peak = Math.max(peak, active);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      active -= 1;
+      return { data: [row(record.index)], error: null };
+    });
+
+    await searchExternalRag(TOPIC, null, 8, "화학사고", [], supabase.client as never);
+
+    expect(
+      supabase.records.filter((record) => record.keyword !== undefined).length
+    ).toBe(MAX_KEYWORD_SEARCH_QUERIES);
+    expect(peak).toBeLessThanOrEqual(MAX_CONCURRENT_KEYWORD_SEARCHES);
   });
 
   it("분야 제한 후보가 0건이면 같은 검색을 전 분야로 한 번 재시도한다", async () => {

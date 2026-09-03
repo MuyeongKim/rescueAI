@@ -18,6 +18,7 @@ describe("buildTopicSearchPlans", () => {
     );
 
     expect(plans[0]).toMatchObject({ id: "recall", mode: "recall" });
+    expect(plans[0].queries[0].split(" or ")).toHaveLength(8);
     expect(plans.map((plan) => plan.id)).toEqual([
       "recall",
       "precheck",

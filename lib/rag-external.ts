@@ -511,7 +511,10 @@ function buildKeywordQuery(query: string, extra: string[] = []): string {
   const all = [...tokens, ...extra]
     .map((t) => t.trim())
     .filter((t) => t.length >= 2);
-  return Array.from(new Set(all)).slice(0, 12).join(" or ");
+  // 전체 OR 검색은 세부 facet 검색을 보완하는 용도다. 너무 많은 OR 절을 한 번에
+  // 보내면 GIN 인덱스가 있어도 동시 요청 시 statement timeout 가능성이 커지므로
+  // 질문 앞부분의 핵심어와 확장어를 합쳐 8개까지만 사용한다.
+  return Array.from(new Set(all)).slice(0, 8).join(" or ");
 }
 
 export type TopicSearchPlan = {
@@ -571,6 +574,7 @@ type HybridCandidateResult = {
 // 전체 OR 질의까지 포함한 실제 Supabase textSearch 호출 수 상한.
 // 5~6명 동시 시범운영에서도 한 질문이 과도한 병렬 요청을 만들지 않게 고정한다.
 export const MAX_KEYWORD_SEARCH_QUERIES = 12;
+export const MAX_CONCURRENT_KEYWORD_SEARCHES = 4;
 
 // 절차형 질문의 공통 단계. 화학보호복뿐 아니라 공기호흡기·로프·펌프·잠수장비에도
 // 같은 분해 규칙을 적용하고, OCR 별칭은 실제 적재 자료에서 확인된 최소 범위만 둔다.
@@ -1231,33 +1235,35 @@ async function keywordRowsForPlan(
   // 광역 OR 검색은 충분한 재현율을 확보하고, 주제별 AND 검색은 좁은 결과만 받아
   // 동시 사용자 환경에서 전송 행 수와 메모리 사용을 줄인다.
   const requestLimit = plan.mode === "recall" ? queryLimit : Math.min(queryLimit, 24);
-  const results = await Promise.all(
-    plan.queries.map(async (keywordQuery) => {
-      try {
-        let request = (supabase.from as CallableFunction)(RAG_TABLE)
-          .select("id, content, metadata")
-          .eq("is_active", true)
-          .textSearch("content", keywordQuery, { type: "websearch", config: "simple" })
-          .limit(requestLimit);
-        if (category) request = request.eq(`metadata->>${CATEGORY_FIELD}`, category);
-        const { data, error } = await withRagDbTimeout(request);
-        if (error) {
-          console.error("[rag-external] keyword error:", error.message);
-          return { rows: [] as RagRow[], degraded: true };
-        }
-        return {
+  const results: { rows: RagRow[]; degraded: boolean }[] = [];
+  // 한 plan 안의 복수 표현(예: 통제구역/위험구역)도 동시에 던지지 않는다.
+  // plan 단위 병렬 제한과 합쳐 실제 동시 FTS 요청 수를 고정한다.
+  for (const keywordQuery of plan.queries) {
+    try {
+      let request = (supabase.from as CallableFunction)(RAG_TABLE)
+        .select("id, content, metadata")
+        .eq("is_active", true)
+        .textSearch("content", keywordQuery, { type: "websearch", config: "simple" })
+        .limit(requestLimit);
+      if (category) request = request.eq(`metadata->>${CATEGORY_FIELD}`, category);
+      const { data, error } = await withRagDbTimeout(request);
+      if (error) {
+        console.error("[rag-external] keyword error:", error.message);
+        results.push({ rows: [], degraded: true });
+      } else {
+        results.push({
           rows: rankKeywordRows((data ?? []) as RagRow[], plan.terms),
           degraded: false,
-        };
-      } catch (error) {
-        console.error(
-          "[rag-external] keyword request failed:",
-          error instanceof Error ? error.message : error
-        );
-        return { rows: [] as RagRow[], degraded: true };
+        });
       }
-    })
-  );
+    } catch (error) {
+      console.error(
+        "[rag-external] keyword request failed:",
+        error instanceof Error ? error.message : error
+      );
+      results.push({ rows: [], degraded: true });
+    }
+  }
 
   return {
     rows: interleaveUnique(
@@ -1267,6 +1273,31 @@ async function keywordRowsForPlan(
     ),
     degraded: results.some((result) => result.degraded),
   };
+}
+
+async function keywordRowsForPlans(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  plans: readonly TopicSearchPlan[],
+  category: string | null | undefined,
+  queryLimit: number
+): Promise<{ rows: RagRow[]; degraded: boolean }[]> {
+  const results = new Array<{ rows: RagRow[]; degraded: boolean }>(plans.length);
+  let nextIndex = 0;
+  const worker = async (): Promise<void> => {
+    while (nextIndex < plans.length) {
+      const index = nextIndex;
+      nextIndex += 1;
+      results[index] = await keywordRowsForPlan(
+        supabase,
+        plans[index],
+        category,
+        queryLimit
+      );
+    }
+  };
+  const workerCount = Math.min(MAX_CONCURRENT_KEYWORD_SEARCHES, plans.length);
+  await Promise.all(Array.from({ length: workerCount }, () => worker()));
+  return results;
 }
 
 type InferredSearchScope = {
@@ -1406,16 +1437,14 @@ async function hybridCandidates(
   let vecResult: { rows: RagRow[]; degraded: boolean };
   let keywordResults: { rows: RagRow[]; degraded: boolean }[];
   if (category?.trim()) {
-    [vecResult, ...keywordResults] = await Promise.all([
+    [vecResult, keywordResults] = await Promise.all([
       vectorRows(category),
-      ...plans.map((plan) => keywordRowsForPlan(supabase, plan, category, queryLimit)),
+      keywordRowsForPlans(supabase, plans, category, queryLimit),
     ]);
   } else {
     // 자동 모드에서는 빠른 FTS 결과로 분야를 정한 뒤 벡터 검색을 보낸다. 정확한 문서명이
     // 있는 질문이 filter={} 전역 검색 시간 초과로 키워드 전용으로 강등되는 것을 막는다.
-    keywordResults = await Promise.all(
-      plans.map((plan) => keywordRowsForPlan(supabase, plan, null, queryLimit))
-    );
+    keywordResults = await keywordRowsForPlans(supabase, plans, null, queryLimit);
     const inferredScope = inferSearchScopeFromKeywordRows(
       plans,
       keywordResults.map((result) => result.rows)
