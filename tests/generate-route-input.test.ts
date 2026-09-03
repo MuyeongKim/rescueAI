@@ -52,7 +52,7 @@ function validBody(extra: Record<string, unknown> = {}) {
 function expanded(text: string, minimum: number): string {
   let value = text;
   const detail =
-    "교관은 단계별 판단 근거를 질문하고 대원은 역할과 확인 결과를 상호 점검한 뒤 누락된 동작을 다시 수행한다.";
+    "교관은 단계별 판단 근거를 질문하고 대원은 역할과 확인 결과를 상호 점검한다. 교관은 즉시 피드백하고 누락된 동작을 교정하여 다시 수행하게 한다.";
   while (value.replace(/\s+/g, " ").trim().length < minimum) value += ` ${detail}`;
   return value;
 }
@@ -71,7 +71,7 @@ function validGeneratedPlan(sourceRef: string) {
       {
         heading: "훈련내용",
         content: expanded(
-          `[도입 · 10분] 역할을 확인한다. [이론 · 10분] 장비 원리를 설명한다. [시범 · 10분] 착용 절차를 관찰한다. [실습 · 20분] 조별로 반복한다. [평가 · 10분] 수행 결과를 확인한다. ${SOP_NOT_FOUND_DISCLOSURE} ${sourceRef}`,
+          `[도입 · 10분] 역할을 확인한다. [이론 · 10분] 장비 원리를 설명한다. [시범 · 10분] 착용 절차를 관찰한다. [실습 · 20분] 대원 행동절차:\n1) 장비 외관을 점검하고 손상 여부를 확인한다.\n2) 결합부를 손으로 당겨 고정 상태를 확인한다.\n3) 작동 상태를 확인한 뒤 교관에게 결과를 보고한다.\n이상 시: 수행을 중단하고 교관에게 보고한 뒤 누락 동작을 교정하여 다시 점검한다. [평가 · 10분] 수행 결과를 확인한다. ${SOP_NOT_FOUND_DISCLOSURE} ${sourceRef}`,
           240
         ),
       },

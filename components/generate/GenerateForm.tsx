@@ -16,6 +16,7 @@ import {
   AUDIENCES,
   blockingGenerationQualityIssues,
   DEFAULT_SLIDE_DECK_MODE,
+  RECOMMENDED_SLIDE_DECK_MODE,
   DURATIONS,
   GEN_TYPES,
   buildNotebookLmPrompt,
@@ -451,14 +452,14 @@ const SLIDE_MODE_OPTIONS: ReadonlyArray<{
   description: string;
 }> = [
   {
-    key: "presenter",
-    label: "발표형",
-    description: "핵심 문장과 시각 흐름 중심",
+    key: "detailed",
+    label: "상세형 (추천)",
+    description: "현장교육에서 화면만 읽어도 이해되는 구성",
   },
   {
-    key: "detailed",
-    label: "상세형",
-    description: "혼자 읽어도 이해되는 설명 중심",
+    key: "presenter",
+    label: "발표형",
+    description: "교관 설명을 전제로 핵심 문장만 표시",
   },
 ];
 
@@ -779,7 +780,7 @@ export function GenerateForm({
   );
   const [slideMode, setSlideMode] = useState<SlideDeckMode>(
     resolveSlideDeckMode(
-      resumedRequest?.slideMode ?? hydrated.deck?.mode ?? DEFAULT_SLIDE_DECK_MODE
+      resumedRequest?.slideMode ?? hydrated.deck?.mode ?? RECOMMENDED_SLIDE_DECK_MODE
     )
   );
   const [topic, setTopic] = useState(resumedRequest?.topic ?? initialMaterial?.topic ?? "");

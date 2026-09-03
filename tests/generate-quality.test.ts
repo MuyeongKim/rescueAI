@@ -6,6 +6,7 @@ import {
   MAX_SLIDE_BULLET_CHARS,
   MAX_SLIDE_STEP_CHARS,
   MAX_SLIDE_TITLE_CHARS,
+  RECOMMENDED_SLIDE_DECK_MODE,
   TRAINING_PLAN_SECTIONS,
   bindSlideVisualsToSources,
   buildGeneratePrompt,
@@ -25,6 +26,7 @@ import {
   inspectGeneratedLesson,
   inspectGeneratedPlan,
   inspectGeneratedSlides,
+  selectGenerationContextBySourceRefs,
   splitGeneratedSourcesForDisplay,
   stripDocumentInlineSourceRefs,
   stripDocumentInlineSourceRefsFromText,
@@ -63,8 +65,12 @@ function validPlan(): GeneratedDocDraft {
         heading: "훈련내용",
         content:
           "[이론교육 · 10분] 교관은 각 점검 항목의 목적과 적용 조건을 설명하고 대원은 장비에서 해당 부위를 찾아 말한다. " +
-          "[교관시범 · 10분] 교관은 정상 순서를 천천히 시범 보이며 각 동작의 확인 지점과 자주 놓치는 부분을 질문한다. " +
-          "[반복실습 · 25분] 대원은 2인 1조로 역할을 바꾸어 순서를 반복하고 동료는 체크리스트에 따라 즉시 피드백한다. " +
+          "[교관시범 · 10분] 교관은 정상 순서를 천천히 시범 보이며 각 동작의 확인 지점과 자주 놓치는 부분을 질문한다.\n" +
+          "[반복실습 · 25분] 대원 행동절차:\n" +
+          "1) 장비 외관을 눈으로 점검하고 손상 여부를 확인한다.\n" +
+          "2) 결합부를 손으로 당겨 고정 상태를 확인하고 동료에게 결과를 말한다.\n" +
+          "3) 작동 상태를 확인한 뒤 수행 결과를 교관에게 보고하고 역할을 교대한다.\n" +
+          "이상 시: 수행을 즉시 중단하고 교관에게 보고한 뒤 해당 항목을 교정하여 다시 점검한다. 동료는 체크리스트에 따라 즉시 피드백한다. " +
           "[종합수행 · 15분] 대원은 처음부터 끝까지 독립 수행하고 교관은 누락된 동작을 기록한 뒤 다시 수행하게 한다. " +
           fill("각 단계는 설명, 수행, 즉시 피드백이 이어지도록 진행한다.", 80),
       },
@@ -136,7 +142,7 @@ function validLesson(): GeneratedDocDraft {
         heading: "대원실습",
         content: timedContent(
           20,
-          "대원은 2인 1조로 수행자와 관찰자 역할을 번갈아 맡는다. 수행자는 순서를 말하며 점검하고 관찰자는 체크리스트로 누락을 기록한다. 교관은 한 번에 한 가지 행동을 구체적으로 피드백하고 대원이 수정 동작을 다시 수행하게 한다.",
+          "대원은 2인 1조로 수행자와 관찰자 역할을 번갈아 맡는다. 대원 행동절차:\n1) 장비 외관을 점검하고 손상 여부를 확인한다.\n2) 결합부를 손으로 당겨 고정 상태를 확인하고 결과를 복창한다.\n3) 작동 상태를 확인한 뒤 관찰자와 교관에게 결과를 보고하고 역할을 교대한다.\n이상 시: 수행을 즉시 중단하고 교관에게 보고한 뒤 누락 동작을 교정하여 다시 점검한다. 관찰자는 체크리스트로 누락을 기록하고 교관은 한 번에 한 가지 행동을 구체적으로 피드백한다.",
           220
         ),
       },
@@ -230,6 +236,7 @@ function validSlide(index: number): GeneratedSlide {
             ? [
                 "대원은 2인 1조로 점검 순서를 직접 수행하고 역할을 교대합니다",
                 "동료는 수행 과정을 관찰하며 놓친 행동을 즉시 알려 줍니다",
+                "이상이나 누락이 보이면 중단하고 교관에게 보고한 뒤 다시 수행합니다",
               ]
         : [
             `${index + 1}단계에서는 정상 표시와 결합 상태를 눈으로 직접 확인합니다`,
@@ -243,7 +250,9 @@ function validSlide(index: number): GeneratedSlide {
     role: roles[index],
     composition,
     steps: stepCompositions.has(composition)
-      ? [`${index + 1}단계`, `${index + 2}단계`, `${index + 3}단계`]
+      ? index === 7
+        ? ["외관 점검", "결합 확인", "이상 보고"]
+        : [`${index + 1}단계`, `${index + 2}단계`, `${index + 3}단계`]
       : undefined,
     visual: { mode: "none" },
     sourceRefs: ["[공기호흡기 교육교범 p.3]"],
@@ -282,6 +291,7 @@ describe("유형별 생성 스키마", () => {
   });
 
   it("슬라이드는 교육 역할·화면 구도·시각자료 계획과 장별 출처를 받을 수 있다", () => {
+    expect(RECOMMENDED_SLIDE_DECK_MODE).toBe("detailed");
     expect(generatedSlidesSchema.parse(validSlides()).slides[0]).toMatchObject({
       layout: "objectives",
       role: "objectives",
@@ -450,6 +460,10 @@ describe("생성 프롬프트 품질 계약", () => {
     expect(prompt).toContain("훈련계획·교안은 본문 문장 뒤에");
     expect(prompt).toContain("문서 맨 뒤의 '근거 자료 및 출처'");
     expect(prompt).toContain("슬라이드는 각 장의 sourceRefs에만");
+    expect(prompt).toContain("기술 사실과 훈련 가정의 경계");
+    expect(prompt).toContain('"훈련 가정:"');
+    expect(prompt).toContain("상황 → 판단 조건 → 행동 → 확인 → 실수 교정 → 평가");
+    expect(prompt).toContain("고정된 행동 순서가 있으면 그 순서를 보존");
   });
 
   it("훈련계획은 고정 제목·시간표·행동형 평가를 요구한다", () => {
@@ -457,7 +471,13 @@ describe("생성 프롬프트 품질 계약", () => {
     expect(prompt).toContain("정확히 이 제목으로, 이 순서대로");
     expect(prompt).toContain("[이론교육 · 20분]");
     expect(prompt).toContain("교관 행동, 대원 행동, 피드백 방법");
+    expect(prompt).toContain("흔한 실수·교정");
+    expect(prompt).toContain("최소 3개의 관찰 가능한 행동");
+    expect(prompt).toContain("1) 동작 → 확인 지점");
+    expect(prompt).toContain("이상 시:");
     expect(prompt).toContain("관찰 가능한 수행 기준");
+    expect(prompt).toContain("미달 시 피드백·재수행");
+    expect(prompt).toContain("핵심 대원 행동 단계와 같은 순서로 연결");
     expect(prompt).toContain("본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 마세요");
   });
 
@@ -467,6 +487,7 @@ describe("생성 프롬프트 품질 계약", () => {
     expect(prompt).toContain("[시간: 00분]");
     expect(prompt).toContain("확인 질문과 모범답안");
     expect(prompt).toContain("교관이 별도 내용을 보충하지 않아도");
+    expect(prompt).toContain("대원실습의 행동 단계와 같은 순서로 연결");
     expect(prompt).toContain("근거 자료 및 출처");
   });
 
@@ -481,6 +502,10 @@ describe("생성 프롬프트 품질 계약", () => {
     expect(prompt).toContain("mode=presenter");
     expect(prompt).toContain("sourceRefs");
     expect(prompt).toContain("없는 출처를 만들지 마세요");
+    expect(prompt).toContain("판단 조건, 우선 행동, 그 행동을 선택한 근거");
+    expect(prompt).toContain("자주 생기는 실수와 즉시 교정·재수행 방법");
+    expect(prompt).toContain("steps에 3~5개의 실제 대원 행동 핵심어");
+    expect(prompt).toContain("이상 시 중단·보고");
     expect(prompt).toContain(`서술형 문장으로 쓰고 ${MAX_SLIDE_TITLE_CHARS}자`);
     expect(prompt).toContain(`각 문장은 ${MAX_SLIDE_BULLET_CHARS}자`);
     expect(prompt).toContain(`각 단계어는 ${MAX_SLIDE_STEP_CHARS}자`);
@@ -536,6 +561,8 @@ describe("생성 프롬프트 품질 계약", () => {
       conditions: "대원 8명 / 공기호흡기 4세트",
     });
     expect(sectionPrompt).toContain("현장 조건(사용자 입력): 대원 8명 / 공기호흡기 4세트");
+    expect(sectionPrompt).toContain("최소 3개의 번호 행동");
+    expect(sectionPrompt).toContain("재점검·재수행");
 
     const slidePrompt = buildSlideRegenPrompt({
       category: base.category,
@@ -548,6 +575,8 @@ describe("생성 프롬프트 품질 계약", () => {
     });
     expect(slidePrompt).toContain("현장 조건: 입력되지 않음");
     expect(slidePrompt).toContain("장비 수량을 임의로 특정하지 마세요");
+    expect(slidePrompt).toContain("steps를 실제 대원 행동 3~5개");
+    expect(slidePrompt).toContain("이상 시 중단·보고·재수행");
     expect(slidePrompt).toContain("source-page/native-diagram/none");
     expect(slidePrompt).not.toContain("source-crop");
   });
@@ -558,6 +587,20 @@ describe("생성 프롬프트 품질 계약", () => {
         "[공기호흡기 교육교범 p.3]\n본문\n\n---\n\n[안전관리 지침 p.8]\n본문"
       )
     ).toEqual(["[공기호흡기 교육교범 p.3]", "[안전관리 지침 p.8]"]);
+  });
+
+  it("구성안이 고른 출처 청크만 다음 작성 단계에 전달한다", () => {
+    const context =
+      "[교범 A p.1]\nA 전용 내용\n\n---\n\n" +
+      "[교범 B p.2]\nB 전용 내용\n\n---\n\n" +
+      "=== 관련 SOP ===\n[SOP p.3]\nSOP 전용 내용";
+
+    const selected = selectGenerationContextBySourceRefs(context, ["[교범 B p.2]"]);
+    expect(selected).toContain("B 전용 내용");
+    expect(selected).not.toContain("A 전용 내용");
+    expect(selected).not.toContain("SOP 전용 내용");
+    expect(selectGenerationContextBySourceRefs(context, [])).toBe(context);
+    expect(selectGenerationContextBySourceRefs(context, ["[없는 자료 p.9]"])).toBe(context);
   });
 });
 
@@ -789,6 +832,46 @@ describe("결정론적 생성 품질 검사", () => {
     expect(inspectGeneratedPlan(validPlan(), "1시간")).toEqual({ ok: true, issues: [] });
   });
 
+  it("훈련내용에 교관·대원 수행, 피드백, 실수 교정이 빠지면 보완 대상으로 잡는다", () => {
+    const plan = validPlan();
+    plan.sections[1].content =
+      "[이론교육 · 10분] 교관은 점검 목적을 설명하고 대원은 핵심 용어를 확인한다. " +
+      "[교관시범 · 10분] 교관은 정상 순서를 설명하고 대원은 순서를 따라간다. " +
+      "[반복실습 · 25분] 대원은 절차를 반복 수행하고 교관은 결과를 확인한다. " +
+      "[종합수행 · 15분] 대원은 전 과정을 수행하고 교관은 마무리한다. " +
+      fill("각 단계는 정해진 순서와 역할에 따라 진행한다.", 100);
+
+    expect(inspectGeneratedPlan(plan, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_instructional_detail", path: "sections.1.content" }),
+        expect.objectContaining({ code: "missing_error_correction", path: "sections.1.content" }),
+        expect.objectContaining({ code: "missing_trainee_action_steps", path: "sections.1.content" }),
+        expect.objectContaining({ code: "missing_exception_response", path: "sections.1.content" }),
+      ])
+    );
+  });
+
+  it("번호 행동이 있어도 수행 결과를 확인할 지점이 없으면 보완 대상으로 잡는다", () => {
+    const plan = validPlan();
+    plan.sections[1].content =
+      "[이론교육 · 10분] 교관은 역할을 설명하고 대원은 지정 위치로 이동한다. " +
+      "[교관시범 · 10분] 교관은 동작을 보여 주고 대원은 순서를 말한다. " +
+      "[반복실습 · 25분] 대원 행동절차:\n" +
+      "1) 지정된 위치로 이동한다.\n" +
+      "2) 역할에 따라 장비를 배치한다.\n" +
+      "3) 수행 내용을 교관에게 보고한다.\n" +
+      "이상 시: 즉시 중단하고 교관에게 보고한 뒤 누락 동작을 교정하여 다시 수행한다. " +
+      "교관은 피드백하고 대원은 역할을 교대한다. " +
+      "[종합수행 · 15분] 대원은 같은 행동을 반복하고 교관은 기록한다. " +
+      fill("흔한 실수는 역할 누락이며 교관의 설명에 따라 보완한다.", 90);
+
+    expect(inspectGeneratedPlan(plan, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_action_verification", path: "sections.1.content" }),
+      ])
+    );
+  });
+
   it("출처 제목의 제한시간은 훈련 단계 시간 합계에 포함하지 않는다", () => {
     const plan = validPlan();
     plan.sections[1].content +=
@@ -865,6 +948,36 @@ describe("결정론적 생성 품질 검사", () => {
 
   it("충분한 1시간 슬라이드 덱은 통과한다", () => {
     expect(inspectGeneratedSlides(validSlides(), "1시간")).toEqual({ ok: true, issues: [] });
+  });
+
+  it("판단 장의 근거와 실습 장의 실수·교정을 장별로 점검한다", () => {
+    const deck = validSlides();
+    deck.slides[6].bullets = [
+      "출동 현장 상황을 읽고 가장 먼저 할 조치를 선택합니다",
+      "선택한 조치를 동료에게 알리고 다음 대응을 결정합니다",
+    ];
+    deck.slides[6].notes = fill(
+      "교관은 현장 상황을 설명하고 대원에게 우선 조치를 선택하게 합니다. 대원은 선택한 행동을 말합니다.",
+      165
+    );
+    deck.slides[7].bullets = [
+      "대원은 2인 1조로 점검 순서를 직접 수행하고 역할을 교대합니다",
+      "동료는 수행 과정을 관찰하고 완료 여부를 알려 줍니다",
+    ];
+    deck.slides[7].notes = fill(
+      "교관은 대원이 순서를 직접 수행하게 하고 동료와 역할을 교대하게 합니다. 모든 대원이 수행을 끝내면 확인합니다.",
+      165
+    );
+    deck.slides[7].steps = ["순서 수행", "역할 교대", "완료 확인"];
+
+    expect(inspectGeneratedSlides(deck, "1시간").issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "missing_decision_rationale", path: "slides.6" }),
+        expect.objectContaining({ code: "missing_error_correction", path: "slides.7" }),
+        expect.objectContaining({ code: "missing_trainee_action_steps", path: "slides.7" }),
+        expect.objectContaining({ code: "missing_exception_response", path: "slides.7" }),
+      ])
+    );
   });
 
   it("화학보호복 보호등급을 비교 장 밖에서 섞으면 차단하고 명시적 비교는 허용한다", () => {
@@ -1333,6 +1446,8 @@ describe("자동 보완 프롬프트", () => {
     expect(prompt).toContain("일반 상식·수치·절차·사례를 만들지 마세요");
     expect(prompt).toContain("전체 JSON 객체만 반환");
     expect(prompt).toContain("현장 조건(사용자 입력): 대원 8명 / 장비 4세트");
+    expect(prompt).toContain("최소 3개의 번호 행동");
+    expect(prompt).toContain("판단 조건 → 행동 → 확인 → 보고");
   });
 
   it("슬라이드 안전 정합성 보완은 수치·절차를 임의로 통일하지 않도록 제한한다", () => {

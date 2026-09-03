@@ -198,7 +198,9 @@ export type GeneratedDoc = {
 // ── 슬라이드(PPTX) 생성 결과 ──
 export const SLIDE_DECK_MODES = ["presenter", "detailed"] as const;
 export type SlideDeckMode = (typeof SLIDE_DECK_MODES)[number];
+// 과거 저장본은 발표형으로 복원하되, 신규 현장교육 자료는 화면만 읽어도 이해되는 상세형을 권장한다.
 export const DEFAULT_SLIDE_DECK_MODE: SlideDeckMode = "presenter";
+export const RECOMMENDED_SLIDE_DECK_MODE: SlideDeckMode = "detailed";
 
 /**
  * role은 이 장이 교육 흐름에서 맡는 역할이고, composition은 화면의 시각 구도다.
@@ -626,6 +628,13 @@ export function buildGenerateSystemPrompt(
 - 슬라이드는 각 장의 sourceRefs에만 참고 자료에 표시된 라벨을 글자 하나 바꾸지 않고 적습니다(예: [문서명 p.3]).
 - 출처 라벨만으로 뒷받침되지 않는 새로운 주장·수치·절차를 추가하지 않습니다.
 
+[기술 사실과 훈련 가정의 경계]
+- 장비 사양·절차 순서·수치·위험성·중단 기준·SOP처럼 현장에서 사실로 받아들일 내용은 반드시 참고 자료에서 확인된 범위만 씁니다.
+- 교육을 구체화하기 위한 상황 부여·역할 교대·질문·반복·피드백 방식은 만들 수 있지만, 참고 자료나 사용자 조건에 없는 현장 설정은 문장 앞에 "훈련 가정:"이라고 표시합니다.
+- 훈련 가정에는 새로운 기술 절차·장비 수량·안전 수치·SOP 명칭을 넣지 않으며 실제 현장 기준인 것처럼 단정하지 않습니다.
+- 구체화는 분량을 늘리는 것이 아니라 상황 → 판단 조건 → 행동 → 확인 → 실수 교정 → 평가가 이어지게 하는 것입니다.
+- 참고 자료에 고정된 행동 순서가 있으면 그 순서를 보존합니다. 고정 순서가 확인되지 않으면 기술 절차를 임의로 만들지 말고, 교육 진행을 위한 순서임을 밝힌 뒤 판단 조건 → 관찰 가능한 행동 → 결과 확인 → 보고 흐름으로 작성합니다.
+
 ${buildSopPromptContract(sopEvidence)}
 
 [품질 기준]
@@ -734,7 +743,7 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
   그 장에서 기억할 결론이 드러나는 서술형 문장으로 쓰고 ${MAX_SLIDE_TITLE_CHARS}자 이내로 제한하세요.
 - 화면에는 구체적인 핵심 문장 2~4개만 두고, 각 문장은 ${MAX_SLIDE_BULLET_CHARS}자 이내로 제한하며 한 장에는 하나의 메시지만 담으세요.
 - 발표자 노트는 4~7문장으로 충분히 작성하세요. 근거가 되는 이유·교관이 보여줄 시범·대원에게 던질 질문·
-  실수하기 쉬운 지점 중 해당되는 내용을 포함하여 교관이 그대로 설명할 수 있게 하세요.
+  실수하기 쉬운 지점·잘못했을 때의 교정 방법 중 해당되는 내용을 포함하여 교관이 그대로 설명할 수 있게 하세요.
 - **비교 장**은 steps에 양쪽 기준명 2개를, **절차·시간흐름·판단흐름 장**은 steps에 3~5개 단계 핵심어를
   순서대로 넣고 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 제한하세요. 나머지 장은 steps를 생략하세요.
 - 각 장에 교육 역할 role과 화면 구도 composition을 서로 구분하여 지정하세요.
@@ -742,6 +751,9 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
   · composition: statement, list, process, comparison, timeline, decision-flow, checklist, scenario, visual-explanation, summary
   같은 role을 여러 장에서 써도 화면 목적이 다르면 composition을 달리하고, 전체 덱에 최소 4종류의 composition을 사용하세요.
 - 구체적인 현장 상황에서 대원이 우선 조치를 판단하는 장 → 대원이 직접 수행하고 피드백받는 실습 장 → 관찰 가능한 기준으로 평가하는 장의 순서를 포함하세요.
+- 현장 판단 장에는 상황, 판단 조건, 우선 행동, 그 행동을 선택한 근거를 함께 적으세요. 참고 자료에 없는 상황 설정은 "훈련 가정:"으로 구분하세요.
+- 참여 실습 장은 composition=process로 구성하고 steps에 3~5개의 실제 대원 행동 핵심어를 순서대로 넣으세요. 화면 또는 발표자 노트에는 시작 조건, 교관 시범, 대원 동작, 동작 후 확인, 이상 시 중단·보고, 자주 생기는 실수와 즉시 교정·재수행 방법을 포함하세요.
+- 평가 장에는 참여 실습 장의 각 대원 행동과 직접 연결되는 관찰 항목, 통과 판단, 미달 항목의 피드백과 재수행 방법을 포함하세요. 자료에 없는 수치형 합격선을 만들지 마세요.
 - 화학보호복 보호등급이나 장비 압력 수치가 둘 이상 나오면 한 절차로 섞거나 임의로 통일하지 말고, 등급·장비 모델·측정 조건과 해당 출처를 같은 장에서 명확히 구분하세요.
 - '물 → 제독제 → 물'을 보편 절차로 단정하지 마세요. 해당 순서를 쓸 때는 물질 식별, SDS·제조사·SOP, 수반응성 및 제독제 적합 조건을 같은 장에 함께 밝히세요.
 - 과거 저장본 호환 필드 layout도 함께 지정하세요: objectives, concept, process, equipment, case, safety, summary.
@@ -770,10 +782,13 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
 1. 훈련목표 — 교육 후 대원이 실제로 수행하거나 설명할 수 있는 측정 가능한 목표 2~4개.
 2. 훈련내용 — 이론교육·교관시범·반복실습·종합수행의 순서, 교관 행동, 대원 행동, 피드백 방법을 구체적으로 작성.
    각 단계 소제목에 [이론교육 · 20분]처럼 대괄호 안에 시간을 넣고, 표시한 시간 합계를 정확히 ${req.duration}으로 맞추세요.
+   각 단계에는 '교관 행동:', '대원 행동:', '확인·피드백:'을 줄을 나눠 적고, 시범·실습 단계에는 '흔한 실수·교정:'도 적으세요.
+   교관시범·반복실습·종합수행의 '대원 행동:' 아래에는 최소 3개의 관찰 가능한 행동을 '1) 동작 → 확인 지점' 형식으로 한 줄씩 작성하세요. 마지막에는 '이상 시:'로 중단·보고·교정 또는 재수행 방법을 적으세요.
+   "숙지한다", "철저히 한다", "적절히 대응한다", "절차에 따라 수행한다"만으로는 행동절차로 인정하지 말고, 대원이 실제로 확인·조작·이동·선정·보고하는 동작을 쓰세요.
    첫 부분에 ${SOP_APPLICATION_MARKER} 소단락 또는 상태별 고정 안내문을 넣고, 적용 단계·역할 분담·중단·보고 기준을 근거 범위에서 연결하세요.
-3. 필요장비 — 장비명만 나열하지 말고 용도·사용 전 점검사항을 함께 작성. 수량은 현장 조건이나 참고 자료에서 확인되는 경우에만 명시.
-4. 안전관리 — 위험요소별 예방조치, 안전담당 역할, 즉시 중단해야 할 상태와 보고 절차를 작성.
-5. 훈련평가 — "이해했다"가 아니라 체크리스트로 관찰 가능한 수행 기준·통과 기준·강평 항목을 작성.
+3. 필요장비 — 각 항목을 '장비 — 용도 / 사용 전 확인 / 이상 시 조치' 구조로 작성. 수량은 현장 조건이나 참고 자료에서 확인되는 경우에만 명시.
+4. 안전관리 — 각 항목을 '위험요소 — 예방조치 / 중단 조건 / 보고·재개' 구조로 작성.
+5. 훈련평가 — 훈련내용의 핵심 대원 행동 단계와 같은 순서로 연결하고, 각 항목을 '평가항목 — 관찰 가능한 수행 기준 / 통과 판단 / 미달 시 피드백·재수행' 구조로 작성. "이해했다" 같은 주관적 기준은 사용하지 마세요.
 
 [작성 규칙]
 - 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치·장비명을 지어내지 마세요.
@@ -798,9 +813,11 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
 3. 핵심이론 — [시간: 00분]으로 시작. 단순 정의가 아니라 이유·적용 조건·절차·주의점을 소단원으로 풀어 설명.
    시간 표기 다음에 ${SOP_APPLICATION_MARKER} 소단락 또는 상태별 고정 안내문을 넣고, 시범·실습에서 지킬 행동으로 연결.
 4. 교관시범 — [시간: 00분]으로 시작. 교관의 동작·말할 내용·대원이 관찰할 지점을 순서대로 작성.
-5. 대원실습 — [시간: 00분]으로 시작. 조 편성·역할·반복 방법·교관 피드백·실수 교정 방법을 작성.
+   각 시범 단계에 동작, 확인 지점, 동작 이유, 흔한 실수와 교정 설명을 연결.
+5. 대원실습 — [시간: 00분]으로 시작. 조 편성·역할·반복 방법·교관 피드백·실수 교정·재수행 방법을 작성.
+   '대원 행동절차:' 아래에 최소 3개의 관찰 가능한 행동을 '1) 동작 → 확인 지점' 형식으로 한 줄씩 적고, 마지막에는 '이상 시:' 중단·보고·교정 또는 재수행 방법을 작성.
 6. 안전유의사항 — [시간: 00분]으로 시작. 위험요소·예방조치·즉시 중단 및 보고 기준을 작성.
-7. 정리·평가 — [시간: 00분]으로 시작. 핵심 요약, 확인 질문과 모범답안, 관찰 가능한 수행평가 기준을 작성.
+7. 정리·평가 — [시간: 00분]으로 시작. 핵심 요약, 확인 질문과 모범답안, 대원실습의 행동 단계와 같은 순서로 연결한 관찰 가능한 수행평가 기준을 작성.
 
 [작성 규칙]
 - 반드시 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
@@ -852,6 +869,12 @@ export type GenerationQualityIssueCode =
   | "missing_slide_scenario"
   | "missing_slide_practice"
   | "invalid_slide_learning_flow"
+  | "missing_instructional_detail"
+  | "missing_error_correction"
+  | "missing_decision_rationale"
+  | "missing_trainee_action_steps"
+  | "missing_action_verification"
+  | "missing_exception_response"
   | "missing_source_citation"
   | "missing_source_refs"
   | "invalid_source_ref"
@@ -901,6 +924,12 @@ export const GENERATION_QUALITY_LABELS = {
   missing_slide_scenario: "현장 판단 시나리오",
   missing_slide_practice: "대원 참여 실습",
   invalid_slide_learning_flow: "시나리오·실습·평가 흐름",
+  missing_instructional_detail: "교관·대원 수행과 피드백",
+  missing_error_correction: "실수·오류 교정과 재수행",
+  missing_decision_rationale: "현장 판단 조건과 근거",
+  missing_trainee_action_steps: "대원 행동절차의 단계와 구체성",
+  missing_action_verification: "행동 후 확인 지점",
+  missing_exception_response: "이상 시 중단·보고·재수행",
   missing_source_citation: "핵심 내용의 근거 출처",
   missing_source_refs: "슬라이드별 근거 출처",
   invalid_source_ref: "근거 출처 표기",
@@ -1028,7 +1057,7 @@ const LESSON_MIN_CHARS: Record<(typeof LESSON_SECTIONS)[number], number> = {
   "정리·평가": 180,
 };
 
-const SAFETY_CUE = /안전|위험|보호|예방|통제|점검|감시|대피/;
+const SAFETY_CUE = /안전|위험|보호|예방|통제|감시|대피/;
 const STOP_OR_REPORT_CUE = /중단|보고|철수|대피|비상|이상|사고/;
 const EVALUATION_CUE = /평가|확인|관찰|체크|수행|시연|질문|강평/;
 const EVALUATION_STANDARD_CUE = /기준|통과|정확|누락|횟수|시간|모범답안|체크리스트/;
@@ -1060,6 +1089,21 @@ const PRACTICE_ACTION_CUE =
   /2인\s*1조|역할\s*(?:교대|분담|을\s*바꾸)|반복\s*(?:수행|훈련|연습)|직접\s*(?:수행|시연|착용|탈의|조작|점검)|대원\s*실습/;
 const PERFORMANCE_EVALUATION_CUE =
   /평가|통과|수행\s*기준|판단\s*기준|모범답안|체크리스트.{0,30}(?:기준|충족)/;
+const INSTRUCTOR_ACTION_CUE = /교관/;
+const TRAINEE_ACTION_CUE = /대원/;
+const DEMONSTRATION_CUE = /시범|보여\s*주|보여\s*줍|가리키|동작/;
+const FEEDBACK_CUE = /피드백|강평|교정|보완|알려\s*주|기록/;
+const COMMON_ERROR_CUE = /실수|오류|누락|놓치|잘못|오조작|이상\s*상태/;
+const CORRECTION_CUE = /교정|피드백|재수행|다시\s*(?:수행|시범|평가)|보완\s*후/;
+const DECISION_RATIONALE_CUE = /판단\s*근거|선택\s*근거|이유|때문|조건|따라/;
+const OBSERVABLE_TRAINEE_ACTION_CUE =
+  /확인|점검|결합|착용|탈의|연결|분리|조작|개방|폐쇄|이동|배치|설치|고정|인양|하강|수색|구조|선정|설정|측정|관찰|기록|호명|복창|통제|차단|대피|철수|운반|지지|확보|검지|식별|표시|보고|전파|교대/;
+const ACTION_VERIFICATION_CUE =
+  /확인\s*(?:지점|결과|사항|여부)?|점검|관찰|검증|대조|복창|시험|측정|정상\s*(?:상태|작동|여부)|표시(?:창|값|등)?/;
+const ACTION_EXCEPTION_CUE = /이상|오류|누락|불량|위험|기준\s*미달|작동하지/;
+const ACTION_EXCEPTION_RESPONSE_CUE =
+  /중단|철수|교정|재수행|재점검|교체|분리|대피|복구|보완|다시\s*(?:수행|확인|점검)/;
+const ACTION_REPORT_CUE = /보고|전파|통보|알려\s*(?:주|줍|야)|복창/;
 
 const PRESSURE_EQUIPMENT_FAMILIES = [
   {
@@ -1329,6 +1373,35 @@ function inspectSlideLearningFlow(
       message: "대원이 직접 수행하고 동료·교관의 피드백을 받는 참여형 실습 장이 필요합니다.",
     });
   }
+  if (scenarioIndex >= 0 && !DECISION_RATIONALE_CUE.test(texts[scenarioIndex])) {
+    issues.push({
+      code: "missing_decision_rationale",
+      path: `slides.${scenarioIndex}`,
+      message:
+        "현장 판단 장에는 상황만 제시하지 말고 판단 조건·우선 행동·그 행동을 선택한 근거를 함께 설명해야 합니다.",
+    });
+  }
+  if (
+    practiceIndex >= 0 &&
+    (!COMMON_ERROR_CUE.test(texts[practiceIndex]) ||
+      !CORRECTION_CUE.test(texts[practiceIndex]))
+  ) {
+    issues.push({
+      code: "missing_error_correction",
+      path: `slides.${practiceIndex}`,
+      message:
+        "참여 실습 장에는 자주 생기는 실수와 교관·동료의 교정 또는 재수행 방법을 함께 넣어야 합니다.",
+    });
+  }
+  if (practiceIndex >= 0) {
+    issues.push(
+      ...inspectTraineeActionProcedure(
+        texts[practiceIndex],
+        `slides.${practiceIndex}`,
+        draft.slides[practiceIndex].steps
+      )
+    );
+  }
   if (
     scenarioIndex >= 0 &&
     practiceIndex >= 0 &&
@@ -1381,6 +1454,31 @@ export function extractSourceLabels(contextText: string): string[] {
   let match: RegExpExecArray | null;
   while ((match = pattern.exec(contextText)) !== null) labels.add(match[1].trim());
   return Array.from(labels);
+}
+
+/**
+ * 구성안이 선택한 정확한 출처 라벨의 청크만 다음 작성 단계에 전달한다.
+ * 라벨이 없는 과거 체크포인트나 검색 형식 불일치 시에는 근거 손실을 막기 위해 전체 문맥을 유지한다.
+ */
+export function selectGenerationContextBySourceRefs(
+  contextText: string,
+  sourceRefs: readonly string[]
+): string {
+  const selected = new Set(
+    sourceRefs
+      .map((sourceRef) => normalizedSourceLabelKey(sourceRef))
+      .filter(Boolean)
+  );
+  if (selected.size === 0) return contextText;
+
+  const matched = contextText
+    .split("\n\n---\n\n")
+    .filter((segment) =>
+      extractSourceLabels(segment).some((label) =>
+        selected.has(normalizedSourceLabelKey(label))
+      )
+    );
+  return matched.length > 0 ? matched.join("\n\n---\n\n") : contextText;
 }
 
 function report(issues: GenerationQualityIssue[]): GenerationQualityReport {
@@ -1529,6 +1627,111 @@ function inspectEvaluationContent(
   ];
 }
 
+function inspectInstructionalDetail(
+  content: string,
+  path: string
+): GenerationQualityIssue[] {
+  const issues: GenerationQualityIssue[] = [];
+  if (
+    !INSTRUCTOR_ACTION_CUE.test(content) ||
+    !TRAINEE_ACTION_CUE.test(content) ||
+    !FEEDBACK_CUE.test(content)
+  ) {
+    issues.push({
+      code: "missing_instructional_detail",
+      path,
+      message:
+        "교관 행동·대원 행동·확인 또는 피드백이 실제 진행 순서 안에서 함께 드러나야 합니다.",
+    });
+  }
+  if (!COMMON_ERROR_CUE.test(content) || !CORRECTION_CUE.test(content)) {
+    issues.push({
+      code: "missing_error_correction",
+      path,
+      message:
+        "실습에서 자주 생기는 실수·누락과 이를 교정하거나 재수행하는 방법을 함께 작성해야 합니다.",
+    });
+  }
+  issues.push(...inspectTraineeActionProcedure(content, path));
+  return issues;
+}
+
+function numberedActionSteps(content: string): string[] {
+  const steps: string[] = [];
+  const pattern = /(?:^|\n)\s*(?:\d{1,2}[.)]|[\u2460-\u2473])\s*([^\n]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = pattern.exec(content)) !== null) steps.push(match[1].trim());
+  return steps;
+}
+
+function inspectTraineeActionProcedure(
+  content: string,
+  path: string,
+  structuredSteps?: readonly string[]
+): GenerationQualityIssue[] {
+  const issues: GenerationQualityIssue[] = [];
+  const steps = (structuredSteps?.length ? structuredSteps : numberedActionSteps(content)).map(
+    (step) => step.trim()
+  );
+  const concreteSteps = steps.filter((step) => OBSERVABLE_TRAINEE_ACTION_CUE.test(step));
+  const distinctSteps = new Set(steps.map((step) => normalizedKey(step))).size;
+  if (
+    steps.length < 3 ||
+    concreteSteps.length < Math.min(3, steps.length) ||
+    distinctSteps < 3
+  ) {
+    issues.push({
+      code: "missing_trainee_action_steps",
+      path,
+      message:
+        "대원 행동절차를 최소 3개의 관찰 가능한 동작으로 순서화하고, 추상적인 '숙지·철저·적절히 수행' 표현을 실제 확인·조작·이동·보고 행동으로 바꾸세요.",
+    });
+  }
+  const verifiedSteps = steps.filter((step) => ACTION_VERIFICATION_CUE.test(step));
+  if (verifiedSteps.length < Math.min(2, steps.length)) {
+    issues.push({
+      code: "missing_action_verification",
+      path,
+      message:
+        "대원 행동 단계마다 정상 여부나 수행 결과를 확인할 지점을 연결하고, 최소 2개 단계에서 확인 방법이 명확히 드러나야 합니다.",
+    });
+  }
+  if (
+    !ACTION_EXCEPTION_CUE.test(content) ||
+    !ACTION_EXCEPTION_RESPONSE_CUE.test(content) ||
+    !ACTION_REPORT_CUE.test(content)
+  ) {
+    issues.push({
+      code: "missing_exception_response",
+      path,
+      message:
+        "이상·누락이 발견됐을 때의 중단 또는 교정, 보고, 재점검·재수행 흐름을 행동절차와 연결해야 합니다.",
+    });
+  }
+  return issues;
+}
+
+function inspectInstructorDemonstration(
+  content: string,
+  path: string
+): GenerationQualityIssue[] {
+  if (
+    INSTRUCTOR_ACTION_CUE.test(content) &&
+    TRAINEE_ACTION_CUE.test(content) &&
+    DEMONSTRATION_CUE.test(content)
+  ) {
+    return [];
+  }
+  return [
+    {
+      code: "missing_instructional_detail",
+      path,
+      message:
+        "교관이 보여 줄 동작·확인 지점과 대원이 관찰하거나 답할 내용을 순서대로 작성해야 합니다.",
+    },
+  ];
+}
+
 function isDocumentControlMarker(reference: string): boolean {
   if (reference === SOP_APPLICATION_MARKER) return true;
   const body = reference.slice(1, -1).trim();
@@ -1652,6 +1855,10 @@ export function inspectGeneratedPlan(
       ...inspectTimeTotal(
         [{ content: training.section.content, path: `sections.${training.index}.content` }],
         duration
+      ),
+      ...inspectInstructionalDetail(
+        training.section.content,
+        `sections.${training.index}.content`
       )
     );
   }
@@ -1697,6 +1904,25 @@ export function inspectGeneratedLesson(
       path: `sections.${found.index}.content`,
     }));
   if (timedSections.length > 0) issues.push(...inspectTimeTotal(timedSections, duration));
+
+  const demonstration = findSection(draft.sections, "교관시범");
+  if (demonstration) {
+    issues.push(
+      ...inspectInstructorDemonstration(
+        demonstration.section.content,
+        `sections.${demonstration.index}.content`
+      )
+    );
+  }
+  const practice = findSection(draft.sections, "대원실습");
+  if (practice) {
+    issues.push(
+      ...inspectInstructionalDetail(
+        practice.section.content,
+        `sections.${practice.index}.content`
+      )
+    );
+  }
 
   const safety = findSection(draft.sections, "안전유의사항");
   if (safety) {
@@ -1932,7 +2158,7 @@ export function inspectGeneratedSlides(
     if (SAFETY_CUE.test(slideText) && STOP_OR_REPORT_CUE.test(slideText)) {
       hasSafety = true;
     }
-    if (EVALUATION_CUE.test(slideText) && EVALUATION_STANDARD_CUE.test(slideText)) {
+    if (PERFORMANCE_EVALUATION_CUE.test(slideText)) {
       hasEvaluation = true;
     }
   });
@@ -2052,8 +2278,11 @@ export function buildGenerationRepairPrompt(args: {
     args.type === "slides"
       ? `
 - 보호등급·압력 수치·제독 순서의 정합성 문제는 값을 임의로 하나로 통일하거나 새 절차를 만들지 마세요. 적용 조건과 근거 출처를 분리해 명시하고, 참고 자료로 구분할 수 없으면 "참고 자료에서 확인되지 않습니다"라고 밝히세요.
-- 현장 상황 판단 → 대원 참여 실습 → 수행평가 순서를 만들고, 같은 role·composition의 과도한 반복은 각 장의 실제 교육 목적에 맞게 분산하세요.`
-      : "";
+- 현장 상황 판단 → 대원 참여 실습 → 수행평가 순서를 만들고, 같은 role·composition의 과도한 반복은 각 장의 실제 교육 목적에 맞게 분산하세요.
+- 참여 실습 장은 steps에 실제 대원 행동 3~5개를 순서대로 넣고, 노트에는 시작 조건·동작 후 확인·이상 시 중단과 보고·교정 및 재수행을 연결하세요. 평가 장은 이 행동들을 같은 순서로 관찰하게 하세요.`
+      : `
+- 훈련내용 또는 대원실습에는 '대원 행동절차:'와 최소 3개의 번호 행동을 줄마다 작성하세요. 각 행동은 실제 동작과 확인 지점을 연결하고, 마지막에 이상 시 중단·보고·교정 또는 재수행을 적으세요.
+- 자료에 고정 순서가 없으면 기술 절차를 새로 만들지 말고 교육 진행 순서임을 밝힌 뒤 판단 조건 → 행동 → 확인 → 보고로 구성하세요.`;
   const citationRepairRule =
     args.type === "slides"
       ? "출처 라벨은 [참고 자료]에 표시된 문자열만 각 장의 sourceRefs에 그대로 적으세요."
@@ -2150,8 +2379,18 @@ export function buildSectionRegenPrompt(args: {
       : "";
   const isSopSection =
     args.currentHeading.trim() === "훈련내용" || args.currentHeading.trim() === "핵심이론";
+  const isActionProcedureSection =
+    args.currentHeading.trim() === "훈련내용" ||
+    args.currentHeading.trim() === "교관시범" ||
+    args.currentHeading.trim() === "대원실습" ||
+    args.currentHeading.trim() === "정리·평가";
   const sopRule = isSopSection
     ? `\n- 이 섹션은 SOP 지정 위치입니다. ${buildSopPromptContract(args.sopEvidence).replace(/\n/g, "\n  ")}`
+    : "";
+  const actionProcedureRule = isActionProcedureSection
+    ? `
+- 대원 행동절차는 최소 3개의 번호 행동을 줄마다 적고, 각 행동의 실제 동작과 확인 지점을 연결하세요.
+- 이상·누락 시 중단 또는 교정 → 보고 → 재점검·재수행을 작성하세요. 자료에 고정 순서가 없으면 기술 절차를 만들지 말고 교육 진행 순서임을 밝히세요.`
     : "";
   return `전북소방본부 ${args.category} 분야 교육 문서 "${args.docTitle}"의 한 섹션만 다시 작성합니다.
 
@@ -2168,6 +2407,7 @@ ${args.currentContent}${instr}
 - ${condition.rule}
 - 다른 섹션과 중복되지 않게, 이 섹션의 역할에 충실하게 작성하세요.
 - 선택된 세부 훈련 방향이 있으면 그 범위에 집중하고 다른 방향을 새로 섞지 마세요.${sopRule}
+${actionProcedureRule}
 - 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 마세요. 출처는 서버가 전체 문서 맨 뒤의 '근거 자료 및 출처'에 자동으로 모읍니다.
 - 대상 수준(${args.audience})·교육 시간(${args.duration})에 맞춰 한국어로 작성하세요.
 - heading은 반드시 현재 제목 "${args.currentHeading}"을 글자 그대로 유지하세요.
@@ -2230,9 +2470,10 @@ ${args.current.bullets.map((b) => `· ${b}`).join("\n")}
 - 다른 슬라이드와 중복되지 않게 작성하세요.
 - 선택된 세부 훈련 방향이 있으면 그 범위에 집중하고 다른 방향을 새로 섞지 마세요.${sopRule}
 - 제목은 분류명이 아니라 이 장의 결론이 드러나는 서술형으로 ${MAX_SLIDE_TITLE_CHARS}자 이내로 쓰고, 핵심 문장은 구체적으로 2~4개를 각각 ${MAX_SLIDE_BULLET_CHARS}자 이내로 작성하세요.
-- 발표자 노트는 이유·시범 포인트·질문·흔한 실수 중 해당 내용을 포함해 4~7문장으로 작성하세요.
+- 발표자 노트는 이유·시범 포인트·질문·흔한 실수·교정 방법 중 해당 내용을 포함해 4~7문장으로 작성하세요.
 - ${slideMode.rules}
 - 비교 장이면 steps에 기준명 2개를, 절차·시간흐름·판단흐름 장이면 ${MAX_SLIDE_STEP_CHARS}자 이내의 단계어 3~5개를 넣고, 아니면 steps를 생략하세요.
+- 참여 실습 또는 절차 장이면 steps를 실제 대원 행동 3~5개로 구성하고, 화면·노트에 동작 후 확인과 이상 시 중단·보고·재수행을 연결하세요. 근거에 고정 순서가 없으면 기술 절차를 임의로 만들지 마세요.
 - 내용 의미에 맞는 role과 composition을 서로 구분해 지정하고, 호환용 layout도 함께 지정하세요.
 - visual은 source-page/native-diagram/none 중 하나로 지정하세요. 원문 시각자료는 참고 자료 본문에 사진·그림·표·도해 같은 시각 단서가 확인되는 경우에만 visual-explanation 화면에서 사용하고 정확한 sourceRef와 altText를 넣되 assetId·documentId·imageData는 만들지 마세요.
 - sourceRefs에는 참고 자료의 출처 라벨을 글자 그대로 1~4개 넣으세요.

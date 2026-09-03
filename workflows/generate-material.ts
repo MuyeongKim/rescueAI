@@ -30,6 +30,7 @@ import {
   generationQualityMessages,
   inspectCurrentGenerationQuality,
   resolveSlideDeckMode,
+  selectGenerationContextBySourceRefs,
   slideCountRangeFor,
   strictGeneratedSlideSchemaFor,
   strictGeneratedSlidesSchemaFor,
@@ -73,6 +74,8 @@ type SlideOutlineItem = {
   purpose: string;
   sourceRefs: string[];
   sopTarget: boolean;
+  /** 새 작업은 필수. 과거 체크포인트를 이어가기 위해 읽을 때만 선택값으로 둔다. */
+  actionRequirements?: string[];
 };
 
 type SlideOutline = {
@@ -85,6 +88,10 @@ type DocumentOutlineItem = {
   purpose: string;
   keyPoints: string[];
   minutes: number | null;
+  /** 새 작업은 필수. 배포 전에 시작된 체크포인트를 이어가기 위해 읽을 때만 선택값으로 둔다. */
+  sourceRefs?: string[];
+  /** 해당 섹션에서 실제로 보여 줄 행동·확인·이상 대응 요구사항. */
+  actionRequirements?: string[];
 };
 
 type DocumentOutline = {
@@ -448,9 +455,27 @@ function contextFromCheckpoint(checkpoint: GenerationCheckpoint): GenerationCont
 function allowedSourceLabels(context: GenerationContext): string[] {
   const labels = extractSourceLabels(context.contextText);
   if (labels.length === 0) {
-    throw new FatalError("슬라이드에 연결할 검증된 근거 출처가 없습니다.");
+    throw new FatalError("자료제작에 연결할 검증된 근거 출처가 없습니다.");
   }
   return labels;
+}
+
+function documentSectionUsesSop(
+  type: "plan" | "lesson",
+  heading: string
+): boolean {
+  return type === "plan" ? heading === "훈련내용" : heading === "핵심이론";
+}
+
+function scopedGenerationContext(
+  context: GenerationContext,
+  sourceRefs: readonly string[],
+  includeSop: boolean
+): string {
+  return selectGenerationContextBySourceRefs(context.contextText, [
+    ...sourceRefs,
+    ...(includeSop ? context.sopEvidence.sourceLabels : []),
+  ]);
 }
 
 function targetSlideCount(duration: ValidatedGenerateRequest["duration"]): number {
@@ -747,6 +772,7 @@ async function generateDocumentOutlineStep(jobId: string, runToken: string): Pro
   const context = contextFromCheckpoint(checkpoint);
   const headings = documentHeadings(request.type);
   const headingSchema = z.enum(headings as [string, ...string[]]);
+  const labelSchema = z.enum(allowedSourceLabels(context) as [string, ...string[]]);
   const schema = z.object({
     title: z.string().min(4).max(100),
     sections: z
@@ -755,6 +781,8 @@ async function generateDocumentOutlineStep(jobId: string, runToken: string): Pro
           heading: headingSchema,
           purpose: z.string().min(10).max(300),
           keyPoints: z.array(z.string().min(2).max(120)).min(2).max(6),
+          sourceRefs: z.array(labelSchema).min(1).max(4),
+          actionRequirements: z.array(z.string().min(4).max(140)).min(1).max(6),
         })
       )
       .length(headings.length)
@@ -784,7 +812,9 @@ async function generateDocumentOutlineStep(jobId: string, runToken: string): Pro
 [이번 단계]
 - 지금은 본문을 쓰지 말고 ${headings.length}개 고정 섹션의 전체 설계만 작성하세요.
 - 섹션 순서는 ${headings.join(" → ")}로 정확히 유지하세요.
-- 각 섹션의 역할과 반드시 다룰 근거 기반 핵심어를 먼저 확정하세요.`,
+- 각 섹션의 역할과 반드시 다룰 근거 기반 핵심어를 먼저 확정하세요.
+- 각 섹션의 sourceRefs에는 실제로 그 섹션 작성에 사용할 참고 자료 라벨만 1~4개 지정하세요.
+- actionRequirements에는 그 섹션에서 대원이 실제로 할 행동, 행동 후 확인, 이상 시 조치·보고 또는 평가 연결 중 필요한 항목을 구체적으로 지정하세요. 자료에 고정 순서가 없으면 기술 절차를 만들지 마세요.`,
       temperature: 0.3,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
     });
@@ -859,6 +889,15 @@ async function generateDocumentBatchStep(
   });
   const totalBatches = Math.ceil(outline.sections.length / DOCUMENT_BATCH_SIZE);
   const batchNumber = Math.floor(start / DOCUMENT_BATCH_SIZE) + 1;
+  const batchSourceRefs = batchPlan.flatMap((section) => section.sourceRefs ?? []);
+  const batchUsesSop = batchPlan.some((section) =>
+    documentSectionUsesSop(request.type as "plan" | "lesson", section.heading)
+  );
+  const batchContextText = scopedGenerationContext(
+    context,
+    batchSourceRefs,
+    batchUsesSop
+  );
   row = await announceWorkerStage(row, {
     status: "drafting",
     stage: `문서 ${start + 1}~${end}번째 섹션 정밀 작성 중 · ${batchNumber}/${totalBatches}묶음`,
@@ -868,7 +907,7 @@ async function generateDocumentBatchStep(
     const { object } = await generateObject({
       model: getChatModel(activeModelKey(checkpointOf(row.checkpoint), request)),
       schema,
-      system: buildGenerateSystemPrompt(request.category, context.contextText, context.sopEvidence),
+      system: buildGenerateSystemPrompt(request.category, batchContextText, context.sopEvidence),
       prompt: `${buildGeneratePrompt(request, context.sopEvidence)}
 
 [확정된 전체 문서 설계]
@@ -878,7 +917,7 @@ ${outline.sections
     (section, index) =>
       `${index + 1}. ${section.heading}: ${section.purpose} / 핵심 ${section.keyPoints.join(", ")}${
         section.minutes === null ? "" : ` / 배정 시간 ${section.minutes}분`
-      }`
+      } / 행동 요구 ${(section.actionRequirements ?? []).join("; ") || "기존 핵심 기준 적용"}`
   )
   .join("\n")}
 
@@ -891,7 +930,7 @@ ${batchPlan
     (section) =>
       `${section.heading}: ${section.purpose} / 핵심 ${section.keyPoints.join(", ")}${
         section.minutes === null ? "" : ` / 이 섹션 시간 합계 정확히 ${section.minutes}분`
-      }`
+      } / 행동 요구 ${(section.actionRequirements ?? []).join("; ") || "기존 핵심 기준 적용"} / 허용 근거 ${(section.sourceRefs ?? []).join(", ") || "기존 전체 근거"}`
   )
   .join("\n")}`,
       temperature: 0.35,
@@ -948,6 +987,7 @@ async function generateSlideOutlineStep(
           purpose: z.string().min(10).max(220),
           sourceRefs: z.array(labelSchema).min(1).max(4),
           sopTarget: z.boolean(),
+          actionRequirements: z.array(z.string().min(4).max(140)).min(1).max(5),
         })
       )
       .length(expectedCount)
@@ -972,6 +1012,7 @@ async function generateSlideOutlineStep(
 - 지금은 본문을 쓰지 말고 정확히 ${expectedCount}장의 전체 구성안만 만드세요.
 - 학습 목표에서 개념·절차·장비·판단 사례·실습·안전·평가·요약으로 이어지는 흐름을 먼저 확정하세요.
 - 각 장마다 결론형 제목, 역할, 서로 다른 화면 구도, 교육 목적, 정확한 근거 라벨을 지정하세요.
+- actionRequirements에는 해당 장에서 대원이 할 행동, 확인 지점, 이상 시 조치 또는 평가 연결을 구체적으로 지정하세요. 참여 실습 장은 실제 행동 3~5개를 설계하세요.
 - SOP 적용 근거 장은 sopTarget=true로 표시하세요.`,
       temperature: 0.3,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
@@ -1015,6 +1056,11 @@ async function generateSlideBatchStep(
   });
   const totalBatches = Math.ceil(outline.slides.length / SLIDE_BATCH_SIZE);
   const batchNumber = Math.floor(start / SLIDE_BATCH_SIZE) + 1;
+  const batchContextText = scopedGenerationContext(
+    context,
+    batchPlan.flatMap((slide) => slide.sourceRefs),
+    batchPlan.some((slide) => slide.sopTarget)
+  );
   row = await announceWorkerStage(row, {
     status: "drafting",
     stage: `슬라이드 ${start + 1}~${end}장 정밀 작성 중 · ${batchNumber}/${totalBatches}묶음`,
@@ -1024,7 +1070,7 @@ async function generateSlideBatchStep(
     const { object } = await generateObject({
       model: getChatModel(activeModelKey(checkpointOf(row.checkpoint), request)),
       schema,
-      system: buildGenerateSystemPrompt(request.category, context.contextText, context.sopEvidence),
+      system: buildGenerateSystemPrompt(request.category, batchContextText, context.sopEvidence),
       prompt: `${buildGeneratePrompt(request, context.sopEvidence)}
 
 [확정된 전체 구성안]
@@ -1033,7 +1079,7 @@ ${outline.slides
     (slide, index) =>
       `${index + 1}. ${slide.title} · role=${slide.role} · composition=${slide.composition}${
         slide.sopTarget ? " · SOP 적용 근거 장" : ""
-      }`
+      } · 행동 요구 ${(slide.actionRequirements ?? []).join("; ") || "기존 목적 적용"}`
   )
   .join("\n")}
 
@@ -1045,7 +1091,7 @@ ${batchPlan
     (slide, index) =>
       `${start + index + 1}번 ${JSON.stringify(slide.title)}: ${slide.purpose} / 근거 ${slide.sourceRefs.join(", ")}${
         slide.sopTarget ? " / 이 장에 SOP 적용 계약을 정확히 반영" : ""
-      }`
+      } / 행동 요구 ${(slide.actionRequirements ?? []).join("; ") || "기존 목적 적용"}`
   )
   .join("\n")}`,
       temperature: 0.35,
@@ -1139,6 +1185,14 @@ async function repairDocumentSectionStep(
     issues: relevantIssues,
   };
   const outlineItem = checkpoint.documentOutline?.sections[index];
+  const sectionContextText = scopedGenerationContext(
+    context,
+    outlineItem?.sourceRefs ?? [],
+    documentSectionUsesSop(
+      request.type as "plan" | "lesson",
+      current.heading
+    )
+  );
   try {
     const { object } = await generateObject({
       model: getChatModel(activeModelKey(checkpoint, request)),
@@ -1146,7 +1200,11 @@ async function repairDocumentSectionStep(
         heading: z.literal(current.heading),
         content: z.string().min(1).max(20_000),
       }),
-      system: buildGenerateSystemPrompt(request.category, context.contextText, context.sopEvidence),
+      system: buildGenerateSystemPrompt(
+        request.category,
+        sectionContextText,
+        context.sopEvidence
+      ),
       prompt: `${buildGenerationRepairPrompt({
           type: request.type,
           request,
@@ -1159,6 +1217,8 @@ async function repairDocumentSectionStep(
 - 전체 문서가 아니라 ${index + 1}번째 '${current.heading}' 섹션 하나만 JSON 객체로 반환하세요.
 - heading은 '${current.heading}'으로 고정하고 content만 보완하세요.
 ${outlineItem ? `- 이 섹션의 목적: ${outlineItem.purpose}\n- 반드시 다룰 핵심: ${outlineItem.keyPoints.join(", ")}` : ""}
+${outlineItem?.actionRequirements?.length ? `- 반드시 구현할 행동·확인 기준: ${outlineItem.actionRequirements.join("; ")}` : ""}
+${outlineItem?.sourceRefs?.length ? `- 이 섹션에 허용된 근거: ${outlineItem.sourceRefs.join(", ")}` : ""}
 ${outlineItem?.minutes == null ? "" : `- [단계명 · 00분] 표기의 시간 합계를 정확히 ${outlineItem.minutes}분으로 맞추세요.`}
 - 다른 섹션의 내용을 대신 쓰거나 전체 sections 배열을 반환하지 마세요.`,
       temperature: 0.3,
@@ -1254,12 +1314,25 @@ async function repairSlideStep(
   const sopTarget =
     checkpoint.outline.slides[index]?.sopTarget === true ||
     relevantIssues.some((issue) => issue.code.startsWith("missing_sop"));
+  const slideOutline = checkpoint.outline.slides[index];
+  const slideContextText = scopedGenerationContext(
+    context,
+    [
+      ...(slideOutline?.sourceRefs ?? []),
+      ...(current.sourceRefs ?? []),
+    ],
+    sopTarget
+  );
   try {
     const labels = allowedSourceLabels(context);
     const { object } = await generateObject({
       model: getChatModel(activeModelKey(checkpoint, request)),
       schema: strictGeneratedSlideSchemaFor(labels),
-      system: buildGenerateSystemPrompt(request.category, context.contextText, context.sopEvidence),
+      system: buildGenerateSystemPrompt(
+        request.category,
+        slideContextText,
+        context.sopEvidence
+      ),
       prompt: buildSlideRegenPrompt({
         category: request.category,
         audience: request.audience,
@@ -1276,7 +1349,11 @@ async function repairSlideStep(
         sopTarget,
         instruction: `자동 품질검사 항목을 해결하세요: ${relevantIssues
           .map((issue) => issue.message)
-          .join(" / ")}`,
+          .join(" / ")}${
+          slideOutline?.actionRequirements?.length
+            ? ` / 구성안의 행동·확인 요구: ${slideOutline.actionRequirements.join("; ")}`
+            : ""
+        }`,
       }),
       temperature: 0.3,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
