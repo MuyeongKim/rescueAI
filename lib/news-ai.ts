@@ -68,7 +68,7 @@ export async function summarizeArticle(input: {
 제목: ${input.title}
 출처: ${input.source ?? "-"}
 내용: ${(input.text ?? "").slice(0, 4000)}`,
-      // Gemini 사고 끄기(지연↓). 타 제공자는 무시됨. GLM은 lib/llm 의 fetch 가 thinking:disabled 주입.
+      // Gemini 사고 끄기(지연↓). 타 제공자는 무시됨. GLM 요청은 lib/llm에서 버전별로 보정.
       providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
     });
     return object;

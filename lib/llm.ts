@@ -20,14 +20,14 @@ export type ModelOption = {
 };
 
 // 선택 가능 후보 — 실제 노출은 availableModels() 가 자격증명 유무로 필터링한다.
-// Gemini는 -latest 별칭 사용: 구글이 최신으로 갱신하면 코드 수정 없이 자동 추적
-// (현재 flash-latest→gemini-3.5-flash, pro-latest→gemini-3.1-pro-preview).
+// Gemini는 -latest 별칭 사용: 구글이 최신으로 갱신하면 코드 수정 없이 자동 추적한다.
+// 실제 해석된 버전은 응답 메타데이터로 확인한다(별칭의 대상은 수시로 바뀔 수 있음).
 export const MODEL_OPTIONS: ModelOption[] = [
   { key: "gemini-flash", label: "빠른 처리", provider: "gemini", model: "gemini-flash-latest", note: "신속 · 기본" },
   { key: "gemini-pro", label: "정밀 처리", provider: "gemini", model: "gemini-pro-latest", note: "품질 우선 · 다소 느림" },
   // GLM (z.ai) — openai-compat. LLM_API_URL=z.ai 엔드포인트 + LLM_API_KEY 설정 시 노출.
-  // 모델명은 GLM_MODEL 로 바꿀 수 있다(z.ai 대시보드 기준, 예: glm-4.6/glm-4.7/glm-4.7-flash).
-  { key: "glm", label: "대체 처리", provider: "openai-compat", model: process.env.GLM_MODEL || "glm-4.6", note: "관리자 연결 모델" },
+  // 모델명은 GLM_MODEL 로 바꿀 수 있다. 미설정 시 현재 권장 대체 모델인 GLM-5.3을 사용한다.
+  { key: "glm", label: "대체 처리", provider: "openai-compat", model: process.env.GLM_MODEL || "glm-5.3", note: "관리자 연결 모델" },
   { key: "claude-sonnet-4-5", label: "심층 처리", provider: "claude", model: "claude-sonnet-4-5", note: "복합 내용 우선" },
   // ※ 내부망 이전 시: openai-compat 슬롯(LLM_API_URL)을 내부 Qwen으로 가리키고 위 GLM 옵션을 Qwen으로 교체.
 ];
@@ -48,20 +48,39 @@ export function availableModels(): { key: string; label: string; note?: string }
   }));
 }
 
-// GLM(z.ai) 추론 모델은 기본적으로 사고(thinking)에 토큰을 대량 소모해 본문이 잘린다.
-// RAG·생성엔 사고가 불필요하므로 요청 본문에 thinking:disabled 를 주입한다(없을 때만).
-// 다른 openai-compat 모델(model 이 glm* 아님)은 건드리지 않는다.
+// z.ai 요청 호환성 보정:
+// - GLM-5.3은 thinking 비활성화를 허용하지 않으므로 항상 enabled로 보내고,
+//   호출부가 별도 지정하지 않은 경우 reasoning_effort=low로 비용·지연을 제한한다.
+// - 이전 GLM은 기존처럼 thinking을 명시하지 않았을 때만 disabled를 적용한다.
+// - 다른 openai-compat 모델은 건드리지 않는다.
+export function normalizeOpenAICompatRequestBody(body: string): string {
+  try {
+    const parsed: unknown = JSON.parse(body);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return body;
+
+    const request = parsed as Record<string, unknown>;
+    if (typeof request.model !== "string" || !request.model.startsWith("glm")) return body;
+
+    if (request.model.startsWith("glm-5.3")) {
+      const thinking = request.thinking;
+      request.thinking =
+        thinking && typeof thinking === "object" && !Array.isArray(thinking)
+          ? { ...(thinking as Record<string, unknown>), type: "enabled" }
+          : { type: "enabled" };
+      if (request.reasoning_effort === undefined) request.reasoning_effort = "low";
+    } else if (request.thinking === undefined) {
+      request.thinking = { type: "disabled" };
+    }
+
+    return JSON.stringify(request);
+  } catch {
+    return body;
+  }
+}
+
 const glmFetch: typeof fetch = async (input, init) => {
   if (init?.body && typeof init.body === "string") {
-    try {
-      const b = JSON.parse(init.body);
-      if (typeof b.model === "string" && b.model.startsWith("glm") && b.thinking === undefined) {
-        b.thinking = { type: "disabled" };
-        init = { ...init, body: JSON.stringify(b) };
-      }
-    } catch {
-      /* 본문이 JSON 아니면 그대로 통과 */
-    }
+    init = { ...init, body: normalizeOpenAICompatRequestBody(init.body) };
   }
   return fetch(input, init);
 };
