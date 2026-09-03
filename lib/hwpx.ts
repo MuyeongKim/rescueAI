@@ -9,6 +9,7 @@ import {
   documentSourceLines,
   prepareGeneratedDocForExport,
 } from "@/lib/document-export";
+import { hwpxParagraphs } from "@/lib/hwpx-format";
 
 const XML_DECL = '<?xml version="1.0" encoding="UTF-8" standalone="yes" ?>';
 
@@ -42,18 +43,28 @@ function charPr(id: number, height: number, opts?: { bold?: boolean; color?: str
   );
 }
 
-// ── paraPr 2종: 0 왼쪽정렬 · 1 가운데정렬 ──
-function paraPr(id: number, align: "LEFT" | "CENTER") {
+// ── paraPr 5종: 본문 · 가운데 · 섹션 제목 · 목록 · 단계 소제목 ──
+function paraPr(
+  id: number,
+  align: "LEFT" | "CENTER",
+  opts: {
+    intent?: number;
+    left?: number;
+    prev?: number;
+    next?: number;
+    keepWithNext?: boolean;
+  } = {}
+) {
   const margin =
     "<hh:margin>" +
-    '<hc:intent value="0" unit="HWPUNIT"/><hc:left value="0" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="0" unit="HWPUNIT"/><hc:next value="0" unit="HWPUNIT"/>' +
+    `<hc:intent value="${opts.intent ?? 0}" unit="HWPUNIT"/><hc:left value="${opts.left ?? 0}" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="${opts.prev ?? 0}" unit="HWPUNIT"/><hc:next value="${opts.next ?? 0}" unit="HWPUNIT"/>` +
     "</hh:margin>" +
     '<hh:lineSpacing type="PERCENT" value="160" unit="HWPUNIT"/>';
   return (
     `<hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1" suppressLineNumbers="0" checked="0" textDir="LTR">` +
     `<hh:align horizontal="${align}" vertical="BASELINE"/>` +
     '<hh:heading type="NONE" idRef="0" level="0"/>' +
-    '<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="KEEP_WORD" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/>' +
+    `<hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="KEEP_WORD" widowOrphan="0" keepWithNext="${opts.keepWithNext ? 1 : 0}" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/>` +
     '<hh:autoSpacing eAsianEng="0" eAsianNum="0"/>' +
     `<hp:switch><hp:case hp:required-namespace="http://www.hancom.co.kr/hwpml/2016/HwpUnitChar">${margin}</hp:case><hp:default>${margin}</hp:default></hp:switch>` +
     '<hh:border borderFillIDRef="2" offsetLeft="0" offsetRight="0" offsetTop="0" offsetBottom="0" connect="0" ignoreMargin="0"/>' +
@@ -94,9 +105,9 @@ function buildHeaderXml(): string {
     "<hh:refList>" +
     fontfaces +
     `<hh:borderFills itemCnt="2">${borderFill(1)}${borderFill(2)}</hh:borderFills>` +
-    `<hh:charProperties itemCnt="4">${charPr(0, 1000)}${charPr(1, 1600, { bold: true })}${charPr(2, 1200, { bold: true })}${charPr(3, 900, { color: "#555555" })}</hh:charProperties>` +
+    `<hh:charProperties itemCnt="5">${charPr(0, 1000)}${charPr(1, 1600, { bold: true })}${charPr(2, 1200, { bold: true })}${charPr(3, 900, { color: "#555555" })}${charPr(4, 1000, { bold: true })}</hh:charProperties>` +
     '<hh:tabProperties itemCnt="1"><hh:tabPr id="0" autoTabLeft="0" autoTabRight="0"/></hh:tabProperties>' +
-    `<hh:paraProperties itemCnt="2">${paraPr(0, "LEFT")}${paraPr(1, "CENTER")}</hh:paraProperties>` +
+    `<hh:paraProperties itemCnt="5">${paraPr(0, "LEFT", { next: 250 })}${paraPr(1, "CENTER")}${paraPr(2, "LEFT", { prev: 700, next: 300, keepWithNext: true })}${paraPr(3, "LEFT", { intent: -800, left: 800, next: 120 })}${paraPr(4, "LEFT", { prev: 450, next: 160, keepWithNext: true })}</hh:paraProperties>` +
     '<hh:styles itemCnt="1"><hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langID="1042" lockForm="0"/></hh:styles>' +
     "</hh:refList>" +
     "</hh:head>"
@@ -156,24 +167,30 @@ function buildSectionXml(doc: GeneratedDoc): string {
   paras.push(paragraph({ text: "", charPrId: 0, paraPrId: 0 }));
 
   for (const section of doc.sections) {
-    paras.push(paragraph({ text: section.heading, charPrId: 2, paraPrId: 0 }));
-    for (const line of section.content.split("\n")) {
-      paras.push(paragraph({ text: line, charPrId: 0, paraPrId: 0 }));
+    paras.push(paragraph({ text: section.heading, charPrId: 2, paraPrId: 2 }));
+    for (const item of hwpxParagraphs(section.content)) {
+      const label = item.kind === "label";
+      paras.push(
+        paragraph({
+          text: item.text,
+          charPrId: label ? 4 : 0,
+          paraPrId: item.kind === "bullet" ? 3 : label ? 4 : 0,
+        })
+      );
     }
-    paras.push(paragraph({ text: "", charPrId: 0, paraPrId: 0 }));
   }
 
   const sourceLines = documentSourceLines(doc.sources);
   if (sourceLines.length > 0) {
     paras.push(
-      paragraph({ text: DOCUMENT_SOURCE_SECTION_TITLE, charPrId: 2, paraPrId: 0 })
+      paragraph({ text: DOCUMENT_SOURCE_SECTION_TITLE, charPrId: 2, paraPrId: 2 })
     );
     for (const source of sourceLines) {
       paras.push(
         paragraph({
           text: `- ${source}`,
           charPrId: 0,
-          paraPrId: 0,
+          paraPrId: 3,
         })
       );
     }

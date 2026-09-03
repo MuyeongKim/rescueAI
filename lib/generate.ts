@@ -780,6 +780,7 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
 - ${buildSopPromptContract(sopEvidence).replace(/\n/g, "\n  ")}
 - ${condition.rule}
 - 대상 수준(${req.audience})에 맞는 난이도로, 현장에서 바로 쓸 수 있게 구체적으로 작성하세요.
+- 목표·장비·안전·평가의 세부 항목은 한 문단에 이어 쓰지 말고 각 항목을 "- "로 시작해 줄바꿈하세요. 훈련내용의 [단계명 · 00분] 소제목도 각각 새 줄에서 시작하세요.
 - 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 마세요. 검증된 출처는 완성 문서 맨 뒤의 '근거 자료 및 출처' 목록에 서버가 자동으로 모읍니다.
 - 자료에 없는 수량·중단 기준·평가기준은 임의로 만들지 말고 "참고 자료에서 확인되지 않습니다"라고 밝히세요.
 - 한국어로 작성하세요.`;

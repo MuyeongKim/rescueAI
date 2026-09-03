@@ -85,6 +85,41 @@ describe("POST /api/hwp 출처 배치", () => {
     expect(JSON.stringify(payload.values).match(/근거 자료 및 출처/g)).toHaveLength(1);
   });
 
+  it("한 줄로 붙은 단계·목록 표지를 표준 양식에 실제 줄바꿈으로 전달한다", async () => {
+    const response = await POST(
+      requestWith({
+        title: "공기호흡기 훈련계획",
+        template: "training_plan",
+        sections: [
+          { heading: "훈련목표", content: "1. 장비 상태 확인 2. 이상 상태 보고" },
+          {
+            heading: "훈련내용",
+            content:
+              "[이론교육 · 20분] 구성 설명 [교관시범 · 20분] 착용 절차 시범",
+          },
+          { heading: "필요장비", content: "· 공기호흡기 · 개인보호장비" },
+          { heading: "안전관리", content: "- 압력 확인 - 이상 시 즉시 중단" },
+          { heading: "훈련평가", content: "1. 점검 순서 2. 보고 정확성" },
+        ],
+        sources: [{ document_id: 7, doc: "공기호흡기 교육자료", page: 3 }],
+      })
+    );
+
+    expect(response.status).toBe(200);
+    const request = mocks.fetch.mock.calls[0][1] as RequestInit;
+    const payload = JSON.parse(String(request.body));
+    expect(payload.values.goal).toBe("1. 장비 상태 확인\n2. 이상 상태 보고");
+    expect(payload.values.content).toBe(
+      "[이론교육 · 20분] 구성 설명\n[교관시범 · 20분] 착용 절차 시범"
+    );
+    expect(payload.values.equipment).toBe("· 공기호흡기\n· 개인보호장비");
+    expect(payload.values.safety).toBe("- 압력 확인\n- 이상 시 즉시 중단");
+    expect(payload.values.evaluation).toContain("1. 점검 순서\n2. 보고 정확성");
+    expect(payload.values.evaluation).toContain(
+      "근거 자료 및 출처\n- 공기호흡기 교육자료 p.3"
+    );
+  });
+
   it("일반 HWPX는 모든 섹션 뒤 문서 맨 끝에 근거 자료 및 출처를 붙인다", async () => {
     const response = await POST(
       requestWith({

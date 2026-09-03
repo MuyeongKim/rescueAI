@@ -6,6 +6,7 @@ import {
   appendDocumentSources,
   prepareGeneratedDocForExport,
 } from "@/lib/document-export";
+import { normalizeHwpxCellText } from "@/lib/hwpx-format";
 import { claimedGeneratedSources } from "@/lib/source-provenance";
 
 // 한글(hwpx) 파일 생성 — 미니서버(hwp-writer-api)에 서버 대 서버로 중계한다.
@@ -99,11 +100,11 @@ export async function POST(req: Request) {
   if (body.template === "training_plan") {
     const m = body.plan ?? {};
     const planSections = {
-      goal: pick(sections, "목표"),
-      content: pick(sections, "내용"),
-      equipment: pick(sections, "장비"),
-      safety: pick(sections, "안전"),
-      evaluation: pick(sections, "평가"),
+      goal: normalizeHwpxCellText(pick(sections, "목표")),
+      content: normalizeHwpxCellText(pick(sections, "내용")),
+      equipment: normalizeHwpxCellText(pick(sections, "장비")),
+      safety: normalizeHwpxCellText(pick(sections, "안전")),
+      evaluation: normalizeHwpxCellText(pick(sections, "평가")),
     };
     const requiredLabels: Record<keyof typeof planSections, string> = {
       goal: "훈련 목표",
@@ -140,7 +141,9 @@ export async function POST(req: Request) {
         // AI 생성 5개 섹션 → 고정 제목으로 확정 매핑
         ...planSections,
         // 표준 양식에는 별도 출처 셀이 없으므로 마지막 평가 셀의 끝에 한 번만 모은다.
-        evaluation: appendDocumentSources(planSections.evaluation, sources),
+        evaluation: normalizeHwpxCellText(
+          appendDocumentSources(planSections.evaluation, sources)
+        ),
       },
     };
   } else {
