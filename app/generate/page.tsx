@@ -16,6 +16,9 @@ import { listMyMaterials } from "@/lib/generated-materials";
 import { GenerateForm } from "@/components/generate/GenerateForm";
 import { SavedList } from "@/components/generate/SavedList";
 import { OperationalHeader } from "@/components/layout/OperationalHeader";
+import { listMyGenerationDrafts, loadMyGenerationDraft } from "@/lib/generation-drafts-server";
+import { listMyGenerationJobs } from "@/lib/generation-recovery";
+import { GenerationRecoveryList } from "@/components/generate/GenerationRecoveryList";
 
 export const dynamic = "force-dynamic";
 
@@ -107,21 +110,29 @@ async function loadDocsByCategory(): Promise<Record<string, string[]>> {
 export default async function GeneratePage({
   searchParams,
 }: {
-  searchParams: Promise<{ m?: string; j?: string }>;
+  searchParams: Promise<{ m?: string; j?: string; d?: string }>;
 }) {
   const resolvedSearchParams = await searchParams;
   const docsByCategory = await loadDocsByCategory();
   const categories = Object.keys(docsByCategory);
   const models = availableModels();
   const requestedJobId = DEMO ? undefined : validGenerationJobId(resolvedSearchParams.j);
-  const [initialMaterial, initialJob] = await Promise.all([
+  const [initialMaterial, requestedJob, jobs, drafts, initialDraft] = await Promise.all([
     loadMaterial(resolvedSearchParams.m),
     loadGenerationJob(resolvedSearchParams.j),
+    listMyGenerationJobs(),
+    listMyGenerationDrafts(),
+    loadMyGenerationDraft(resolvedSearchParams.d, !resolvedSearchParams.d
+      ? requestedJobId ? `job:${requestedJobId}` : resolvedSearchParams.m ? `material:${resolvedSearchParams.m}` : undefined
+      : undefined),
   ]);
+  const latestActiveJob = !resolvedSearchParams.m && !requestedJobId && !resolvedSearchParams.d
+    ? jobs.find((job) => !["completed", "needs_attention", "failed"].includes(job.status)) : undefined;
+  const initialJob = requestedJob ?? (latestActiveJob ? await loadGenerationJob(latestActiveJob.id) : undefined);
   // 두 쿼리가 함께 들어오면 영속 작업 주소를 우선해 서로 다른 결과가 한 화면에 섞이지 않게 한다.
-  const editableMaterial = requestedJobId ? undefined : initialMaterial;
+  const editableMaterial = requestedJobId || (initialDraft && !initialDraft.snapshot.saved) ? undefined : initialMaterial;
   // 재편집 중이 아닐 때만 최근 저장 자료 섹션을 보여준다.
-  const recentSaved = editableMaterial || initialJob || requestedJobId ? [] : await listMyMaterials(5);
+  const recentSaved = editableMaterial || initialDraft || initialJob || requestedJobId ? [] : await listMyMaterials(5);
 
   return (
     <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
@@ -143,14 +154,16 @@ export default async function GeneratePage({
         </Link>
       </div>
 
-      {categories.length === 0 && !editableMaterial && !initialJob && !requestedJobId ? (
+      <GenerationRecoveryList jobs={jobs} drafts={drafts} />
+      {resolvedSearchParams.d && !initialDraft && <p role="alert" className="rounded-md border p-3 text-base">편집 초안을 찾을 수 없습니다. 본인 계정인지 확인하거나 위의 최근 작업에서 다시 열어 주세요.</p>}
+      {categories.length === 0 && !editableMaterial && !initialDraft && !initialJob && !requestedJobId ? (
         <p className="border border-l-4 border-l-primary bg-card py-12 text-center text-sm text-muted-foreground">
           아직 인덱싱된 자료가 없습니다. 자료를 올리면 분야가 자동으로 나타납니다.
         </p>
       ) : (
         <GenerateForm
           key={
-            initialJob || requestedJobId
+            initialDraft ? `draft-${initialDraft.id}` : initialJob || requestedJobId
               ? `job-${initialJob?.id ?? requestedJobId}`
               : editableMaterial
                 ? `material-${editableMaterial.id}`
@@ -159,6 +172,7 @@ export default async function GeneratePage({
           docsByCategory={docsByCategory}
           models={models}
           initialMaterial={editableMaterial}
+          initialDraft={initialDraft}
           initialJob={initialJob}
           pendingJobId={initialJob ? undefined : requestedJobId}
           durableGenerationEnabled={!DEMO}

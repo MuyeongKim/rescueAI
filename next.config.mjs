@@ -35,6 +35,10 @@ const securityHeaders = [
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   poweredByHeader: false,
+  // 빌드에 고정해 페이지 접속/서버 재시작 때 수정 시각이 바뀌지 않게 한다.
+  env: {
+    NEXT_PUBLIC_WEB_UPDATED_AT: new Date().toISOString(),
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

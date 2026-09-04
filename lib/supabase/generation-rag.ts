@@ -14,6 +14,9 @@ import { createAdminClient } from "@/lib/supabase/admin";
 export function createGenerationRagReader() {
   const client = createAdminClient();
   return Object.freeze({
+    verifySourceEvidence(candidates: readonly GeneratedDocSource[], expectedCategory: string) {
+      return verifyExternalRagSourceProvenance(candidates, expectedCategory, client, true);
+    },
     verifySourceProvenance(
       candidates: readonly GeneratedDocSource[],
       expectedCategory: string

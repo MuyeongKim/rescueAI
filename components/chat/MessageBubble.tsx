@@ -8,6 +8,7 @@ import type { DocSource } from "@/lib/database.types";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { SourceBadge } from "@/components/chat/SourceBadge";
+import { ChatMarkdown } from "@/components/chat/ChatMarkdown";
 import {
   CHAT_SOURCE_SECTION_TITLE,
   prepareChatAnswerText,
@@ -20,6 +21,7 @@ type ChatAnnotation = {
   sources?: DocSource[];
   feedback?: number | null;
   degraded?: boolean; // 검색 인프라 장애로 근거가 제한적일 수 있음
+  saveFailed?: boolean;
 };
 
 function extractAnnotation(message: Message): ChatAnnotation | null {
@@ -86,19 +88,24 @@ export function MessageBubble({ message }: { message: Message }) {
         <Flame className="h-4 w-4 text-primary" />
       </div>
       <div className="min-w-0 flex-1 space-y-2">
-        <div className="max-w-[92%] rounded-md rounded-tl-sm bg-muted px-4 py-2.5 text-base leading-relaxed whitespace-pre-wrap wrap-break-word">
+        <div className="max-w-full rounded-md rounded-tl-sm bg-muted px-4 py-2.5 text-base leading-relaxed wrap-break-word sm:max-w-[92%]">
           {answerText ? (
-            answerText
+            <ChatMarkdown text={answerText} />
           ) : (
             <span className="text-muted-foreground">생각하는 중…</span>
           )}
         </div>
 
         {degraded && (
-          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
+          <div role="note" className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
             자료 검색이 일시적으로 원활하지 않아 근거가 제한적일 수 있습니다.
           </div>
+        )}
+        {annotation?.saveFailed && (
+          <p role="alert" className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-950 dark:border-amber-800 dark:bg-amber-950/30 dark:text-amber-100">
+            답변을 저장하지 못했습니다. 이 화면을 닫으면 답변이 사라질 수 있으니 필요한 내용을 먼저 복사해 주세요.
+          </p>
         )}
 
         {sources.length > 0 && (
@@ -127,6 +134,7 @@ export function MessageBubble({ message }: { message: Message }) {
               disabled={submitting}
               onClick={() => sendFeedback(1)}
               aria-label="도움이 됨"
+              aria-pressed={feedback === 1}
             >
               <ThumbsUp className="h-4 w-4" />
             </Button>
@@ -140,6 +148,7 @@ export function MessageBubble({ message }: { message: Message }) {
               disabled={submitting}
               onClick={() => sendFeedback(-1)}
               aria-label="도움 안 됨"
+              aria-pressed={feedback === -1}
             >
               <ThumbsDown className="h-4 w-4" />
             </Button>

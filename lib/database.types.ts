@@ -118,6 +118,8 @@ type MessagesRow = {
   sources: DocSource[] | null;
   feedback: number | null;
   latency_ms: number | null;
+  retrieval_degraded: boolean;
+  client_request_id: string | null;
   created_at: string;
 };
 type MessagesInsert = {
@@ -128,7 +130,29 @@ type MessagesInsert = {
   sources?: DocSource[] | null;
   feedback?: number | null;
   latency_ms?: number | null;
+  retrieval_degraded?: boolean;
+  client_request_id?: string | null;
   created_at?: string;
+};
+
+// ── generation_drafts (개인 편집 초안) ──
+type GenerationDraftsRow = {
+  id: string;
+  user_id: string;
+  draft_key: string;
+  snapshot: Json;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+};
+type GenerationDraftsInsert = {
+  id?: string;
+  user_id: string;
+  draft_key: string;
+  snapshot: Json;
+  revision?: number;
+  created_at?: string;
+  updated_at?: string;
 };
 
 // ── lesson_progress ──
@@ -379,6 +403,12 @@ export interface Database {
         Row: GenerationJobsRow;
         Insert: GenerationJobsInsert;
         Update: Partial<GenerationJobsInsert>;
+        Relationships: [];
+      };
+      generation_drafts: {
+        Row: GenerationDraftsRow;
+        Insert: GenerationDraftsInsert;
+        Update: Partial<GenerationDraftsInsert>;
         Relationships: [];
       };
     };

@@ -3,7 +3,7 @@ import { describe, it, expect, vi } from "vitest";
 // 서버 로직만 단위 검증하므로 Next 빌드의 server-only 경계 마커만 대체한다.
 vi.mock("server-only", () => ({}));
 
-import { buildSystemPrompt, NOT_FOUND_MESSAGE, MAX_SOURCES, DEFAULT_TOP_K } from "@/lib/rag";
+import { buildSystemPrompt, NOT_FOUND_MESSAGE, DEFAULT_TOP_K } from "@/lib/rag";
 
 // 이 앱의 존재 이유에 가장 가까운 규칙 — "근거 없으면 지어내지 않는다".
 // 시스템 프롬프트는 lib/rag.ts 단일 출처이므로, 문구가 조용히 사라지면 여기서 잡힌다.
@@ -45,7 +45,7 @@ describe("buildSystemPrompt (환각 가드레일)", () => {
     expect(prompt).toContain("문서명·페이지");
   });
 
-  it("본문 인라인 출처를 금지하고 검증 출처는 마지막 영역에 한 번만 맡긴다", () => {
+  it("본문 인라인 출처를 금지하고 검색 참고 자료는 마지막 영역에 한 번만 맡긴다", () => {
     const prompt = buildSystemPrompt("자료");
 
     expect(prompt).toContain("출처 라벨이나 문서명·페이지를 직접 쓰지 마세요");
@@ -53,6 +53,7 @@ describe("buildSystemPrompt (환각 가드레일)", () => {
     expect(prompt).toContain("중복 없이 한 번만 자동 표시");
     expect(prompt).toContain("별도의 출처 목록도 작성하지 말고");
     expect(prompt).not.toContain("핵심 주장이나 절차 뒤에는");
+    expect(prompt).toContain("실제 인용 여부를 별도로 검증한 결과가 아닙니다");
   });
 
   it("답변 분량을 늘리더라도 근거 밖 내용을 보태지 못하게 한다", () => {
@@ -79,8 +80,8 @@ describe("buildSystemPrompt (환각 가드레일)", () => {
 });
 
 describe("검색 상수", () => {
-  it("출처 노출 개수는 검색 결과 수를 넘지 않는다", () => {
-    expect(MAX_SOURCES).toBeGreaterThan(0);
-    expect(MAX_SOURCES).toBeLessThanOrEqual(DEFAULT_TOP_K);
+  it("기본 검색량은 충분한 근거를 제공하되 컨텍스트를 제한한다", () => {
+    expect(DEFAULT_TOP_K).toBeGreaterThanOrEqual(8);
+    expect(DEFAULT_TOP_K).toBeLessThanOrEqual(10);
   });
 });

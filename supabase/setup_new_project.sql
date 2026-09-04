@@ -5,7 +5,7 @@
 -- 마이그레이션을 순서대로 이어붙인 것이라, 기존 프로젝트에 개별 마이그레이션을 적용한 결과와
 -- 동일한 스키마가 됩니다. (중간에 만들었다가 지우는 테이블이 보이는 것은 정상 — 이력 그대로입니다.)
 --
--- 포함된 마이그레이션 25개:
+-- 포함된 마이그레이션 27개:
 --   · 0001_init.sql
 --   · 0002_hybrid_search.sql
 --   · 0003_triggers_rls.sql
@@ -31,6 +31,8 @@
 --   · 20260902021457_add_login_access_counter.sql
 --   · 20260902094825_durable_generation_jobs.sql
 --   · 20260903082326_optimize_unfiltered_rag_vector_search.sql
+--   · 20260904222054_improve_tutor_recovery.sql
+--   · 20260904222055_private_generation_drafts.sql
 
 -- ============================================================================
 -- 0001_init.sql
@@ -4770,4 +4772,92 @@ revoke all on function public.match_rag_rescue(vector, integer, double precision
   from public, anon, authenticated;
 grant execute on function public.match_rag_rescue(vector, integer, double precision, jsonb)
   to authenticated, service_role;
+
+
+-- ============================================================================
+-- 20260904222054_improve_tutor_recovery.sql
+-- ============================================================================
+
+-- 검색 장애 안내를 재열람에서도 유지하고 같은 질문의 재시도 저장을 식별한다.
+alter table public.messages
+  add column if not exists retrieval_degraded boolean not null default false,
+  add column if not exists client_request_id uuid;
+
+create unique index if not exists messages_client_request_id_idx
+  on public.messages (client_request_id)
+  where client_request_id is not null;
+
+alter table public.messages drop constraint if exists messages_user_request_id;
+alter table public.messages add constraint messages_user_request_id
+  check (client_request_id is null or role = 'user');
+
+comment on column public.messages.retrieval_degraded is
+  '답변 생성 당시 검색 장애 여부. 과거 미기록 메시지는 false이며 정상 검색을 소급 보증하지 않는다.';
+comment on column public.messages.client_request_id is
+  '사용자 질문의 재시도 UUID. 소유자 RLS 조회 및 본문 일치 검사와 함께 사용한다.';
+
+
+-- ============================================================================
+-- 20260904222055_private_generation_drafts.sql
+-- ============================================================================
+
+-- 완성본과 분리된 개인 편집 초안. 품질 미통과 내용도 보존하지만 공유하지 않는다.
+create table if not exists public.generation_drafts (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  draft_key text not null check (length(draft_key) between 1 and 200),
+  snapshot jsonb not null check (
+    jsonb_typeof(snapshot) = 'object' and octet_length(snapshot::text) <= 1048576
+  ),
+  revision integer not null default 1 check (revision > 0),
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint generation_drafts_owner_key unique (user_id, draft_key)
+);
+create index if not exists generation_drafts_owner_updated_idx
+  on public.generation_drafts (user_id, updated_at desc);
+
+alter table public.generation_drafts enable row level security;
+revoke all on table public.generation_drafts from public, anon, authenticated;
+grant select, insert, update, delete on table public.generation_drafts to authenticated;
+grant all privileges on table public.generation_drafts to service_role;
+
+drop policy if exists generation_drafts_owner_select on public.generation_drafts;
+create policy generation_drafts_owner_select on public.generation_drafts
+  for select to authenticated using ((select auth.uid()) = user_id);
+drop policy if exists generation_drafts_owner_insert on public.generation_drafts;
+create policy generation_drafts_owner_insert on public.generation_drafts
+  for insert to authenticated with check ((select auth.uid()) = user_id);
+drop policy if exists generation_drafts_owner_update on public.generation_drafts;
+create policy generation_drafts_owner_update on public.generation_drafts
+  for update to authenticated using ((select auth.uid()) = user_id)
+  with check ((select auth.uid()) = user_id);
+drop policy if exists generation_drafts_owner_delete on public.generation_drafts;
+create policy generation_drafts_owner_delete on public.generation_drafts
+  for delete to authenticated using ((select auth.uid()) = user_id);
+
+create or replace function public.set_generation_draft_revision()
+returns trigger language plpgsql set search_path = '' as $$
+begin
+  if tg_op = 'INSERT' then
+    new.revision := 1;
+    new.created_at := pg_catalog.statement_timestamp();
+  else
+    if new.user_id is distinct from old.user_id
+       or new.draft_key is distinct from old.draft_key
+       or new.id is distinct from old.id then
+      raise exception 'generation_draft_identity_immutable' using errcode = '23514';
+    end if;
+    new.created_at := old.created_at;
+    new.revision := old.revision + 1;
+  end if;
+  new.updated_at := pg_catalog.statement_timestamp();
+  return new;
+end;
+$$;
+revoke all on function public.set_generation_draft_revision() from public, anon, authenticated;
+drop trigger if exists set_generation_draft_revision on public.generation_drafts;
+create trigger set_generation_draft_revision
+  before insert or update on public.generation_drafts
+  for each row execute function public.set_generation_draft_revision();
 

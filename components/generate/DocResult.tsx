@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { GeneratedSourceLink } from "@/components/generate/GeneratedSourceLink";
 import {
   AccentBar,
   EditToggleButton,
@@ -39,6 +40,8 @@ export function DocResult({
   onCopy,
   exporting,
   quality,
+  planDetails,
+  onPlanDetailsChange,
 }: {
   doc: GeneratedDoc;
   chrome: ResultChrome;
@@ -51,6 +54,8 @@ export function DocResult({
   onCopy: (text: string) => void;
   exporting: "hwpx" | "docx" | null;
   quality?: GenerationQuality | null;
+  planDetails?: { date: string; place: string };
+  onPlanDetailsChange?: (patch: Partial<{ date: string; place: string }>) => void;
 }) {
   const { accent, editing } = chrome;
   // 이전 저장본에 남은 인라인 인용도 화면에서는 숨기고, 마지막 출처 목록으로만 보여 준다.
@@ -100,6 +105,20 @@ export function DocResult({
           {statusMessage}
         </p>
         <QualityBanner quality={quality} />
+        {planDetails && (
+          <section className="rounded-lg border bg-muted/20 p-3" aria-label="현재 훈련계획 일자와 장소">
+            {editing ? <div className="grid gap-3 sm:grid-cols-2">
+              <label className="space-y-1 text-base">이 문서의 훈련 일자
+                <Input type="date" value={planDetails.date} disabled={editorLocked}
+                  onInput={(e) => onPlanDetailsChange?.({ date: e.currentTarget.value })}
+                  onChange={(e) => onPlanDetailsChange?.({ date: e.currentTarget.value })}
+                  className="min-h-12 text-base" />
+              </label>
+              <label className="space-y-1 text-base">이 문서의 훈련 장소<Input value={planDetails.place} maxLength={100} disabled={editorLocked} onChange={(e) => onPlanDetailsChange?.({ place: e.target.value })} className="min-h-12 text-base" /></label>
+            </div> : <p className="text-base">훈련 일자: {planDetails.date || "미정"} · 장소: {planDetails.place || "미정"}</p>}
+            <p className="mt-2 text-sm text-muted-foreground">현재 문서의 저장·한글 양식에 반영됩니다. 위의 새 자료 제작 조건과 별도로 관리합니다.</p>
+          </section>
+        )}
         {editing ? (
           <fieldset
             disabled={editorLocked}
@@ -109,16 +128,11 @@ export function DocResult({
             <legend className="sr-only">문서 섹션 편집</legend>
             {displayDoc.sections.map((s, i) => (
               <section key={i} className="space-y-1">
-                <Input
-                  value={s.heading}
-                  onChange={(e) => onPatchSection(i, { heading: e.target.value })}
-                  className="h-9 font-semibold"
-                  aria-label={`섹션 ${i + 1} 제목`}
-                />
+                <h3 className="text-base font-semibold">{s.heading}</h3>
                 <Textarea
                   value={s.content}
                   onChange={(e) => onPatchSection(i, { content: e.target.value })}
-                  className="min-h-[120px] text-sm leading-relaxed"
+                  className="min-h-[160px] text-base leading-relaxed"
                   aria-label={`섹션 ${i + 1} 본문`}
                 />
                 <RegenControls index={i} regen={regen} />
@@ -129,7 +143,7 @@ export function DocResult({
           displayDoc.sections.map((s, i) => (
             <section key={i} className="space-y-1">
               <h3 className="mb-1 font-semibold">{s.heading}</h3>
-              <p className="whitespace-pre-wrap text-sm leading-relaxed text-muted-foreground">
+              <p className="whitespace-pre-wrap break-words text-base leading-relaxed text-foreground">
                 {s.content}
               </p>
             </section>
@@ -146,8 +160,7 @@ export function DocResult({
             <ul className="mt-2 space-y-1 text-sm leading-relaxed text-muted-foreground">
               {displayDoc.sources.map((source) => (
                 <li key={`${source.document_id}:${source.page ?? "-"}`}>
-                  {source.doc}
-                  {source.page != null ? ` p.${source.page}` : ""}
+                  <GeneratedSourceLink source={source} />
                 </li>
               ))}
             </ul>

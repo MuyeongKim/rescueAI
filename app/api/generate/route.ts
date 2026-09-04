@@ -22,7 +22,7 @@ import {
   type GenerationQualityReport,
 } from "@/lib/generate";
 import { generateRequestSchema } from "@/lib/generation-request";
-import { DEMO, demoGeneratedDoc, demoGeneratedSlides } from "@/lib/demo";
+import { DEMO } from "@/lib/demo";
 import { fetchCategoryContext } from "@/lib/generate-context";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
@@ -31,7 +31,6 @@ import {
   readLimitedJsonBody,
 } from "@/lib/generated-material-save";
 import {
-  SOP_NOT_FOUND_DISCLOSURE,
   type SopEvidence,
 } from "@/lib/sop-evidence";
 import { generationProDraftCallMaxMs } from "@/lib/generation-budget";
@@ -207,52 +206,8 @@ export async function POST(req: Request) {
 
   // 데모 모드: AI/DB 없이 목 문서/슬라이드 반환
   if (DEMO) {
-    const demoCategory = body.category?.trim() || "화재";
-    const demoTitle = topic ? `${demoCategory} — ${topic}` : undefined;
-    const demoSopEvidence: SopEvidence = { status: "not_found", sourceLabels: [] };
-    if (body.type === "slides") {
-      const slides = demoGeneratedSlides.slides.map((slide, index) =>
-        index === 1
-          ? { ...slide, notes: `${SOP_NOT_FOUND_DISCLOSURE}\n${slide.notes}` }
-          : { ...slide }
-      );
-      return Response.json({
-        ...demoGeneratedSlides,
-        slides,
-        mode: resolveSlideDeckMode(body.slideMode),
-        title: demoTitle ?? demoGeneratedSlides.title.replace("화재", demoCategory),
-        sopEvidence: demoSopEvidence,
-        quality: {
-          checked: true,
-          repaired: false,
-          errors: [],
-          warnings: ["관련 SOP 근거 미확인 — 시행 전 최신 SOP 확인 필요"],
-          issues: [],
-        },
-      } satisfies GeneratedSlideDeck & { quality: QualityMeta });
-    }
-    const designatedHeading = body.type === "lesson" ? "핵심이론" : "훈련내용";
-    const designatedIndex = demoGeneratedDoc.sections.findIndex(
-      (section) => section.heading === designatedHeading
-    );
-    const fallbackIndex = designatedIndex >= 0 ? designatedIndex : 1;
-    return Response.json({
-      ...demoGeneratedDoc,
-      sections: demoGeneratedDoc.sections.map((section, index) =>
-        index === fallbackIndex
-          ? { ...section, content: `${SOP_NOT_FOUND_DISCLOSURE}\n${section.content}` }
-          : { ...section }
-      ),
-      title: demoTitle ?? demoGeneratedDoc.title.replace("화재", demoCategory),
-      sopEvidence: demoSopEvidence,
-      quality: {
-        checked: true,
-        repaired: false,
-        errors: [],
-        warnings: ["관련 SOP 근거 미확인 — 시행 전 최신 SOP 확인 필요"],
-        issues: [],
-      },
-    } satisfies GeneratedDoc & { quality: QualityMeta });
+    const { buildDemoGeneration } = await import("@/lib/demo-generation");
+    return Response.json(buildDemoGeneration(body));
   }
 
   const type = body.type;

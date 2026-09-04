@@ -262,10 +262,13 @@ export default async function HomePage() {
         </section>
 
         <section className="border-t-2 border-t-slate-900 dark:border-t-slate-200">
-          <SectionHeading title="최신 구조 동향" href="/news" action="전체 보기" />
+          <SectionHeading title="최근 30일 구조 동향" href="/news" action="전체 보기" />
+          <p className="pt-2 text-xs text-muted-foreground">
+            {DEMO ? "데모 예시 · 실제 최신 기사가 아닙니다. " : ""}한국시간 오늘 포함 최근 30일
+          </p>
           <div className="divide-y divide-slate-200 dark:divide-slate-800">
             {news.length === 0 ? (
-              <p className="py-8 text-center text-sm text-muted-foreground">등록된 구조 동향이 없습니다.</p>
+              <p className="py-8 text-center text-sm text-muted-foreground">최근 30일 동안 등록된 구조 동향이 없습니다.</p>
             ) : (
               news.map((item) => (
                 <Link

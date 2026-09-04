@@ -4,6 +4,7 @@ import { createClient } from "@/lib/supabase/server";
 export type VerifiedGeneratedSources = {
   sources: GeneratedDocSource[];
   degraded: boolean;
+  contextText?: string;
 };
 
 const PROVENANCE_PAIR_BATCH_SIZE = 20;
@@ -119,7 +120,8 @@ export function sameVerifiedSourceSet(
 export async function verifyNativeDocumentSourceProvenance(
   candidates: readonly GeneratedDocSource[],
   expectedCategory: string,
-  supabase: Awaited<ReturnType<typeof createClient>>
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  includeEvidence = false
 ): Promise<VerifiedGeneratedSources> {
   const category = expectedCategory.trim().slice(0, 100);
   const unique = new Map<string, GeneratedDocSource>();
@@ -158,7 +160,7 @@ export async function verifyNativeDocumentSourceProvenance(
       chunkLimits.push(limit);
       chunkQueries.push(
         (supabase.from as CallableFunction)("chunks")
-          .select("document_id, page_num")
+          .select(includeEvidence ? "document_id, page_num, content" : "document_id, page_num")
           // 독립 IN 조건은 요청하지 않은 문서×페이지 조합을 만들므로 정확한 쌍만 조회한다.
           .or(nativeProvenancePairFilter(batch))
           .limit(limit)
@@ -198,6 +200,7 @@ export async function verifyNativeDocumentSourceProvenance(
         (result.data ?? []) as Array<{
           document_id: number | null;
           page_num: number | null;
+          content?: string;
         }>
     );
     const actualPages = new Set(
@@ -210,13 +213,21 @@ export async function verifyNativeDocumentSourceProvenance(
         )
         .map((chunk) => JSON.stringify([chunk.document_id, chunk.page_num]))
     );
-    return {
-      sources: requested.filter(
+    const sources = requested.filter(
         (source) =>
           documents.get(source.document_id) === source.doc &&
           actualPages.has(JSON.stringify([source.document_id, source.page]))
-      ),
-      degraded: false,
+      );
+    if (!includeEvidence) return { sources, degraded: false };
+    const evidenceChunks = chunks.filter((chunk) => sources.some((source) =>
+      source.document_id === chunk.document_id && source.page === chunk.page_num
+    ));
+    const contextText = [...new Set(evidenceChunks.map((chunk) => chunk.content?.trim() ?? ""))].join("\n\n");
+    if (evidenceChunks.some((chunk) => !chunk.content?.trim()) || contextText.length > 80_000) {
+      return { sources, degraded: true, contextText: "" };
+    }
+    return {
+      sources, degraded: false, contextText,
     };
   } catch (error) {
     console.error(

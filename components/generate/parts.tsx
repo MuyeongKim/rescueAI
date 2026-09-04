@@ -31,11 +31,11 @@ import {
   type PublicGenerationJob,
 } from "@/lib/generation-job";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { GeneratedSourceLink } from "@/components/generate/GeneratedSourceLink";
 
 /** 선택형 옵션 버튼 그룹 (터치 48px+) */
 export function OptionGroup<T extends string>({
@@ -494,7 +494,7 @@ export function EditToggleButton({ chrome }: { chrome: ResultChrome }) {
       ) : (
         <Pencil className="h-4 w-4" aria-hidden="true" />
       )}
-      {chrome.editing ? "완료" : "편집"}
+      {chrome.editing ? "편집 닫기" : "편집"}
     </Button>
   );
 }
@@ -504,15 +504,12 @@ export function SourceBadges({ sources }: { sources: GeneratedDocSource[] }) {
   return (
     <>
       {visible.map((s, i) => (
-        <Badge key={i} variant="secondary" className="font-normal">
-          {s.doc}
-          {s.page != null && ` p.${s.page}`}
-        </Badge>
+        <span key={i} className="max-w-full rounded-md bg-secondary px-2 font-normal"><GeneratedSourceLink source={s} /></span>
       ))}
       {sources.length > visible.length && (
-        <Badge variant="outline" className="font-normal">
-          외 {sources.length - visible.length}개
-        </Badge>
+        <details className="basis-full text-base"><summary className="cursor-pointer py-3 font-medium">출처 {sources.length - visible.length}개 더 보기</summary>
+          <ul>{sources.slice(visible.length).map((source, index) => <li key={index}><GeneratedSourceLink source={source} /></li>)}</ul>
+        </details>
       )}
     </>
   );

@@ -38,6 +38,37 @@ const FOLLOW_UP_WORDS = new Set([
   "평가",
   "항목",
   "감점",
+  "주의사항",
+  "유의사항",
+  "안전",
+  "안전수칙",
+  "위험",
+  "중단",
+  "철수",
+  "보고",
+  "다시",
+  "쉽게",
+  "간단히",
+  "간단하게",
+  "짧게",
+  "천천히",
+  "설명",
+  "설명해줘",
+  "설명해주세요",
+  "알려주세요",
+  "말해줘",
+  "요약",
+  "요약해줘",
+  "정리",
+  "정리해줘",
+  "표로",
+  "예시",
+  "예를",
+  "들어줘",
+  "차이",
+  "차이점",
+  "비교",
+  "비교해줘",
 ]);
 
 function normalizeToken(token: string): string {
@@ -71,11 +102,21 @@ export function buildRetrievalQuestion(messages: readonly RetrievalMessage[]): s
   const current = userMessages.at(-1) ?? "";
   if (!current || !isContextDependentQuestion(current)) return current;
 
-  const baseTopic = userMessages
-    .slice(0, -1)
-    .reverse()
-    .find((question) => !isContextDependentQuestion(question));
+  // 독립 주제 이후에 바꾼 조건도 다음 턴에 남긴다. "그럼 1급은?"을 거친 뒤
+  // "준비물은?"이라고 물어도 최초의 2급 자료로 되돌아가지 않는다.
+  let baseTopic = "";
+  for (const question of userMessages) {
+    if (!isContextDependentQuestion(question)) {
+      baseTopic = question;
+      continue;
+    }
+    const grades = Array.from(new Set(question.match(/[1-9]급/g) ?? []));
+    if (grades.length === 1 && /[1-9]급/.test(baseTopic)) {
+      baseTopic = baseTopic.replace(/[1-9]급/g, grades[0]);
+    }
+  }
   if (!baseTopic) return current;
 
-  return `${baseTopic}\n후속 질문: ${current}`.slice(0, MAX_RETRIEVAL_QUERY_CHARS);
+  const followUp = `\n후속 질문: ${current.slice(0, 200)}`;
+  return `${baseTopic.slice(0, MAX_RETRIEVAL_QUERY_CHARS - followUp.length)}${followUp}`;
 }

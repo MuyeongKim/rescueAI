@@ -52,16 +52,28 @@ export default async function ConversationPage({
     .maybeSingle();
   if (!conv) notFound();
 
-  const { data: msgs } = await supabase
+  const { data: msgs, error: messagesError } = await supabase
     .from("messages")
-    .select("id, role, content, sources, feedback")
+    .select("id, role, content, sources, feedback, retrieval_degraded, client_request_id, created_at")
     .eq("conversation_id", conversationId)
     .order("created_at", { ascending: true });
+
+  if (messagesError) {
+    console.error("[chat] 대화 기록 조회 실패:", messagesError.message);
+    return (
+      <div className="mx-auto max-w-3xl space-y-3 p-6">
+        <h1 className="text-xl font-bold">대화 기록을 불러오지 못했습니다</h1>
+        <p role="alert" className="text-base leading-relaxed text-muted-foreground">저장된 내용이 없는 상태와 구분해 안내합니다. 잠시 후 다시 열어 주세요.</p>
+        <a href={`/chat/${conversationId}`} className="inline-flex min-h-12 items-center rounded-md border bg-background px-4 font-semibold focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">대화 다시 불러오기</a>
+      </div>
+    );
+  }
 
   const initialMessages: Message[] = (msgs ?? []).map((m) => ({
     id: String(m.id),
     role: m.role as Message["role"],
     content: m.content,
+    createdAt: new Date(m.created_at),
     ...(m.role === "assistant"
       ? {
           annotations: [
@@ -69,10 +81,11 @@ export default async function ConversationPage({
               messageId: m.id,
               sources: m.sources ?? [],
               feedback: m.feedback ?? null,
+              degraded: m.retrieval_degraded,
             },
           ],
         }
-      : {}),
+      : { annotations: [{ clientRequestId: m.client_request_id }] }),
   }));
 
   const categories = await listChatCategories();

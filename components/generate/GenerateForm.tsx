@@ -86,6 +86,8 @@ import {
 } from "@/lib/generation-job";
 import type { ValidatedGenerateRequest } from "@/lib/generation-request";
 import { autoAssignDeckSourceVisuals } from "@/lib/source-visuals";
+import { restoreGenerationDraft, type GenerationDraft, type GenerationDraftSnapshot } from "@/lib/generation-draft";
+import { useGenerationDraft } from "@/components/generate/useGenerationDraft";
 
 const TOPIC_SUGGESTIONS: Record<string, readonly string[]> = {
   화재: ["공기호흡기 점검과 착용", "고립소방관 구조 절차", "화재현장 인명검색 안전수칙"],
@@ -731,7 +733,8 @@ export function isCompatibleSopEvidenceRefresh(expected: unknown, received: unkn
 export function GenerateForm({
   docsByCategory,
   models = [],
-  initialMaterial,
+  initialMaterial: providedMaterial,
+  initialDraft,
   initialJob,
   pendingJobId,
   durableGenerationEnabled = false,
@@ -739,14 +742,23 @@ export function GenerateForm({
   docsByCategory: Record<string, string[]>;
   models?: { key: string; label: string; note?: string }[];
   initialMaterial?: SavedMaterial; // 저장본 재편집으로 진입 시 복원할 자료
+  initialDraft?: GenerationDraft;
   initialJob?: PublicGenerationJob;
   pendingJobId?: string;
   durableGenerationEnabled?: boolean;
 }) {
   const categories = Object.keys(docsByCategory);
+  const restoredDraft = initialDraft && (!initialDraft.snapshot.saved || !providedMaterial) ? initialDraft.snapshot : null;
+  const initialMaterial: SavedMaterial | undefined = restoredDraft ? {
+    id: restoredDraft.materialId ?? 0, revision: restoredDraft.materialRevision ?? 1,
+    kind: restoredDraft.kind, title: restoredDraft.doc?.title ?? restoredDraft.deck?.title ?? restoredDraft.context.topic,
+    category: restoredDraft.context.category, topic: restoredDraft.context.topic,
+    audience: restoredDraft.context.audience, duration: restoredDraft.context.duration,
+    content: {}, created_at: initialDraft!.updatedAt,
+  } : providedMaterial;
   // 저장본은 사용자가 고른 원문·도형·내용 구성을 그대로 복원한다.
   // 자동 시각 구성은 최초 전체 생성 결과에만 적용한다.
-  const hydrated = hydrateMaterial(initialMaterial);
+  const hydrated = restoredDraft ? restoreGenerationDraft(restoredDraft) : hydrateMaterial(initialMaterial);
   const resumedRequest = initialMaterial ? undefined : initialJob?.request;
   // 과거 NotebookLM 저장본은 결과만 호환하고, 새 자료 입력은 지원하는 세 유형 중 계획으로 연다.
   const [type, setType] = useState<GenType>(
@@ -835,7 +847,7 @@ export function GenerateForm({
   const model = preferredGenerationModel(models);
   const [loading, setLoading] = useState(Boolean(pendingJobId && !initialJob));
   const [activeJob, setActiveJob] = useState<PublicGenerationJob | null>(
-    initialJob ?? null
+    restoredDraft ? null : initialJob ?? null
   );
   const [jobConnectionRetry, setJobConnectionRetry] = useState<{
     attempt: number;
@@ -884,7 +896,7 @@ export function GenerateForm({
   const [saving, setSaving] = useState(false);
   const [pptxLoading, setPptxLoading] = useState(false);
   const [docExporting, setDocExporting] = useState<"hwpx" | "docx" | null>(null);
-  const [saved, setSaved] = useState(false);
+  const [saved, setSaved] = useState(restoredDraft?.saved ?? Boolean(providedMaterial));
   const [quality, setQuality] = useState<GenerationQuality | null>(() => {
     const initialDuration = asDuration(initialMaterial?.duration);
     if (initialMaterial?.kind === "slides" && hydrated.deck) {
@@ -923,10 +935,22 @@ export function GenerateForm({
     };
   });
   const [localQualityRevision, setLocalQualityRevision] = useState(0);
-  const [loadedId, setLoadedId] = useState<number | null>(initialMaterial?.id ?? null); // 재편집 대상 id
+  const [loadedId, setLoadedId] = useState<number | null>(restoredDraft ? restoredDraft.materialId : initialMaterial?.id ?? null); // 재편집 대상 id
   const [loadedRevision, setLoadedRevision] = useState<number | null>(
-    initialMaterial ? initialMaterial.revision ?? 1 : null
+    restoredDraft ? restoredDraft.materialRevision : initialMaterial ? initialMaterial.revision ?? 1 : null
   );
+  const localDraftIdRef = useRef<string | null>(null);
+  const resultDraftKeyRef = useRef<string | null>(initialDraft?.draftKey ?? (providedMaterial ? `material:${providedMaterial.id}` : initialJob ? `job:${initialJob.id}` : null));
+  if (!resultDraftKeyRef.current && resultKind && (doc || deck || nlmPrompt)) {
+    localDraftIdRef.current ??= crypto.randomUUID();
+    resultDraftKeyRef.current = activeJob ? `job:${activeJob.id}` : `local:${localDraftIdRef.current}`;
+  }
+  const draftSnapshot: GenerationDraftSnapshot | null = resultKind && resultContext && (doc || deck || nlmPrompt !== null)
+    ? { version: 1, kind: resultKind, context: resultContext, doc, deck: deck ? stripSlideDeckRuntimeData(deck) : null,
+        nlm: nlmPrompt, materialId: loadedId, materialRevision: loadedRevision, saved }
+    : null;
+  const draftRecovery = useGenerationDraft({ enabled: durableGenerationEnabled, draftKey: resultDraftKeyRef.current,
+    snapshot: draftSnapshot, initialDraft });
 
   const resolvedFocus = topicFocus.status === "resolved" ? topicFocus.focus : "";
   const jobRunning = isRunningGenerationJob(activeJob);
@@ -2421,6 +2445,10 @@ export function GenerateForm({
   };
 
   async function startDurableGeneration(requestBody: ValidatedGenerateRequest) {
+    if (!(await draftRecovery.flush())) {
+      toast.error("현재 편집 초안을 먼저 보관해 주세요", { description: "보관이 완료된 뒤 새 자료를 만들 수 있습니다." });
+      return;
+    }
     const requestFingerprint = JSON.stringify(requestBody);
     setLoading(true);
     let keepLoadingForLookup = false;
@@ -2506,6 +2534,7 @@ export function GenerateForm({
           response.status === 409 ? generationJobFromPayload(payload) : null;
         if (existingActiveJob) {
           clearPreviousResult();
+          resultDraftKeyRef.current = `job:${existingActiveJob.id}`;
           appliedJobRevisionRef.current = "";
           pendingJobCreateRef.current = null;
           setActiveJob(existingActiveJob);
@@ -2550,6 +2579,7 @@ export function GenerateForm({
         throw new Error("생성 작업 응답 형식이 올바르지 않습니다.");
       }
       clearPreviousResult();
+      resultDraftKeyRef.current = `job:${job.id}`;
       appliedJobRevisionRef.current = "";
       pendingJobCreateRef.current = null;
       setActiveJob(job);
@@ -2666,6 +2696,10 @@ export function GenerateForm({
       qualityRepairRequestRef.current ||
       exportBusyRef.current
     ) return;
+    if (!(await draftRecovery.flush())) {
+      toast.error("편집 초안 보관을 확인한 뒤 다시 시도해 주세요");
+      return;
+    }
     const safeFocus = focus?.replace(/\s+/g, " ").trim().slice(0, 100) || undefined;
     const requestContext: ResultGenerationContext = {
       category,
@@ -3215,6 +3249,34 @@ export function GenerateForm({
     }
   }
 
+  async function verifyExportEvidence(
+    kind: GenType | null,
+    value: GeneratedDoc | GeneratedSlideDeck | null,
+    context: ResultGenerationContext | null
+  ): Promise<boolean> {
+    if (kind === "notebooklm") return true;
+    if (!kind || !value || !context) return false;
+    const content = "slides" in value ? stripSlideDeckRuntimeData(value) : value;
+    try {
+      const response = await fetch("/api/generate/verify", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(60_000),
+        body: JSON.stringify({ kind, title: value.title, category: context.category,
+          audience: context.audience, duration: context.duration, topic: context.topic,
+          content: { ...content, focus: context.focus, conditions: context.conditions, date: context.date, place: context.place } }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok || payload?.ok !== true) {
+        toast.error("내보내기 전 근거를 확인해 주세요", { description: payload?.error ?? "원문 근거를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요." });
+        return false;
+      }
+      return true;
+    } catch {
+      toast.error("근거 확인이 지연되어 내보내기를 보류했습니다", { description: "현재 결과는 유지됩니다. 잠시 후 다시 시도해 주세요." });
+      return false;
+    }
+  }
+
   async function handlePptx() {
     if (
       !deck ||
@@ -3235,6 +3297,7 @@ export function GenerateForm({
     notifyQualityWarnings(recheckCurrentQuality());
     let visualToastId: string | number | undefined;
     try {
+      if (!(await verifyExportEvidence("slides", exportDeck, exportContext))) return;
       // PPTX·PDF 렌더러는 무거워서 다운로드 시점에만 로드한다.
       visualToastId = toast.loading("원문 시각자료를 준비하고 있습니다…");
       const [{ downloadPptx }, { prepareDeckSourceVisuals }] = await Promise.all([
@@ -3282,13 +3345,17 @@ export function GenerateForm({
   async function handleCopy(text: string) {
     if (exportBusyRef.current || savingRef.current || regenRequestRef.current) return;
     if (!ensureQualityForOutput()) return;
+    exportBusyRef.current = true;
     try {
+      if (!(await verifyExportEvidence(resultKind, resultKind === "slides" ? deck : doc, resultContext))) return;
       await navigator.clipboard.writeText(text);
       setCopied(true);
       toast.success("복사했습니다");
       setTimeout(() => setCopied(false), 2000);
     } catch {
       toast.error("복사에 실패했습니다");
+    } finally {
+      exportBusyRef.current = false;
     }
   }
 
@@ -3313,10 +3380,12 @@ export function GenerateForm({
     }
     if (!ensureQualityForOutput()) return;
     const exportDoc = doc;
+    const exportContext = resultContext;
     exportBusyRef.current = true;
     setDocExporting("docx");
     notifyQualityWarnings(recheckCurrentQuality());
     try {
+      if (!(await verifyExportEvidence(resultKind, exportDoc, exportContext))) return;
       // docx는 무거워서 다운로드 시점에만 로드
       const { buildDocxBlob } = await import("@/lib/docx");
       downloadBlob(await buildDocxBlob(exportDoc), `${sanitizeFilename(exportDoc.title)}.docx`);
@@ -3345,6 +3414,7 @@ export function GenerateForm({
     setDocExporting("hwpx");
     notifyQualityWarnings(recheckCurrentQuality());
     try {
+      if (!(await verifyExportEvidence(resultKind, exportDoc, exportContext))) return;
       // 미니서버(hwp-writer-api) 우선, 실패 시 로컬 생성 폴백.
       // 훈련계획(plan)은 전북소방 표준 양식(training_plan.hwpx)에 폼 입력 + AI 섹션을 채운다.
       const { downloadHwpx } = await import("@/lib/hwpx-download");
@@ -3932,7 +4002,7 @@ export function GenerateForm({
             </div>
             <Button
               className="h-12 w-full gap-2 text-base font-semibold text-white shadow-sm transition-all duration-200 hover:shadow-md hover:brightness-105 active:scale-[0.99] motion-reduce:transition-none motion-reduce:active:scale-100"
-              style={categoryConfirmed ? { backgroundColor: accent } : undefined}
+              style={categoryConfirmed ? { backgroundColor: categoryStyle(category).actionHex } : undefined}
               onClick={handleGenerate}
               disabled={
                 loading ||
@@ -3993,6 +4063,18 @@ export function GenerateForm({
         />
       )}
 
+      {draftSnapshot && durableGenerationEnabled && (
+        <div className="sticky top-2 z-20 flex flex-wrap items-center justify-between gap-2 rounded-lg border bg-card p-3 text-sm shadow-sm" role="status" aria-live="polite">
+          <p>{draftRecovery.status === "conflict" || draftRecovery.status === "error" ? draftRecovery.message
+            : draftRecovery.unsynced ? "편집 초안을 개인 보관함에 보관하고 있습니다…"
+              : saved ? "자료가 저장되었습니다." : "편집 초안 자동보관됨 · 공식 자료 저장은 ‘저장’을 눌러 주세요."}</p>
+          {draftRecovery.status === "error" && (
+            <Button type="button" variant="outline" className="min-h-12" onClick={() => void draftRecovery.flush()}>보관 다시 시도</Button>
+          )}
+          {draftRecovery.status === "conflict" && <Button type="button" variant="outline" className="min-h-12" onClick={() => void draftRecovery.saveCopy()}>현재 편집을 별도 초안으로 보관</Button>}
+          {draftRecovery.id && <a className="inline-flex min-h-12 items-center font-semibold underline" href={`/generate?d=${draftRecovery.id}`} target="_blank" rel="noopener noreferrer">보관한 초안 열기</a>}
+        </div>
+      )}
       {/* 2-a. NotebookLM 프롬프트 결과 */}
       {nlmPrompt && (
         <NotebookLmResult
@@ -4088,6 +4170,12 @@ export function GenerateForm({
           onDownloadDocx={handleDocx}
           onCopy={handleCopy}
           exporting={docExporting}
+          planDetails={resultKind === "plan" && resultContext ? { date: resultContext.date, place: resultContext.place } : undefined}
+          onPlanDetailsChange={(patch) => {
+            if (resultMutationLocked) return;
+            setSaved(false);
+            setResultContext((previous) => previous ? { ...previous, ...patch } : previous);
+          }}
         />
       )}
     </div>

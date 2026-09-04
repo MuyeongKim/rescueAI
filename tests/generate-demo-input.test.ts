@@ -7,6 +7,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock("@/lib/demo", () => ({
   DEMO: true,
+  demoDocuments: [],
   demoGeneratedDoc: {
     title: "화재 교육",
     sections: [

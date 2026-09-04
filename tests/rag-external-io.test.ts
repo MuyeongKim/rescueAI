@@ -243,6 +243,36 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(result.matched).toBeGreaterThan(0);
   });
 
+  it("자기소개가 붙어도 실제 장비 근거를 유지하고 다른 장비 후보는 제거한다", async () => {
+    const chemical = chemicalTitleRow();
+    const unrelated = droneRow(900);
+    const supabase = createSupabaseMock(() => ({ data: [unrelated, chemical], error: null }));
+    supabase.client.rpc.mockResolvedValue({ data: [unrelated, chemical], error: null });
+    const result = await searchExternalRag(
+      "신규대원인데 화학보호복 착용 절차를 알려줘", [0.1], 8, "화학사고", [], supabase.client as never
+    );
+    expect(result.matched).toBe(1);
+    expect(result.degraded).toBe(false);
+    expect(result.contextText).toContain("화학보호복 착용");
+    expect(result.contextText).not.toContain("소방드론");
+    expect(supabase.records.some((record) => record.keyword === "화학보호복 착용")).toBe(true);
+  });
+
+  it("검색에 제공한 네 번째 페이지와 같은 페이지의 후속 청크도 확인용 출처에 남긴다", async () => {
+    const rows = Array.from({ length: 5 }, (_, index) => row(index, {
+      content: `화학보호복 착용 절차의 점검과 안전 근거 ${index}. ${"실제 대원이 원문에서 확인해야 하는 충분한 길이의 점검 내용입니다. ".repeat(12)}후속 세부 근거 ${index}`,
+      metadata: {
+        source: "화학보호복 교범.pdf", document_id: 1, page_num: Math.min(index + 1, 4), "Header 2": "화학보호복 착용",
+      },
+    }));
+    const supabase = createSupabaseMock(() => ({ data: rows, error: null }));
+    const result = await searchExternalRag("화학보호복 착용 절차", null, 8, "화학사고", [], supabase.client as never);
+    expect(result.matched).toBe(5);
+    expect(result.sources.map((source) => source.page)).toEqual([1, 2, 3, 4]);
+    expect(result.sources.find((source) => source.page === 4)?.content).toContain("후속 세부 근거 3");
+    expect(result.sources.find((source) => source.page === 4)?.content).toContain("후속 세부 근거 4");
+  });
+
   it("키워드 질의 수를 제한하고 모든 질의에 활성·분야 필터를 적용한다", async () => {
     const supabase = createSupabaseMock((record) => ({
       data: [row(record.index)],
@@ -777,6 +807,39 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       "metadata->>edu_category",
       "화학사고",
     ]);
+  });
+
+  it("저장 검증용 본문은 정확히 대조한 출처만 포함하고 동일 행 중복은 제거한다", async () => {
+    const verified = row(7, {
+      content: "화학보호복 점검 압력 100 kPa는 이 문서에서 직접 확인한 근거입니다.",
+      metadata: { source: "화학보호복 교범.pdf", document_id: 7, page_num: 3, "Header 2": "화학보호복 교범" },
+    });
+    const unrelated = row(8, {
+      content: "조작한 라벨과 무관한 문서의 압력 999 kPa는 검증 근거로 포함하면 안 됩니다.",
+      metadata: { source: "다른 교범.pdf", document_id: 7, page_num: 3, "Header 2": "다른 교범" },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [verified, unrelated], error: null }));
+    const result = await verifyExternalRagSourceProvenance(
+      [{ document_id: 7, doc: "화학보호복 교범", page: 3 }], "화학사고", supabase.client as never, true
+    );
+    expect(result.degraded).toBe(false);
+    expect(result.sources).toEqual([{ document_id: 7, doc: "화학보호복 교범", page: 3 }]);
+    expect(result.contextText).toContain("[화학보호복 교범 p.3]");
+    expect(result.contextText?.match(/100 kPa/g)).toHaveLength(1);
+    expect(result.contextText).not.toContain("999 kPa");
+  });
+
+  it.each([undefined, "", "A".repeat(80_001)])("저장 검증 본문이 없거나 상한을 넘으면 불완전 상태로 닫는다", async (content) => {
+    const actual = row(7, {
+      content: content as string,
+      metadata: { source: "화학보호복 교범.pdf", document_id: 7, page_num: 3, "Header 2": "화학보호복 교범" },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [actual], error: null }));
+    const result = await verifyExternalRagSourceProvenance(
+      [{ document_id: 7, doc: "화학보호복 교범", page: 3 }], "화학사고", supabase.client as never, true
+    );
+    expect(result.degraded).toBe(true);
+    expect(result.contextText).toBe("");
   });
 
   it("저장 출처 검증은 공통 분야에서 SOP 유형만 보조 출처로 허용한다", async () => {

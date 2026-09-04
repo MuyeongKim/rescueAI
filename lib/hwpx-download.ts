@@ -56,7 +56,20 @@ export async function downloadHwpx(
 
   // 로컬 생성 폴백 (빌더는 무거워서 이 시점에만 로드)
   const { buildHwpxBlob } = await import("@/lib/hwpx");
-  saveBlob(await buildHwpxBlob(exportDoc), filename);
+  // 기본 양식에는 표준 서식의 메타 필드가 없으므로 별도 섹션에 보존한다.
+  // 원본 문서나 정식 서버 양식에 전달하는 섹션은 변경하지 않는다.
+  const localDoc = opts?.template === "training_plan"
+    ? { ...exportDoc, sections: [{ heading: "훈련 정보", content: [
+        `훈련주제: ${opts.plan?.topic?.trim() || exportDoc.title}`,
+        `훈련일시: ${opts.plan?.datetime?.trim() || "미정"}`,
+        `훈련장소: ${opts.plan?.place?.trim() || "미정"}`,
+        `훈련대상: ${opts.plan?.target?.trim() || "미정"}`,
+        `교육시간: ${opts.plan?.duration?.trim() || "미정"}`,
+        `훈련구분: ${opts.plan?.formType?.trim() || "미정"}`,
+        `훈련방법: ${opts.plan?.method?.trim() || "미정"}`,
+      ].join("\n") }, ...exportDoc.sections] }
+    : exportDoc;
+  saveBlob(await buildHwpxBlob(localDoc), filename);
   return "local";
 }
 

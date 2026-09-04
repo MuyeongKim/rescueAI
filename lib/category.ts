@@ -7,6 +7,7 @@ export type CategoryStyle = {
   tint: string; // 연한 배경(아이콘 원 등)
   text: string; // 글자색
   hex: string; // 차트용
+  actionHex: string; // 흰색 버튼 글자와 4.5:1 이상 대비
 };
 
 const STYLES: Record<string, CategoryStyle> = {
@@ -16,6 +17,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-emerald-100",
     text: "text-emerald-700",
     hex: "#10b981",
+    actionHex: "#047857",
   },
   수난: {
     badge: "bg-sky-100 text-sky-700 border-sky-200",
@@ -23,6 +25,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-sky-100",
     text: "text-sky-700",
     hex: "#0ea5e9",
+    actionHex: "#0369a1",
   },
   화재: {
     badge: "bg-orange-100 text-orange-700 border-orange-200",
@@ -30,6 +33,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-orange-100",
     text: "text-orange-700",
     hex: "#f97316",
+    actionHex: "#c2410c",
   },
   구급: {
     badge: "bg-rose-100 text-rose-700 border-rose-200",
@@ -37,6 +41,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-rose-100",
     text: "text-rose-700",
     hex: "#f43f5e",
+    actionHex: "#be123c",
   },
   일반구조: {
     badge: "bg-blue-100 text-blue-700 border-blue-200",
@@ -44,6 +49,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-blue-100",
     text: "text-blue-700",
     hex: "#3b82f6",
+    actionHex: "#1d4ed8",
   },
   화학사고: {
     badge: "bg-violet-100 text-violet-700 border-violet-200",
@@ -51,6 +57,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-violet-100",
     text: "text-violet-700",
     hex: "#8b5cf6",
+    actionHex: "#6d28d9",
   },
   "드론 운용": {
     badge: "bg-indigo-100 text-indigo-700 border-indigo-200",
@@ -58,6 +65,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-indigo-100",
     text: "text-indigo-700",
     hex: "#6366f1",
+    actionHex: "#4338ca",
   },
   "장비 관리": {
     badge: "bg-teal-100 text-teal-700 border-teal-200",
@@ -65,6 +73,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-teal-100",
     text: "text-teal-700",
     hex: "#14b8a6",
+    actionHex: "#0f766e",
   },
   "복무·행정": {
     badge: "bg-amber-100 text-amber-700 border-amber-200",
@@ -72,6 +81,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-amber-100",
     text: "text-amber-700",
     hex: "#f59e0b",
+    actionHex: "#92400e",
   },
   "현장지휘·공통": {
     badge: "bg-slate-100 text-slate-700 border-slate-200",
@@ -79,6 +89,7 @@ const STYLES: Record<string, CategoryStyle> = {
     tint: "bg-slate-100",
     text: "text-slate-700",
     hex: "#64748b",
+    actionHex: "#475569",
   },
 };
 
@@ -88,6 +99,7 @@ const FALLBACK: CategoryStyle = {
   tint: "bg-muted",
   text: "text-muted-foreground",
   hex: "#64748b",
+  actionHex: "#475569",
 };
 
 export function categoryStyle(category?: string | null): CategoryStyle {

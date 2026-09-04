@@ -149,11 +149,22 @@ describe("buildTopicSearchPlans", () => {
     ],
     ["화학사고의 Hot Zone 설정 기준", "화학사고"],
     ["공기 호흡기 착용 전 점검", "공기"],
-  ])("질문의 첫 핵심어만 subject로 보존한다: %s", (query, expectedSubject) => {
+    ["신규대원인데 화학보호복 착용 절차를 알려줘", "화학보호복"],
+    ["저는 구조대원입니다. 화학보호복 착용 절차를 알려주세요", "화학보호복"],
+    ["그럼 인명구조사 1급은?", "인명구조사 1급"],
+    ["혹시 소방드론 비행 전 점검을 설명해주세요", "소방드론"],
+  ])("자기소개·요청 표현을 제외한 핵심어를 subject로 보존한다: %s", (query, expectedSubject) => {
     const plans = buildTopicSearchPlans(query);
 
     expect(plans.length).toBeGreaterThan(0);
     expect(plans.every((plan) => plan.subject === expectedSubject)).toBe(true);
+  });
+
+  it("모델 확장어에 다른 장비가 있어도 사용자가 명시한 주제를 바꾸지 않는다", () => {
+    const plans = buildTopicSearchPlans("신규대원인데 화학보호복 착용 절차를 알려줘", ["소방드론", "비행", "배터리"]);
+    expect(plans.every((plan) => plan.subject === "화학보호복")).toBe(true);
+    expect(classifyTopicSubjectAffinity(plans[0].subject, ["점검"], "소방드론 점검", "소방드론 배터리를 점검한다."))
+      .toBe("D");
   });
 
   it("모든 공통 절차가 포함돼도 실제 키워드 요청 수를 상한 이하로 제한한다", () => {

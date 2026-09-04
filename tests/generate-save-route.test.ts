@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => {
   const verifyExternalRagSourceProvenance = vi.fn();
   return {
     createClient: vi.fn(),
+    checkStoredMaterialGrounding: vi.fn().mockResolvedValue({ ok: true }),
     createGenerationRagReader: vi.fn(),
     generationRagReader: {
       fetchSopContext: fetchExternalSopContext,
@@ -20,6 +21,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock("@/lib/demo", () => ({ DEMO: false }));
+vi.mock("@/lib/generation-grounding-server", () => ({ checkStoredMaterialGrounding: mocks.checkStoredMaterialGrounding }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
 vi.mock("@/lib/supabase/generation-rag", () => ({
   createGenerationRagReader: mocks.createGenerationRagReader,
@@ -562,6 +564,7 @@ describe("기본 documents/chunks 원문 출처 검증", () => {
 describe("POST /api/generate/save", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.checkStoredMaterialGrounding.mockResolvedValue({ ok: true });
     mocks.requireApiUser.mockResolvedValue({ ok: true, user: { id: "user-1" } });
     mocks.rateLimit.mockReturnValue({ ok: true, retryAfterSec: 0 });
     mocks.tooManyRequests.mockReturnValue(new Response("Too Many Requests", { status: 429 }));
@@ -574,6 +577,17 @@ describe("POST /api/generate/save", () => {
     mocks.fetchExternalSopContext.mockResolvedValue(
       sopLookupResult({ status: "not_found", sourceLabels: [] })
     );
+  });
+
+  it.each([422, 503] as const)("편집본 기술 수치 검증 %i 실패 시 DB에 쓰지 않는다", async (status) => {
+    const client = makeClient();
+    mocks.createClient.mockResolvedValue(client);
+    mocks.checkStoredMaterialGrounding.mockResolvedValue({ ok: false, status, error: "원문 수치 확인 필요" });
+    const response = await POST(requestWith(validSlidesBody()));
+    expect(response.status).toBe(status);
+    expect(mocks.checkStoredMaterialGrounding).toHaveBeenCalledOnce();
+    expect(client.spies.insert).not.toHaveBeenCalled();
+    expect(client.spies.update).not.toHaveBeenCalled();
   });
 
   it("인증 실패 시 잘못된 JSON도 파싱하기 전에 401을 반환한다", async () => {
@@ -1281,6 +1295,7 @@ describe("DELETE /api/generate/save", () => {
 describe("PATCH /api/generate/save", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.checkStoredMaterialGrounding.mockResolvedValue({ ok: true });
     mocks.requireApiUser.mockResolvedValue({
       ok: true,
       user: { id: "user-1", email: "user1@example.com" },
@@ -1325,6 +1340,16 @@ describe("PATCH /api/generate/save", () => {
     expect(response.status).toBe(413);
     expect(mocks.createGenerationRagReader).not.toHaveBeenCalled();
     expect(client.spies.storedSelect).not.toHaveBeenCalled();
+  });
+
+  it("과거 저장본도 원문 수치 검증에 실패하면 공유하지 않는다", async () => {
+    const client = makePatchClient({ id: 12, ...validFoundContractBody("plan") });
+    mocks.createClient.mockResolvedValue(client);
+    mocks.checkStoredMaterialGrounding.mockResolvedValue({ ok: false, status: 422, error: "원문 수치 확인 필요" });
+    const response = await PATCH(patchRequestWith({ id: 12, shared: true }));
+    expect(response.status).toBe(422);
+    expect(mocks.checkStoredMaterialGrounding).toHaveBeenCalledOnce();
+    expect(client.spies.update).not.toHaveBeenCalled();
   });
 
   it("SOP 근거 상태가 없는 과거 저장본은 새 공유를 422로 막는다", async () => {

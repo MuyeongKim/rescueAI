@@ -7,6 +7,14 @@ type LoginAccessStatsProps = {
 
 const countFormatter = new Intl.NumberFormat("ko-KR");
 const trackingStartLabel = loginAccessTrackingStartLabel();
+const webUpdatedAt = process.env.NEXT_PUBLIC_WEB_UPDATED_AT;
+const webUpdatedDate = webUpdatedAt ? new Date(webUpdatedAt) : null;
+const webUpdatedLabel = webUpdatedDate && Number.isFinite(webUpdatedDate.getTime())
+  ? new Intl.DateTimeFormat("sv-SE", {
+      timeZone: "Asia/Seoul", year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).format(webUpdatedDate).replace(/-/g, ".")
+  : null;
 
 function formatCount(value: number | null): string {
   return value === null ? "—" : countFormatter.format(value);
@@ -111,6 +119,12 @@ export function SidebarAccessStats({ today, total }: LoginAccessStatsProps) {
           </dd>
         </div>
       </dl>
+
+      {webUpdatedLabel && (
+        <p className="mt-2 border-t border-slate-700/70 pt-1.5 text-[11px] leading-4 text-slate-400 tabular-nums whitespace-nowrap">
+          최종 수정 · <time dateTime={webUpdatedAt} title="웹 버전 갱신 시각 · 한국시간(KST)">{webUpdatedLabel}</time>
+        </p>
+      )}
 
       <p id="sidebar-access-stats-note" className="sr-only">
         KST 기준 로그인 세션 접속 횟수입니다.

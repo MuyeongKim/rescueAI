@@ -44,6 +44,9 @@ vi.mock("@/components/generate/GenerateForm", () => ({
   GenerateForm: mocks.generateForm,
 }));
 vi.mock("@/components/generate/SavedList", () => ({ SavedList: () => null }));
+vi.mock("@/lib/generation-drafts-server", () => ({ listMyGenerationDrafts: vi.fn(async () => []), loadMyGenerationDraft: vi.fn(async () => undefined) }));
+vi.mock("@/lib/generation-recovery", () => ({ listMyGenerationJobs: vi.fn(async () => []) }));
+vi.mock("@/components/generate/GenerationRecoveryList", () => ({ GenerationRecoveryList: () => null }));
 vi.mock("@/components/layout/OperationalHeader", () => ({
   OperationalHeader: () => null,
 }));

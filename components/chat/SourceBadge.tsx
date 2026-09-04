@@ -44,7 +44,7 @@ export function SourceBadge({ source }: { source: DocSource }) {
         </SheetHeader>
 
         <div className="mt-4 space-y-4">
-          <div className="rounded-md border bg-muted/30 p-3 text-sm leading-relaxed whitespace-pre-wrap">
+          <div className="rounded-md border bg-muted/30 p-3 text-base leading-relaxed whitespace-pre-wrap wrap-break-word">
             {source.content}
           </div>
           {/* 자료실 원본과 연결되지 않은 외부 청크(document_id=0)는 링크를 숨긴다. */}
@@ -55,6 +55,9 @@ export function SourceBadge({ source }: { source: DocSource }) {
                 원본 자료 보기{source.page ? ` (${source.page}p)` : ""}
               </Link>
             </Button>
+          )}
+          {source.document_id <= 0 && (
+            <p className="text-sm text-muted-foreground">이 근거의 원본 파일은 아직 자료실에 연결되지 않았습니다. 위 발췌 내용과 교범명·페이지를 확인해 주세요.</p>
           )}
         </div>
       </SheetContent>

@@ -146,7 +146,7 @@ describe("AI 자료제작 시범운영 5주제 계약", () => {
     }
   });
 
-  it("contract 모드는 상속된 실제 RAG·LLM 실행 플래그를 먼저 제거한다", () => {
+  it("contract 모드는 상속된 실제 RAG·LLM·작업 생성 실행 플래그를 먼저 제거한다", () => {
     const ragDelete = MATERIAL_PILOT_RUNNER.indexOf("delete env.RUN_MATERIAL_PILOT_RAG");
     const generationDelete = MATERIAL_PILOT_RUNNER.indexOf(
       "delete env.RUN_MATERIAL_PILOT_GENERATION",
@@ -162,6 +162,10 @@ describe("AI 자료제작 시범운영 5주제 계약", () => {
     expect(generationDelete).toBeGreaterThan(-1);
     expect(ragEnable).toBeGreaterThan(ragDelete);
     expect(generationEnable).toBeGreaterThan(generationDelete);
+    const jobsDelete = MATERIAL_PILOT_RUNNER.indexOf("delete env.RUN_MATERIAL_PILOT_JOBS");
+    const jobsEnable = MATERIAL_PILOT_RUNNER.indexOf('env.RUN_MATERIAL_PILOT_JOBS = "1"');
+    expect(jobsDelete).toBeGreaterThan(-1);
+    expect(jobsEnable).toBeGreaterThan(jobsDelete);
   });
 
   it("넓은 산악 주제는 구체적 세부방향을 남기고 세 산출물 유형을 모두 대표한다", () => {

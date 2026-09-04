@@ -879,6 +879,9 @@ export type GenerationQualityIssueCode =
   | "missing_source_refs"
   | "invalid_source_ref"
   | "source_validation_unavailable"
+  | "unsupported_technical_value"
+  | "unsupported_evidence_claim"
+  | "unmet_training_condition"
   | SopQualityIssueCode;
 
 export type GenerationQualityIssue = {
@@ -934,6 +937,9 @@ export const GENERATION_QUALITY_LABELS = {
   missing_source_refs: "슬라이드별 근거 출처",
   invalid_source_ref: "근거 출처 표기",
   source_validation_unavailable: "근거 출처 재검증 정보",
+  unsupported_technical_value: "원문에서 확인되지 않은 기술 수치",
+  unsupported_evidence_claim: "주요 설명과 원문 근거의 일치",
+  unmet_training_condition: "요청한 훈련 조건 반영",
   missing_sop_application: "SOP·표준절차 적용 내용",
   missing_sop_reference: "SOP·표준절차 근거 출처",
   missing_sop_disclosure: "SOP 근거 상태 안내",
@@ -959,6 +965,9 @@ export const BLOCKING_GENERATION_QUALITY_CODES: ReadonlySet<GenerationQualityIss
     "missing_source_refs",
     "invalid_source_ref",
     "source_validation_unavailable",
+    "unsupported_technical_value",
+    "unsupported_evidence_claim",
+    "unmet_training_condition",
     "invalid_slide_visual",
     "mixed_chemical_protection_levels",
     "conflicting_pressure_values",

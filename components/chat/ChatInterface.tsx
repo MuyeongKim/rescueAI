@@ -1,11 +1,14 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useChat } from "ai/react";
 import type { Message } from "ai";
 import {
   ArrowRight,
+  AlertTriangle,
   Loader2,
+  RefreshCw,
   Send,
   ShieldCheck,
   SlidersHorizontal,
@@ -32,6 +35,7 @@ import {
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationList } from "@/components/chat/ConversationList";
 import { COURSE_CATEGORIES } from "@/lib/courses";
+import { ChatRequestError, chatErrorMessage, fetchChat } from "@/lib/chat-request";
 
 const DEFAULT_CATEGORIES = [...COURSE_CATEGORIES];
 
@@ -79,6 +83,11 @@ export function ChatInterface({
   const scrollRef = useRef<HTMLDivElement>(null);
   const hasSubmittedRef = useRef(false);
   const stoppedRef = useRef(false);
+  const questionRef = useRef<HTMLInputElement>(null);
+  const lastRequestRef = useRef<Record<string, unknown> | null>(null);
+  const requestStartedAtRef = useRef(0);
+  const [retryAt, setRetryAt] = useState(0);
+  const [retrySeconds, setRetrySeconds] = useState(0);
 
   const {
     messages,
@@ -89,11 +98,52 @@ export function ChatInterface({
     isLoading,
     stop,
     data,
+    error,
+    reload,
+    setInput,
   } = useChat({
     api: "/api/chat",
     initialMessages,
     initialInput,
+    fetch: fetchChat,
+    keepLastMessageOnError: true,
+    onError: (failure) => {
+      if (failure instanceof ChatRequestError && failure.retryAfterSeconds > 0) {
+        setRetryAt(Date.now() + failure.retryAfterSeconds * 1000);
+        setRetrySeconds(failure.retryAfterSeconds);
+      } else if (!(failure instanceof ChatRequestError)) {
+        // 연결이 끊겨도 서버가 답변 저장을 마칠 수 있다. 서버 실행 상한(60초)이
+        // 지나기 전 같은 생성 작업을 겹쳐 시작하지 않는다.
+        const remaining = Math.max(0, Math.ceil((requestStartedAtRef.current + 65_000 - Date.now()) / 1000));
+        if (remaining > 0) {
+          setRetryAt(Date.now() + remaining * 1000);
+          setRetrySeconds(remaining);
+        }
+      }
+    },
   });
+
+  useEffect(() => {
+    const last = initialMessages.at(-1);
+    if (last?.role !== "user" || !last.createdAt) return;
+    const until = new Date(last.createdAt).getTime() + 65_000;
+    if (until > Date.now()) {
+      setRetryAt(until);
+      setRetrySeconds(Math.ceil((until - Date.now()) / 1000));
+    }
+  }, [initialMessages]);
+
+  useEffect(() => {
+    if (!retryAt) return;
+    const update = () => {
+      const remaining = Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+      setRetrySeconds(remaining);
+      if (remaining === 0) setRetryAt(0);
+    };
+    update();
+    const timer = window.setInterval(update, 1000);
+    return () => window.clearInterval(timer);
+  }, [retryAt]);
 
   // 스트림에서 conversationId 추출 → URL 갱신(브라우저 스토리지 미사용, 히스토리만 교체)
   useEffect(() => {
@@ -133,25 +183,59 @@ export function ChatInterface({
 
   function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (!input.trim() || isLoading) return;
+    if (!input.trim() || isLoading || retrySeconds > 0) return;
+    // 복원한 질문을 전송 버튼으로 보내도 같은 요청/말풍선을 재사용한다.
+    if ((error || unansweredSavedQuestion) && input.trim() === lastQuestion.trim()) {
+      setInput("");
+      retryLastQuestion();
+      return;
+    }
     hasSubmittedRef.current = true;
     stoppedRef.current = false;
-    handleSubmit(e, { body: requestBody() });
+    const body = { ...requestBody(), clientRequestId: crypto.randomUUID() };
+    lastRequestRef.current = body;
+    requestStartedAtRef.current = Date.now();
+    handleSubmit(e, { body });
   }
 
   function askExample(q: string) {
-    if (isLoading) return;
+    if (isLoading || retrySeconds > 0) return;
     hasSubmittedRef.current = true;
     stoppedRef.current = false;
-    append({ role: "user", content: q }, { body: requestBody() });
+    const body = { ...requestBody(), clientRequestId: crypto.randomUUID() };
+    lastRequestRef.current = body;
+    requestStartedAtRef.current = Date.now();
+    append({ role: "user", content: q }, { body });
+  }
+
+  function retryLastQuestion() {
+    if (isLoading || retrySeconds > 0) return;
+    hasSubmittedRef.current = true;
+    stoppedRef.current = false;
+    // reload가 마지막 미완성 답변만 교체하므로 같은 질문 말풍선을 추가하지 않는다.
+    const restoredRequestId = initialMessages.at(-1)?.annotations?.find(
+      (annotation) => annotation && typeof annotation === "object" && "clientRequestId" in annotation
+    ) as { clientRequestId?: string } | undefined;
+    const body = {
+      ...(lastRequestRef.current ?? requestBody()),
+      conversationId: convIdRef.current,
+      clientRequestId: lastRequestRef.current?.clientRequestId ?? restoredRequestId?.clientRequestId ?? crypto.randomUUID(),
+    };
+    lastRequestRef.current = body;
+    requestStartedAtRef.current = Date.now();
+    void reload({ body });
   }
 
   const empty = messages.length === 0;
   const examples = popular.length > 0 ? popular : FALLBACK_EXAMPLES;
   const examplesTitle = popular.length > 0 ? "대원들이 자주 묻는 질문" : "이렇게 물어보세요";
+  const unansweredSavedQuestion = !hasSubmittedRef.current && messages.at(-1)?.role === "user";
+  const lastQuestion = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
   const assistantStatus = hasSubmittedRef.current
     ? isLoading
       ? "AI가 교육자료를 검색하고 답변을 작성하는 중입니다."
+      : error
+        ? "답변을 가져오지 못했습니다. 오류 안내에서 다시 시도할 수 있습니다."
       : stoppedRef.current
         ? "AI 답변 생성을 중지했습니다."
         : messages[messages.length - 1]?.role === "assistant"
@@ -164,7 +248,7 @@ export function ChatInterface({
       {/* 상단 바: 대화목록 + 카테고리 필터 */}
       <div className="border-b-2 border-ops-signal bg-ops-sidebar px-3 py-2 text-white sm:px-4">
         <div className="mx-auto flex max-w-3xl items-center gap-2">
-          <ConversationList activeId={conversationId} />
+          <ConversationList activeId={convIdRef.current} />
           <h1 className="mr-auto flex items-center gap-2 text-sm font-bold">
             <span className="h-4 w-0.5 bg-ops-signal-bright" aria-hidden /> AI 튜터
           </h1>
@@ -346,6 +430,38 @@ export function ChatInterface({
                 )}
             </div>
           )}
+          {(error || unansweredSavedQuestion) && !isLoading && (
+            <div className="mt-4 space-y-3 rounded-md border border-red-300 bg-red-50 p-4 text-sm text-red-950 dark:border-red-800 dark:bg-red-950/30 dark:text-red-100">
+              <p role="alert" className="flex items-start gap-2 leading-relaxed">
+                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" aria-hidden="true" />
+                {error ? chatErrorMessage(error) : "이 질문의 답변이 아직 저장되지 않았습니다. 잠시 후 대화를 다시 열거나 같은 질문을 재시도할 수 있습니다."}
+              </p>
+              {retrySeconds > 0 && !(error instanceof ChatRequestError) && (
+                <p className="leading-relaxed">서버가 기존 답변을 저장 중일 수 있어 잠시 기다린 뒤 재시도합니다.</p>
+              )}
+              <div className="flex flex-wrap gap-2">
+                {error instanceof ChatRequestError && (error.status === 401 || error.status === 403) ? (
+                  <Button asChild variant="outline" className="min-h-12 bg-background">
+                    <Link href="/login">로그인 확인</Link>
+                  </Button>
+                ) : (
+                  <Button type="button" variant="outline" className="min-h-12 gap-2 bg-background" onClick={retryLastQuestion} disabled={retrySeconds > 0}>
+                    <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                    {retrySeconds > 0 ? `${retrySeconds}초 후 재시도` : "같은 질문 다시 시도"}
+                  </Button>
+                )}
+                <Button type="button" variant="ghost" className="min-h-12" onClick={() => {
+                  setInput(lastQuestion);
+                  questionRef.current?.focus();
+                }}>질문을 입력창에 가져오기</Button>
+                {convIdRef.current && (
+                  <Button type="button" variant="ghost" className="min-h-12" onClick={() => window.location.assign(`/chat/${convIdRef.current}`)}>
+                    저장된 대화 확인
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
           <div ref={bottomRef} />
         </div>
       </div>
@@ -365,6 +481,7 @@ export function ChatInterface({
           </label>
           <Input
             id="chat-question"
+            ref={questionRef}
             value={input}
             onChange={handleInputChange}
             placeholder="질문을 입력하세요"
@@ -392,7 +509,7 @@ export function ChatInterface({
             <Button
               type="submit"
               className="h-12 w-12 shrink-0 p-0"
-              disabled={!input.trim()}
+              disabled={!input.trim() || retrySeconds > 0}
               aria-label="질문 전송"
             >
               <Send className="h-5 w-5" aria-hidden />

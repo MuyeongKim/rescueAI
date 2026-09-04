@@ -1,5 +1,8 @@
 import { generateObject } from "ai";
 import { z } from "zod";
+import { createHash } from "node:crypto";
+import { generationTextParts, inspectTechnicalGrounding, mergeGroundingQuality } from "@/lib/generation-grounding";
+import { reviewGenerationGrounding } from "@/lib/generation-grounding-review";
 import {
   FatalError,
   getStepMetadata,
@@ -111,6 +114,12 @@ type GenerationCheckpoint = {
   repaired?: boolean;
   repairAttempts?: number;
   completedRepairs?: string[];
+  groundingReview?: {
+    signature: string;
+    evidenceSignature: string;
+    partSignatures: string[];
+    report: GenerationQualityReport;
+  };
 };
 
 function documentHeadings(type: "plan" | "lesson"): readonly string[] {
@@ -532,6 +541,40 @@ function operationalWarnings(context: GenerationContext): string[] {
   ];
 }
 
+function groundingSignature(request: ValidatedGenerateRequest, checkpoint: GenerationCheckpoint): string {
+  return createHash("sha256").update(JSON.stringify({
+    request, draft: checkpoint.draft, slides: checkpoint.slides,
+    context: checkpoint.context?.contextText,
+  })).digest("hex");
+}
+
+function textSignature(text: string): string {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function withGroundingQuality(
+  quality: GenerationQualityReport,
+  draft: GeneratedDoc | GeneratedSlideDeck,
+  request: ValidatedGenerateRequest,
+  checkpoint: GenerationCheckpoint
+): GenerationQualityReport {
+  const reviewed = checkpoint.groundingReview;
+  // 하나를 고친 뒤에도 아직 바뀌지 않은 다른 부분의 검토 항목은 같은 보완 회차에
+  // 처리한다. 완성본 통과 여부는 아래 최종 단계에서 전체 서명을 다시 검사한다.
+  const parts = generationTextParts(draft);
+  const semanticIssues = reviewed?.signature === groundingSignature(request, checkpoint)
+    ? reviewed.report.issues
+    : reviewed?.evidenceSignature === textSignature(contextFromCheckpoint(checkpoint).contextText)
+      ? reviewed.report.issues.filter((issue) => {
+          const index = parts.findIndex((part) => part.path === issue.path);
+          return index >= 0 && reviewed.partSignatures?.[index] === textSignature(parts[index].text);
+        })
+      : [];
+  const semantic = { ok: semanticIssues.length === 0, issues: semanticIssues };
+  return mergeGroundingQuality(quality,
+    inspectTechnicalGrounding(draft, contextFromCheckpoint(checkpoint).contextText, request), semantic);
+}
+
 function resultWithQuality(
   request: ValidatedGenerateRequest,
   checkpoint: GenerationCheckpoint
@@ -557,7 +600,7 @@ function resultWithQuality(
       sourceLabels: labels,
       sopEvidence: context.sopEvidence,
     };
-    const report = inspectCurrentGenerationQuality("slides", deck, request.duration);
+    const report = withGroundingQuality(inspectCurrentGenerationQuality("slides", deck, request.duration), deck, request, checkpoint);
     const messages = generationQualityMessages(report, operationalWarnings(context));
     return {
       result: {
@@ -577,7 +620,7 @@ function resultWithQuality(
     sourceLabels: labels,
     sopEvidence: context.sopEvidence,
   };
-  const report = inspectCurrentGenerationQuality(request.type, doc, request.duration);
+  const report = withGroundingQuality(inspectCurrentGenerationQuality(request.type, doc, request.duration), doc, request, checkpoint);
   const messages = generationQualityMessages(report, operationalWarnings(context));
   return {
     result: {
@@ -1133,10 +1176,33 @@ async function reviewGenerationStep(
   const progress = reviewProgress(round);
   row = await announceWorkerStage(row, {
     status: "reviewing",
-    stage: "구성·분량·안전·출처를 자동 점검하는 중",
+    stage: "구성·기술 수치·원문 근거·요청 조건을 대조하는 중",
     progress: progress.start,
   });
-  const checkpoint = checkpointOf(row.checkpoint);
+  let checkpoint = checkpointOf(row.checkpoint);
+  const signature = groundingSignature(request, checkpoint);
+  if (checkpoint.groundingReview?.signature !== signature) {
+    const { result } = resultWithQuality(request, checkpoint);
+    const draft = result as unknown as GeneratedDoc | GeneratedSlideDeck;
+    const grounding = await reviewGenerationGrounding({
+      draft,
+      evidenceText: contextFromCheckpoint(checkpoint).contextText,
+      request, modelKey: activeModelKey(checkpoint, request),
+    });
+    row = await saveCheckpointCas(row,
+      (saved) => saved.groundingReview?.signature === signature,
+      (saved) => {
+        if (groundingSignature(request, saved) !== signature) {
+          throw new RetryableError("변경된 초안의 근거를 다시 확인합니다.", { retryAfter: "3s" });
+        }
+        return { ...saved, groundingReview: {
+          signature, report: grounding,
+          evidenceSignature: textSignature(contextFromCheckpoint(checkpoint).contextText),
+          partSignatures: generationTextParts(draft).map((part) => textSignature(part.text)),
+        } };
+      });
+    checkpoint = checkpointOf(row.checkpoint);
+  }
   const { report } = resultWithQuality(request, checkpoint);
   await advanceWorkerProgress(row, progress.end);
   return {
@@ -1416,6 +1482,9 @@ async function finishGenerationJobStep(
   for (let conflict = 0; conflict < 3; conflict += 1) {
     const request = validatedRequest(row);
     const checkpoint = checkpointOf(row.checkpoint);
+    if (checkpoint.groundingReview?.signature !== groundingSignature(request, checkpoint)) {
+      throw new FatalError("최신 초안의 원문 근거 검토가 완료되지 않았습니다.");
+    }
     const { result, report } = resultWithQuality(request, checkpoint);
     const blockingIssues = blockingGenerationQualityIssues(report);
     const completed = blockingIssues.length === 0;

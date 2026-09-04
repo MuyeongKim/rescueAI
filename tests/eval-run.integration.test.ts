@@ -1,12 +1,17 @@
-// 평가셋 러너(현재 운영 경로): searchContext(쿼리 확장·임베딩·외부 RAG)→LLM 답변.
-// 채점은 eval/run.mjs 와 동일 휴리스틱(키워드/문구 포함). RUN_INTEGRATION=1 일 때만 실행.
+// 앱의 검색문 복원·답변 계획·RAG·모델을 사용하는 결정론적 기준 점검.
+// HTTP 인증/저장은 별도 검사이며, 점검률은 사실 정확도를 뜻하지 않는다.
 //   RUN_INTEGRATION=1 npx vitest run tests/eval-run.integration.test.ts --reporter=verbose
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, it, beforeAll, expect, vi } from "vitest";
-import { generateText } from "ai";
+import { convertToCoreMessages, generateText, type Message } from "ai";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import type { Database } from "@/lib/database.types";
+import { scoreTutorEvalAnswer, tutorEvalCaseSchema } from "@/eval/scoring";
+import { trimChatHistory } from "@/lib/chat-history";
+import { prepareChatAnswerText } from "@/lib/chat-answer";
+import { buildRetrievalQuestion } from "@/lib/chat-retrieval-query";
+import { answerPlanGuidance, buildChatAnswerPlan } from "@/lib/chat-answer-plan";
 
 // CLI 통합 평가는 서버 로직을 직접 호출하므로 Next 빌드의 경계 마커만 대체한다.
 vi.mock("server-only", () => ({}));
@@ -14,7 +19,7 @@ vi.mock("server-only", () => ({}));
 function loadEnv() {
   for (const line of readFileSync(join(process.cwd(), ".env.local"), "utf-8").split("\n")) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2];
+    if (m && !(m[1] in process.env)) process.env[m[1]] = m[2].trim().replace(/^(['"])(.*)\1$/, "$2");
   }
 }
 
@@ -32,23 +37,15 @@ function createEvaluationSupabaseClient() {
   });
 }
 
-function score(q: any, text: string): boolean {
-  if (q.expect === "not_found") return text.includes("확인되지 않습니다");
-  if (q.expect === "refuse_medical") return /119 의료지도|현장 지휘관/.test(text);
-  const kws: string[] = q.keywords || [];
-  if (kws.length === 0) return true;
-  return kws.some((k) => text.includes(k));
-}
-
 const integrationTimeoutMs = Math.max(
   60_000,
   Number(process.env.EVAL_TIMEOUT_MS) || 600_000
 );
 
-describe.skipIf(process.env.RUN_INTEGRATION !== "1")("평가셋 러너(운영 경로)", () => {
+describe.skipIf(process.env.RUN_INTEGRATION !== "1")("튜터 자동 기준 점검", () => {
   beforeAll(loadEnv);
 
-  it("eval 평가셋 정확도", async () => {
+  it("eval 문항별 답변·검색 근거 기준 충족률", async () => {
     const file = process.env.EVAL_FILE || "eval/questions.example.jsonl";
     const { searchContext, buildSystemPrompt, DEFAULT_TOP_K } = await import("@/lib/rag");
     const { getChatModel } = await import("@/lib/llm");
@@ -57,34 +54,44 @@ describe.skipIf(process.env.RUN_INTEGRATION !== "1")("평가셋 러너(운영 �
     const evaluationSupabase = createEvaluationSupabaseClient();
 
     const items = readFileSync(file, "utf-8")
-      .split("\n").map((l) => l.trim()).filter(Boolean).map((l) => JSON.parse(l));
+      .split("\n").map((l) => l.trim()).filter(Boolean).map((l) => tutorEvalCaseSchema.parse(JSON.parse(l)));
+    expect(items.length, "평가 파일에 문항이 없습니다.").toBeGreaterThan(0);
 
     let pass = 0;
-    console.log(`\n평가 시작: ${items.length}문항 (${file})\n`);
+    console.log(`\n자동 기준 점검 시작: ${items.length}문항 (${file}) — 사실 정확도는 별도 사람 검토가 필요합니다.\n`);
     for (let i = 0; i < items.length; i++) {
       const q = items[i];
       try {
-        const r = await searchContext(q.question, q.category || null, DEFAULT_TOP_K, {
+        const messages = trimChatHistory<Message>([
+          ...q.history, { role: "user", content: q.question },
+        ]).map((message) => message.role === "assistant"
+          ? { ...message, content: prepareChatAnswerText(message.content) } : message);
+        const retrievalQuestion = buildRetrievalQuestion(messages);
+        const r = await searchContext(retrievalQuestion, q.category || null, DEFAULT_TOP_K, {
           supabase: evaluationSupabase,
         });
         const { text } = await generateText({
           model: getChatModel(),
-          system: buildSystemPrompt(r.contextText),
-          prompt: q.question,
+          system: buildSystemPrompt(r.contextText, answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion))),
+          messages: convertToCoreMessages(messages),
           temperature: 0.2,
         });
-        const ok = score(q, text);
-        if (ok) pass++;
-        console.log(`[${i + 1}/${items.length}] ${ok ? "✓" : "✗"} ${q.question}`);
-        if (!ok) console.log(`    답변: ${text.slice(0, 140).replace(/\n/g, " ")}…  (매칭 ${r.matched})`);
-      } catch (e: any) {
-        console.log(`[${i + 1}/${items.length}] ✗ (오류) ${q.question}: ${e.message}`);
+        const result = scoreTutorEvalAnswer(q, prepareChatAnswerText(text), { ...r, retrievalQuestion });
+        if (result.passed) pass++;
+        console.log(`[${i + 1}/${items.length}] ${result.passed ? "✓" : "✗"} ${q.question}`);
+        if (!result.passed) console.log({
+          failedChecks: result.checks.filter((check) => !check.passed).map((check) => check.label),
+          retrievalQuestion, matched: r.matched, degraded: r.degraded ?? false,
+          answer: text.slice(0, 500),
+        });
+      } catch (e) {
+        console.log(`[${i + 1}/${items.length}] ✗ (오류) ${q.question}: ${e instanceof Error ? e.message : String(e)}`);
       }
     }
-    const acc = items.length ? Math.round((pass / items.length) * 100) : 0;
-    const minAcc = Number(process.env.EVAL_MIN_ACCURACY ?? 60);
-    console.log(`\n정확도: ${pass}/${items.length} = ${acc}%  (목표 ${minAcc}% 이상)`);
-    // 회귀 방어: 목표 정확도 미달 시 실패(기존엔 assert 가 없어 0%여도 통과했음)
-    expect(acc).toBeGreaterThanOrEqual(minAcc);
+    const rate = Math.round((pass / items.length) * 100);
+    const minimum = Number(process.env.EVAL_MIN_CHECK_RATE ?? process.env.EVAL_MIN_ACCURACY ?? 60);
+    console.log(`\n자동 기준 충족률(점검률): ${pass}/${items.length} = ${rate}%  (기준 ${minimum}% 이상)`);
+    expect(Number.isFinite(minimum) && minimum >= 0 && minimum <= 100).toBe(true);
+    expect(rate).toBeGreaterThanOrEqual(minimum);
   }, integrationTimeoutMs);
 });

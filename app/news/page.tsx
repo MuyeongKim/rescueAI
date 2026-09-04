@@ -10,6 +10,7 @@ import {
 import { Badge } from "@/components/ui/badge";
 import { OperationalHeader } from "@/components/layout/OperationalHeader";
 import { listVisibleNews } from "@/lib/news";
+import { DEMO } from "@/lib/demo-flag";
 
 export const dynamic = "force-dynamic";
 
@@ -21,15 +22,16 @@ export default async function NewsPage() {
       <OperationalHeader
         eyebrow="현장 정보 · 구조 동향"
         title="구조 동향"
-        description="전국·해외 구조 사례와 신기술 동향을 확인합니다."
+        description="한국시간 오늘을 포함한 최근 30일의 전국·해외 구조 사례와 신기술 동향을 확인합니다."
         icon={Newspaper}
         status={`${items.length}건 게시`}
       />
 
+      {DEMO && <p className="text-sm text-muted-foreground">데모 화면입니다. 가상 예시에도 최근 30일 기준을 적용하며, 실제 최신 기사가 아닙니다.</p>}
+
       {items.length === 0 ? (
         <p className="rounded-lg border py-12 text-center text-sm text-muted-foreground">
-          아직 등록된 동향이 없습니다. 관리자 &gt; 동향 관리에서 추가하거나 자동
-          수집을 실행하세요.
+          최근 30일 동안 등록된 구조 동향이 없습니다.
         </p>
       ) : (
         <div className="space-y-3">

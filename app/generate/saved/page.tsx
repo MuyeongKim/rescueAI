@@ -4,11 +4,14 @@ import { FolderOpen } from "lucide-react";
 import { listMyMaterials } from "@/lib/generated-materials";
 import { SavedList } from "@/components/generate/SavedList";
 import { OperationalHeader } from "@/components/layout/OperationalHeader";
+import { listMyGenerationDrafts } from "@/lib/generation-drafts-server";
+import { listMyGenerationJobs } from "@/lib/generation-recovery";
+import { GenerationRecoveryList } from "@/components/generate/GenerationRecoveryList";
 
 export const dynamic = "force-dynamic";
 
 export default async function SavedMaterialsPage() {
-  const items = await listMyMaterials(100);
+  const [items, drafts, jobs] = await Promise.all([listMyMaterials(100), listMyGenerationDrafts(), listMyGenerationJobs()]);
 
   return (
     <div className="mx-auto max-w-4xl space-y-5 px-4 py-6 sm:px-6">
@@ -20,6 +23,7 @@ export default async function SavedMaterialsPage() {
         status={`${items.length}건 저장`}
       />
 
+      <GenerationRecoveryList jobs={jobs} drafts={drafts} />
       {items.length === 0 ? (
         <p className="border border-l-4 border-l-primary py-12 text-center text-sm text-muted-foreground">
           아직 저장한 자료가 없습니다.{" "}

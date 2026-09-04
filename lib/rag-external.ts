@@ -155,10 +155,13 @@ function labelOf(meta: RagRow["metadata"]): string {
 export type VerifiedExternalRagSources = {
   sources: GeneratedDocSource[];
   degraded: boolean;
+  /** 명시적으로 요청할 때만 제공하는, 정확히 대조된 출처의 서버 원문. */
+  contextText?: string;
 };
 
 const PROVENANCE_PAIR_BATCH_SIZE = 20;
 const PROVENANCE_ROWS_PER_PAIR_LIMIT = 16;
+const PROVENANCE_EVIDENCE_MAX_CHARS = 80_000;
 
 function externalProvenancePairFilter(
   sources: readonly Pick<GeneratedDocSource, "document_id" | "page">[]
@@ -197,7 +200,8 @@ function provenancePairBatches(
 export async function verifyExternalRagSourceProvenance(
   candidates: readonly GeneratedDocSource[],
   expectedCategory: string,
-  suppliedClient?: ExternalRagSupabaseClient
+  suppliedClient?: ExternalRagSupabaseClient,
+  includeEvidence = false
 ): Promise<VerifiedExternalRagSources> {
   const category = expectedCategory.trim().slice(0, 100);
   if (!category) return { sources: [], degraded: false };
@@ -236,7 +240,7 @@ export async function verifyExternalRagSourceProvenance(
       batch: readonly GeneratedDocSource[]
     ) => {
       let request = (supabase.from as CallableFunction)(RAG_TABLE)
-        .select("id, metadata")
+        .select(includeEvidence ? "id, content, metadata" : "id, metadata")
         .eq("is_active", true)
         .eq(`metadata->>${CATEGORY_FIELD}`, scope.category)
         // document_id와 page_num을 독립 IN으로 조회하면 요청하지 않은 조합까지 섞인다.
@@ -286,7 +290,7 @@ export async function verifyExternalRagSourceProvenance(
       return { sources: [], degraded: true };
     }
     const rows = results.flatMap(
-      (result) => (result.data ?? []) as Array<Pick<RagRow, "id" | "metadata">>
+      (result) => (result.data ?? []) as Array<Pick<RagRow, "id" | "metadata"> & Partial<Pick<RagRow, "content">>>
     );
 
     const actual = new Set(
@@ -296,12 +300,35 @@ export async function verifyExternalRagSourceProvenance(
         return JSON.stringify([documentId, page, documentLabelOf(row.metadata)]);
       })
     );
-    return {
-      sources: requested.filter((source) =>
+    const sources = requested.filter((source) =>
         actual.has(JSON.stringify([source.document_id, source.page, source.doc]))
-      ),
-      degraded: false,
-    };
+    );
+    if (!includeEvidence) return { sources, degraded: false };
+
+    const verifiedIdentities = new Set(sources.map((source) =>
+      JSON.stringify([source.document_id, source.page, source.doc])
+    ));
+    const evidence: string[] = [];
+    const seenRows = new Set<string>();
+    let evidenceChars = 0;
+    for (const row of rows) {
+      const identity = JSON.stringify([
+        documentIdOf(row.metadata), pageOf(row.metadata), documentLabelOf(row.metadata),
+      ]);
+      if (!verifiedIdentities.has(identity) || seenRows.has(row.id)) continue;
+      seenRows.add(row.id);
+      // 본문 누락/상한 초과를 빈 정상 근거로 취급하면 숫자 검증을 건너뛸 수 있다.
+      if (typeof row.content !== "string" || !row.content.trim()) {
+        return { sources, degraded: true, contextText: "" };
+      }
+      const text = `[${labelOf(row.metadata)}]\n${cleanContent(row.content, row.metadata?.["Header 2"] ?? "")}`;
+      evidenceChars += text.length + (evidence.length > 0 ? 7 : 0);
+      if (evidenceChars > PROVENANCE_EVIDENCE_MAX_CHARS) {
+        return { sources, degraded: true, contextText: "" };
+      }
+      evidence.push(text);
+    }
+    return { sources, degraded: false, contextText: evidence.join("\n\n---\n\n") };
   } catch (error) {
     console.error(
       "[rag-external] 저장 출처 검증 요청 실패:",
@@ -751,6 +778,36 @@ const SUBJECT_STOP_WORDS = new Set([
   "시",
   "전",
   "후",
+  "안녕하세요",
+  "혹시",
+  "그럼",
+  "그러면",
+  "그리고",
+  "저",
+  "제",
+  "저희",
+  "우리",
+  "처음",
+  "신규",
+  "신입",
+  "초보",
+  "초보자",
+  "신규대원",
+  "신입대원",
+  "구조대원",
+  "소방대원",
+  "소방관",
+  "대원",
+  "질문",
+  "궁금한데",
+  "궁금한게",
+  "간단히",
+  "쉽게",
+  "자세히",
+  "알려주세요",
+  "설명해주세요",
+  "알고",
+  "싶은데",
 ]);
 const GENERIC_SUBJECTS = new Set([
   "개요",
@@ -794,9 +851,10 @@ const SOP_TOPIC_STOP_WORDS = new Set([
 
 function normalizeSearchText(text: string): string {
   return text
+    .normalize("NFC")
     .slice(0, 100)
     .replace(/[\r\n\t]+/g, " ")
-    .replace(/[·,;\/|()[\]{}:!?~…—-]+/g, " ")
+    .replace(/[.·,;\/|()[\]{}:!?~…—-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
@@ -813,11 +871,22 @@ function inferTopicSubject(topic: string): string {
   const actionIndex = tokens.findIndex((token) =>
     PROCEDURE_FACETS.some((facet) => facet.triggers.test(token))
   );
-  const subjectCandidates = (actionIndex > 0 ? tokens.slice(0, actionIndex) : tokens)
-    .map(stripKoreanParticle);
-  const subjectIndex = subjectCandidates.findIndex(
-    (token) => token.length >= 2 && !SUBJECT_STOP_WORDS.has(token)
-  );
+  const subjectCandidates = tokens
+    .map((token) => stripKoreanParticle(
+      token.replace(/(?:입니다만|인데요|입니다|이에요|예요|이라서|라서|인데|이고)$/u, "")
+    ));
+  const isSubjectCandidate = (token: string) =>
+    // 자기소개·요청 표현은 자료에 없다는 이유로 검색 후보를 제거할 수 있는 주제가
+    // 아니다. 명사로 남는 실제 대상만 채택하고 기존 주제 일치 필터는 유지한다.
+    token.length >= 2 && !SUBJECT_STOP_WORDS.has(token) &&
+      !/(?:해주세요|해줘|합니다|하는데|했는데|할까요|인가요|있는데|있습니다)$/u.test(token);
+  // 인명구조사·암모니아는 대상 자체가 facet 트리거다. 그 앞에 '그럼'이 있어도
+  // 트리거 단어와 뒤의 등급까지 후보에 남긴다.
+  const topicPrefix = actionIndex > 0
+    ? subjectCandidates.slice(0, actionIndex + 1)
+    : subjectCandidates;
+  let subjectIndex = topicPrefix.findIndex(isSubjectCandidate);
+  if (subjectIndex < 0) subjectIndex = subjectCandidates.findIndex(isSubjectCandidate);
   const subjectToken = subjectCandidates[subjectIndex];
   // 수식어·행동 표현까지 subject에 붙이면 실제 청크에 없는 과구체 문구가 되어 전부 D로
   // 탈락한다. 다만 자격의 1급·2급은 문서와 평가표를 가르는 핵심 식별자이므로 바로 뒤의
@@ -1738,22 +1807,27 @@ export async function searchExternalRag(
     })
     .join("\n\n---\n\n");
 
-  // 출처는 문서/페이지 단위 중복 제거, 최대 3개. 자료실 문서가 있으면 원문 링크를 연결한다.
-  const seen = new Set<string>();
+  // 모델에 제공한 모든 문서/페이지를 확인할 수 있게 유지한다. 실제 답변에 사용한
+  // 주장별 인용을 판정한 목록은 아니며, 동일 페이지의 후속 청크도 미리보기에 남긴다.
+  const byPage = new Map<string, DocSource>();
   const sources: DocSource[] = [];
   for (const r of top) {
     const documentId = documentIdOf(r.meta);
     const page = pageOf(r.meta);
     const key = `${documentId || r.meta?.source || "자료"}::${page ?? "-"}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    sources.push({
+    const existing = byPage.get(key);
+    if (existing) {
+      if (!existing.content.includes(r.text)) existing.content += `\n\n${r.text}`;
+      continue;
+    }
+    const source: DocSource = {
       document_id: documentId,
       doc: documentLabelOf(r.meta),
       page,
-      content: r.text.slice(0, 400),
-    });
-    if (sources.length >= 3) break;
+      content: r.text,
+    };
+    byPage.set(key, source);
+    sources.push(source);
   }
 
   return { contextText, sources, matched: top.length, degraded: candidates.degraded };

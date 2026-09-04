@@ -14,6 +14,7 @@ import {
   type GeneratedSlideDeck,
 } from "@/lib/generate";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
+import { checkStoredMaterialGrounding } from "@/lib/generation-grounding-server";
 import {
   ragTableEnabled,
 } from "@/lib/rag-external";
@@ -383,6 +384,32 @@ function qualityGateBeforeSave(
   );
 }
 
+async function technicalGateBeforeUse(
+  body: ValidatedSaveBody,
+  supabase: Awaited<ReturnType<typeof createClient>>
+): Promise<Response | null> {
+  if (body.kind === "notebooklm") return null;
+  const check = await checkStoredMaterialGrounding({
+    kind: body.kind,
+    title: body.title,
+    category: body.category ?? "",
+    content: body.content,
+    request: {
+      topic: body.topic ?? undefined,
+      audience: body.audience ?? undefined,
+      duration: body.duration ?? undefined,
+      focus: typeof body.content.focus === "string" ? body.content.focus : undefined,
+      conditions: typeof body.content.conditions === "string" ? body.content.conditions : undefined,
+    },
+    supabase,
+  });
+  return check.ok ? null : Response.json({
+    code: check.status === 503 ? "grounding_verification_unavailable" : "generation_grounding_invalid",
+    error: check.error,
+    issues: check.issues ?? [],
+  }, { status: check.status });
+}
+
 async function verifySopBeforeSave(
   body: ValidatedSaveBody,
   ragReader: GenerationRagReader | null
@@ -617,6 +644,8 @@ export async function POST(req: Request) {
   // 서버가 방금 고정한 SOP 근거까지 포함해 최종 품질 계약을 다시 검사한다.
   const verifiedQualityError = qualityGateBeforeSave(body, true);
   if (verifiedQualityError) return verifiedQualityError;
+  const groundingError = await technicalGateBeforeUse(body, supabase);
+  if (groundingError) return groundingError;
 
   const fields = {
     kind: body.kind,
@@ -884,6 +913,8 @@ export async function PATCH(req: Request) {
     if (sopError) return sopError;
     const verifiedQualityError = qualityGateBeforeSave(verifiedBody, true);
     if (verifiedQualityError) return verifiedQualityError;
+    const groundingError = await technicalGateBeforeUse(verifiedBody, supabase);
+    if (groundingError) return groundingError;
     if (clientSopEvidence(verifiedBody.content)?.status === "degraded") {
       return Response.json(
         {

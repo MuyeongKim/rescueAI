@@ -67,3 +67,11 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 | `20260829163049_protect_generated_material_quality_and_revision.sql` | 생성물 핵심 품질 DB 강제 + 공동계정 재편집 충돌 방지 revision |
 | `20260902021457_add_login_access_counter.sql` | 로그인 후 KST 일일 고유 접속 집계 + 공개 숫자 전용 최소 권한 RPC |
 | `20260902094825_durable_generation_jobs.sql` | 장시간 정밀 자료제작 작업 원장 + 저장 지점·품질 게이트·소유자 공개 조회 RLS |
+| `20260904222054_improve_tutor_recovery.sql` | 튜터 검색 장애 상태 보존 + 요청 UUID 중복 방지 |
+| `20260904222055_private_generation_drafts.sql` | 개인 편집 초안 자동보관 + 소유자 RLS·CAS·분량 제한 |
+
+2026-09-05 튜터·자료제작 개선을 배포하기 전에는 위 두 후속 마이그레이션을 순서대로 적용합니다.
+기존 메시지는 장애 여부를 소급 판정하지 않고 `retrieval_degraded=false`로 초기화됩니다.
+초안은 공식 생성물과 별도이며, `snapshot`은 미완성 편집을 허용합니다. 공식 저장·공유의 품질 검사는
+계속 `generated_materials` 계약과 서버 API에서 수행합니다. 메시지 중복·소유권과 초안의 RLS·CAS·
+불변 식별자는 PGlite 회귀검사에 포함됩니다. 운영 Supabase에 적용했다는 의미는 아닙니다.

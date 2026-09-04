@@ -22,7 +22,6 @@ export const NOT_FOUND_MESSAGE =
 // 튜터는 단답보다 원리·절차·안전사항까지 설명하므로 관련 청크를 넉넉히 제공한다.
 // 외부 RAG와 기본 hybrid_search 모두 같은 기본값을 사용한다.
 export const DEFAULT_TOP_K = 8;
-export const MAX_SOURCES = 3;
 
 type HybridRow = {
   chunk_id: number;
@@ -40,7 +39,7 @@ export type SearchResult = {
   degraded?: boolean;
 };
 
-// 하이브리드 검색 → 컨텍스트 문자열 + 출처(중복 제거 최대 3개)
+// 하이브리드 검색 → 컨텍스트 문자열 + 제공한 문서/페이지 전체(중복 제거)
 export async function searchContext(
   query: string,
   category?: string | null,
@@ -90,7 +89,7 @@ export async function searchContext(
 
   if (error) {
     console.error("[rag] hybrid_search error:", error.message);
-    return { contextText: "", sources: [], matched: 0 };
+    return { contextText: "", sources: [], matched: 0, degraded: true };
   }
 
   const rows = (data ?? []) as HybridRow[];
@@ -103,20 +102,24 @@ export async function searchContext(
     .map((r) => `[${r.doc_title} p.${r.page_num ?? "-"}]\n${r.content}`)
     .join("\n\n---\n\n");
 
-  // (document_id, page) 기준 중복 제거 후 상위 MAX_SOURCES개 (§9.3)
-  const seen = new Set<string>();
+  // 컨텍스트 뒤쪽 페이지도 사용자가 확인할 수 있도록 출처를 별도로 자르지 않는다.
+  const byPage = new Map<string, DocSource>();
   const sources: DocSource[] = [];
   for (const r of rows) {
     const key = `${r.document_id}::${r.page_num ?? "-"}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    sources.push({
+    const existing = byPage.get(key);
+    if (existing) {
+      if (!existing.content.includes(r.content)) existing.content += `\n\n${r.content}`;
+      continue;
+    }
+    const source: DocSource = {
       document_id: r.document_id,
       doc: r.doc_title,
       page: r.page_num,
-      content: r.content.slice(0, 400),
-    });
-    if (sources.length >= MAX_SOURCES) break;
+      content: r.content,
+    };
+    byPage.set(key, source);
+    sources.push(source);
   }
 
   return { contextText, sources, matched: rows.length };
@@ -148,7 +151,8 @@ export function buildSystemPrompt(contextText: string, answerGuidance = ""): str
    - 안전 유의사항: 위험요소와 중단·보고·추가 확인이 필요한 상황을 참고 자료 범위에서 명시
 8. 답변 본문(핵심 답변·세부 설명·절차·현장 확인사항·안전 유의사항)에는
    [문서명 p.3] 같은 출처 라벨이나 문서명·페이지를 직접 쓰지 마세요.
-   검증된 출처는 시스템이 답변 맨 아래의 '근거 자료' 영역에 중복 없이 한 번만 자동 표시합니다.
+   시스템은 답변 작성에 제공한 참고 자료를 답변 맨 아래의 '근거 자료' 영역에 중복 없이 한 번만 자동 표시합니다.
+   이 목록은 각 문장의 정확성이나 실제 인용 여부를 별도로 검증한 결과가 아닙니다.
    따라서 별도의 출처 목록도 작성하지 말고, 참고 자료에 없는 문서명·페이지는 만들지 마세요.
 9. 답변을 풍부하게 만들기 위해 일반 상식이나 추측을 덧붙이지 마세요. 내용이 부족하면 부족한 범위를 명확히 밝히세요.
 
