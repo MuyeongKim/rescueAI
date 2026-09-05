@@ -70,6 +70,7 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 | `20260904222054_improve_tutor_recovery.sql` | 튜터 검색 장애 상태 보존 + 요청 UUID 중복 방지 |
 | `20260904222055_private_generation_drafts.sql` | 개인 편집 초안 자동보관 + 소유자 RLS·CAS·분량 제한 |
 | `20260905124809_rank_rag_keyword_candidates.sql` | 활성·분야 범위에서 관련성 정렬 후 후보 수를 제한하는 키워드 검색 RPC |
+| `20260905140458_align_generated_document_endnote_evidence.sql` | 문서 말미 출처와 DB 핵심 품질·SOP 검사 정렬, 기존 원본 검증과 슬라이드 같은 장 출처 보호 유지 |
 
 2026-09-05 튜터·자료제작 개선을 배포하기 전에는 위 두 후속 마이그레이션을 순서대로 적용합니다.
 기존 메시지는 장애 여부를 소급 판정하지 않고 `retrieval_degraded=false`로 초기화됩니다.
@@ -86,3 +87,14 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 않습니다. 2026-09-05 운영 DB 적용 후 실행 권한, 활성 자료 수 보존과 실제 검색을 확인했습니다.
 `tests/rag-keyword-search-migration.test.ts`는 LIMIT 밖에 있던 최고 관련 후보의 회수와 분야·RLS·
 입력 경계를 실제 PostgreSQL(PGlite)에서 검증합니다.
+
+문서 말미 출처 방식의 훈련계획·교안 저장에는
+`20260905140458_align_generated_document_endnote_evidence.sql`이 필요합니다. 기존 앱의
+본문 인라인 출처 제거 방식과 DB 검사의 기준을 맞추는 후속 변경입니다. 두 검증 함수만
+재정의하며 데이터·RLS·트리거·revision은 변경하지 않습니다. 검증 함수는 계속 서버 트리거에서만
+호출하며 공개·익명·인증 사용자의 직접 실행을 허용하지 않습니다. 실제 출처와 SOP 번호·명칭,
+분야·시간·안전·평가 검사와 슬라이드의 같은 장 출처 연결은 유지합니다.
+2026-09-05 운영 적용 전후 기존 저장물 9개·공유 상태와 활성 RAG 20,938개 보존, 함수 직접 실행
+차단을 확인했습니다. 적용 뒤 동일한 생성 결과를 브라우저에서 다시 저장해 성공했으며,
+`tests/generated-document-endnote-migration.test.ts`에서 실제 PostgreSQL 함수로 저장·거절 경계와
+반복 적용·revision·역할별 실행 차단을 검증합니다.
