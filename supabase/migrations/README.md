@@ -69,6 +69,7 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 | `20260902094825_durable_generation_jobs.sql` | 장시간 정밀 자료제작 작업 원장 + 저장 지점·품질 게이트·소유자 공개 조회 RLS |
 | `20260904222054_improve_tutor_recovery.sql` | 튜터 검색 장애 상태 보존 + 요청 UUID 중복 방지 |
 | `20260904222055_private_generation_drafts.sql` | 개인 편집 초안 자동보관 + 소유자 RLS·CAS·분량 제한 |
+| `20260905124809_rank_rag_keyword_candidates.sql` | 활성·분야 범위에서 관련성 정렬 후 후보 수를 제한하는 키워드 검색 RPC |
 
 2026-09-05 튜터·자료제작 개선을 배포하기 전에는 위 두 후속 마이그레이션을 순서대로 적용합니다.
 기존 메시지는 장애 여부를 소급 판정하지 않고 `retrieval_degraded=false`로 초기화됩니다.
@@ -76,3 +77,12 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 계속 `generated_materials` 계약과 서버 API에서 수행합니다. 메시지 중복·소유권과 초안의 RLS·CAS·
 불변 식별자는 PGlite 회귀검사에 포함됩니다. 두 마이그레이션은 2026-09-05 운영 Supabase에
 순서대로 적용했으며, 기존 데이터 보존·신규 컬럼·초안 RLS·역할별 권한을 확인했습니다.
+
+키워드 검색 정렬 변경은 앱 배포 전에 `20260905124809_rank_rag_keyword_candidates.sql`을
+적용합니다. `search_rag_rescue_keywords(query_text, match_count, filter)`는 기존 활성 본문 GIN
+인덱스로 검색한 뒤 `ts_rank_cd DESC, id ASC`로 정렬하고 최대 100개를 반환합니다. 앱의 기존
+검색별 후보 수·동시 요청 상한은 유지합니다. 이 함수는 `SECURITY INVOKER`이며 익명 실행을
+차단하고 인증 사용자·서비스 역할에만 실행을 허용합니다. 원본·벡터·기존 검색 RPC는 변경하지
+않습니다. 2026-09-05 운영 DB 적용 후 실행 권한, 활성 자료 수 보존과 실제 검색을 확인했습니다.
+`tests/rag-keyword-search-migration.test.ts`는 LIMIT 밖에 있던 최고 관련 후보의 회수와 분야·RLS·
+입력 경계를 실제 PostgreSQL(PGlite)에서 검증합니다.

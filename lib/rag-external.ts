@@ -24,11 +24,13 @@ import {
 } from "@/lib/generate";
 import type { SopEvidence } from "@/lib/sop-evidence";
 import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
+import { buildRerankPrompt } from "@/lib/rag-rerank-prompt";
 
 // 테이블·검색함수 이름은 RAG_TABLE 단일 출처에서 파생(이름 변경 시 env+SQL만 고치면 됨).
-// 검색 RPC 규칙: match_<테이블명> (예: rag_rescue → match_rag_rescue).
+// 검색 RPC 규칙: match_<테이블명> / search_<테이블명>_keywords.
 const RAG_TABLE = process.env.RAG_TABLE || "rag_rescue";
 const MATCH_FN = `match_${RAG_TABLE}`;
+const KEYWORD_FN = `search_${RAG_TABLE}_keywords`;
 const RAG_AUXILIARY_MODEL_MAX_MS = 45_000;
 const RAG_DB_REQUEST_MAX_MS = 45_000;
 const SOP_DOCUMENT_TYPES = ["sop", "operational_guidance"] as const;
@@ -1258,13 +1260,14 @@ async function llmRerank(
   if (keep <= 0) return [];
   if (process.env.RERANK === "0" || items.length <= keep) return items.slice(0, keep);
   try {
-    const listed = items
-      .map((it, i) => `[${i}] ${labelOf(it.meta)}\n${it.text.slice(0, 350)}`)
-      .join("\n\n");
     const { object } = await generateObject({
       model: getChatModel(),
       schema: rerankSchema,
-      prompt: `질문에 답하는 데 가장 관련 깊은 자료를 골라, 관련도 높은 순서로 최대 ${keep}개의 번호만 JSON 배열로 반환하세요.\n\n질문: ${query}\n\n자료:\n${listed}\n\n예: {"ranked":[3,0,5]}`,
+      prompt: buildRerankPrompt(
+        query,
+        items.map((item) => ({ label: labelOf(item.meta), text: item.text })),
+        keep
+      ),
       temperature: 0,
       // 재순위는 단순 작업 — Gemini 사고(thinking) 끄면 지연 크게 감소 (타 제공자는 무시됨)
       providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
@@ -1374,13 +1377,15 @@ async function keywordRowsForPlan(
   // plan 단위 병렬 제한과 합쳐 실제 동시 FTS 요청 수를 고정한다.
   for (const keywordQuery of plan.queries) {
     try {
-      let request = (supabase.from as CallableFunction)(RAG_TABLE)
-        .select("id, content, metadata")
-        .eq("is_active", true)
-        .textSearch("content", keywordQuery, { type: "websearch", config: "simple" })
-        .limit(requestLimit);
-      if (category) request = request.eq(`metadata->>${CATEGORY_FIELD}`, category);
-      const { data, error } = await withRagDbTimeout(request);
+      // DB가 활성·분야 범위에서 관련성을 정렬한 뒤 LIMIT을 적용한다.
+      // 앱의 제목·상황 점수는 이렇게 회수한 후보 안에서만 보조 순위로 사용한다.
+      const { data, error } = await withRagDbTimeout(
+        (supabase.rpc as CallableFunction)(KEYWORD_FN, {
+          query_text: keywordQuery,
+          match_count: requestLimit,
+          filter: category ? { [CATEGORY_FIELD]: category } : {},
+        })
+      );
       if (error) {
         console.error("[rag-external] keyword error:", error.message);
         results.push({ rows: [], degraded: true });

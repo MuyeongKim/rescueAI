@@ -60,6 +60,8 @@ type QueryRecord = {
   orFilters: string[];
   keyword?: string;
   keywordColumn?: string;
+  rpcName?: string;
+  rpcFilter?: Record<string, unknown>;
   limit?: number;
 };
 
@@ -134,14 +136,14 @@ function chemicalTitleRow(): RagRow {
 }
 
 function hasCategoryFilter(record: QueryRecord, category: string): boolean {
-  return record.eqs.some(
+  return record.rpcFilter?.edu_category === category || record.eqs.some(
     ([column, value]) => column === "metadata->>edu_category" && value === category
   );
 }
 
 function createSupabaseMock(
   respond: (record: QueryRecord) => QueryResponse | Promise<QueryResponse>
-): { client: { from: ReturnType<typeof vi.fn>; rpc: ReturnType<typeof vi.fn> }; records: QueryRecord[] } {
+): { client: { from: ReturnType<typeof vi.fn>; rpc: ReturnType<typeof vi.fn> }; vectorRpc: ReturnType<typeof vi.fn>; records: QueryRecord[] } {
   const records: QueryRecord[] = [];
   const from = vi.fn((table: string) => {
     const record: QueryRecord = {
@@ -191,8 +193,19 @@ function createSupabaseMock(
     };
     return builder;
   });
-  const rpc = vi.fn().mockResolvedValue({ data: [], error: null });
-  return { client: { from, rpc }, records };
+  const vectorRpc = vi.fn().mockResolvedValue({ data: [], error: null });
+  const rpc = vi.fn((name: string, args: Record<string, unknown>) => {
+    if (name !== "search_rag_rescue_keywords") return vectorRpc(name, args);
+    const record: QueryRecord = {
+      table: "rag_rescue", index: records.length,
+      eqs: [], ins: [], isFilters: [], orFilters: [],
+      rpcName: name, rpcFilter: args.filter as Record<string, unknown>,
+      keyword: args.query_text as string, limit: args.match_count as number,
+    };
+    records.push(record);
+    return Promise.resolve(respond(record));
+  });
+  return { client: { from, rpc }, vectorRpc, records };
 }
 
 const previousRerank = process.env.RERANK;
@@ -247,7 +260,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     const chemical = chemicalTitleRow();
     const unrelated = droneRow(900);
     const supabase = createSupabaseMock(() => ({ data: [unrelated, chemical], error: null }));
-    supabase.client.rpc.mockResolvedValue({ data: [unrelated, chemical], error: null });
+    supabase.vectorRpc.mockResolvedValue({ data: [unrelated, chemical], error: null });
     const result = await searchExternalRag(
       "신규대원인데 화학보호복 착용 절차를 알려줘", [0.1], 8, "화학사고", [], supabase.client as never
     );
@@ -273,7 +286,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(result.sources.find((source) => source.page === 4)?.content).toContain("후속 세부 근거 4");
   });
 
-  it("키워드 질의 수를 제한하고 모든 질의에 활성·분야 필터를 적용한다", async () => {
+  it("키워드 질의 수를 제한하고 모든 질의에 정렬 RPC와 분야 범위를 적용한다", async () => {
     const supabase = createSupabaseMock((record) => ({
       data: [row(record.index)],
       error: null,
@@ -287,8 +300,8 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(keywordQueries.length).toBeLessThanOrEqual(MAX_KEYWORD_SEARCH_QUERIES);
     expect(keywordQueries.slice(1).every((query) => (query.limit ?? 0) <= 24)).toBe(true);
     for (const query of keywordQueries) {
-      expect(query.eqs).toContainEqual(["is_active", true]);
-      expect(query.eqs).toContainEqual(["metadata->>edu_category", "화학사고"]);
+      expect(query.rpcName).toBe("search_rag_rescue_keywords");
+      expect(query.rpcFilter).toEqual({ edu_category: "화학사고" });
     }
   });
 
@@ -335,7 +348,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
         record.keyword === "매달린 구조" ? [unrelated, suspension, followup2] : [unrelated],
       error: null,
     }));
-    supabase.client.rpc.mockResolvedValue({ data: [unrelated], error: null });
+    supabase.vectorRpc.mockResolvedValue({ data: [unrelated], error: null });
     mocks.generateObject.mockResolvedValue({ object: { ranked: [1] } });
     process.env.RERANK = "1";
     try {
@@ -349,7 +362,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       expect(result.contextText).toContain("[확인 항목: 매달린 요구조자 관련 개별 근거]");
       expect(result.contextText).not.toContain("벌집 제거");
       expect(mocks.generateObject).toHaveBeenCalledTimes(1);
-      expect(supabase.client.rpc.mock.calls[0][1].filter).toEqual({});
+      expect(supabase.vectorRpc.mock.calls[0][1].filter).toEqual({});
       expect(supabase.records.filter((record) => record.keyword !== undefined)).toHaveLength(5);
     } finally {
       process.env.RERANK = "0";
@@ -417,7 +430,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     );
     expect(result.matched).toBe(1);
     expect(supabase.records.every((record) => hasCategoryFilter(record, "구급"))).toBe(true);
-    expect(supabase.client.rpc.mock.calls[0][1].filter).toEqual({ edu_category: "구급" });
+    expect(supabase.vectorRpc.mock.calls[0][1].filter).toEqual({ edu_category: "구급" });
     expect(result.contextText).toContain("[확인 항목: 관통상 관련 개별 근거]");
     expect(result.contextText).not.toContain("[확인 항목: 매달린 요구조자 관련 개별 근거]");
   });
@@ -427,7 +440,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       data: hasCategoryFilter(record, "드론 운용") ? [] : [droneRow(record.index)],
       error: null,
     }));
-    supabase.client.rpc.mockImplementation(
+    supabase.vectorRpc.mockImplementation(
       (_fn: string, args: { filter: Record<string, string> }) =>
         Promise.resolve({
           data: args.filter.edu_category ? [] : [droneRow(100)],
@@ -447,11 +460,11 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     const keywordQueries = supabase.records.filter((record) => record.keyword !== undefined);
     expect(keywordQueries.some((record) => hasCategoryFilter(record, "드론 운용"))).toBe(true);
     expect(keywordQueries.some((record) => !hasCategoryFilter(record, "드론 운용"))).toBe(true);
-    expect(supabase.client.rpc).toHaveBeenCalledTimes(2);
-    expect(supabase.client.rpc.mock.calls[0]?.[1]?.filter).toEqual({
+    expect(supabase.vectorRpc).toHaveBeenCalledTimes(2);
+    expect(supabase.vectorRpc.mock.calls[0]?.[1]?.filter).toEqual({
       edu_category: "드론 운용",
     });
-    expect(supabase.client.rpc.mock.calls[1]?.[1]?.filter).toEqual({});
+    expect(supabase.vectorRpc.mock.calls[1]?.[1]?.filter).toEqual({});
     expect(result.matched).toBeGreaterThan(0);
     expect(result.contextText).toContain("소방드론 비행 전");
     expect(result.degraded).toBe(true);
@@ -462,7 +475,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       data: [droneRow(record.index)],
       error: null,
     }));
-    supabase.client.rpc.mockResolvedValue({ data: [droneRow(100)], error: null });
+    supabase.vectorRpc.mockResolvedValue({ data: [droneRow(100)], error: null });
 
     const result = await searchExternalRag(
       DRONE_TOPIC,
@@ -476,7 +489,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     const keywordQueries = supabase.records.filter((record) => record.keyword !== undefined);
     expect(keywordQueries.length).toBeGreaterThan(0);
     expect(keywordQueries.every((record) => hasCategoryFilter(record, "드론 운용"))).toBe(true);
-    expect(supabase.client.rpc).toHaveBeenCalledTimes(1);
+    expect(supabase.vectorRpc).toHaveBeenCalledTimes(1);
     expect(result.matched).toBeGreaterThan(0);
     expect(result.degraded).toBe(false);
   });
@@ -498,7 +511,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       data: [qualificationRow],
       error: null,
     }));
-    supabase.client.rpc.mockResolvedValue({ data: [qualificationRow], error: null });
+    supabase.vectorRpc.mockResolvedValue({ data: [qualificationRow], error: null });
 
     const result = await searchExternalRag(
       "인명구조사 2급 관련 정보?",
@@ -509,8 +522,8 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       supabase.client as never
     );
 
-    expect(supabase.client.rpc).toHaveBeenCalledTimes(1);
-    expect(supabase.client.rpc.mock.calls[0]?.[1]?.filter).toEqual({
+    expect(supabase.vectorRpc).toHaveBeenCalledTimes(1);
+    expect(supabase.vectorRpc.mock.calls[0]?.[1]?.filter).toEqual({
       edu_category: "일반구조",
       source: "2022년 인명구조사 2급 실기평가표 개정(최종본).pdf",
     });
@@ -528,7 +541,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
         error: null,
       };
     });
-    supabase.client.rpc.mockImplementation(
+    supabase.vectorRpc.mockImplementation(
       (_fn: string, args: { filter: Record<string, string> }) =>
         Promise.resolve({
           data: args.filter.edu_category ? [] : [droneRow(100)],
@@ -544,7 +557,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(keywordQueries.every((record) => hasCategoryFilter(record, "드론 운용"))).toBe(
       true
     );
-    expect(supabase.client.rpc).toHaveBeenCalledTimes(1);
+    expect(supabase.vectorRpc).toHaveBeenCalledTimes(1);
     expect(result.contextText).toBe("");
     expect(result.sources).toEqual([]);
     expect(result.bindingSources).toEqual([]);
@@ -798,7 +811,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       data: [crossTopic, titled],
       error: null,
     }));
-    supabase.client.rpc.mockResolvedValue({
+    supabase.vectorRpc.mockResolvedValue({
       data: [crossTopic, titled],
       error: null,
     });
@@ -832,7 +845,7 @@ describe("searchExternalRag Supabase I/O 계약", () => {
       },
     });
     const supabase = createSupabaseMock(() => ({ data: [first, second], error: null }));
-    supabase.client.rpc.mockResolvedValue({ data: [first, second], error: null });
+    supabase.vectorRpc.mockResolvedValue({ data: [first, second], error: null });
     mocks.generateObject.mockResolvedValue({ object: { ranked: [1] } });
     process.env.RERANK = "1";
 
