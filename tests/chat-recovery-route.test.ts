@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(), requireApiUser: vi.fn(), rateLimit: vi.fn(), searchContext: vi.fn(),
+  buildSystemPrompt: vi.fn(() => "test-system"),
   streamText: vi.fn(), finishes: [] as Promise<unknown>[],
 }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
@@ -14,7 +15,7 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 vi.mock("@/lib/rag", () => ({
   searchContext: mocks.searchContext,
-  buildSystemPrompt: () => "test-system",
+  buildSystemPrompt: mocks.buildSystemPrompt,
   NOT_FOUND_MESSAGE: "확인되지 않습니다",
 }));
 vi.mock("ai", () => ({
@@ -41,6 +42,7 @@ vi.mock("ai", () => ({
 }));
 
 import { POST } from "@/app/api/chat/route";
+import { NOT_FOUND_MESSAGE } from "@/lib/rag";
 
 const requestId = "10000000-0000-4000-8000-000000000001";
 const otherId = "20000000-0000-4000-8000-000000000002";
@@ -51,6 +53,7 @@ let messages: Row[];
 let failLookup: boolean;
 let raceUserInsert: boolean;
 let failAssistantInsert: boolean;
+let answerText: string;
 
 function database() {
   return { from(table: string) {
@@ -107,6 +110,7 @@ function request(body: Row = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   conversations = []; messages = []; failLookup = false; raceUserInsert = false; failAssistantInsert = false;
+  answerText = "**점검** 후 착용합니다.";
   mocks.finishes.length = 0;
   mocks.createClient.mockResolvedValue(database());
   mocks.requireApiUser.mockResolvedValue({ ok: true, user: { id: "user-1" } });
@@ -114,7 +118,7 @@ beforeEach(() => {
   mocks.searchContext.mockResolvedValue({ contextText: "근거", sources: [], degraded: true });
   mocks.streamText.mockImplementation(({ onFinish }) => ({
     consumeStream: () => {
-      const finish = onFinish({ text: "**점검** 후 착용합니다." });
+      const finish = onFinish({ text: answerText });
       mocks.finishes.push(finish);
       return finish;
     },
@@ -183,5 +187,40 @@ describe("튜터 오류 복구와 저장 경계", () => {
     const payload = await (await POST(request())).json();
     expect(payload.annotations[0]).toMatchObject({ messageId: null, saveFailed: true });
     expect(messages.filter(row => row.role === "assistant")).toHaveLength(0);
+  });
+
+  it("전체가 근거 없음 답변이면 검색됐던 무관한 자료를 저장·표시하지 않는다", async () => {
+    answerText = `\n ${NOT_FOUND_MESSAGE.replace(/ /g, "\n")} \n`;
+    mocks.searchContext.mockResolvedValue({
+      contextText: "질문과 무관한 자료", degraded: false,
+      sources: [{ document_id: 1, doc: "무관한 자료", page: 3, content: "다른 상황" }],
+    });
+
+    const payload = await (await POST(request())).json();
+
+    expect(payload.annotations[0].sources).toEqual([]);
+    expect(messages.find(row => row.role === "assistant")?.sources).toBeNull();
+  });
+
+  it("부분 근거를 설명하고 미확인 범위를 밝힌 답변의 자료는 저장·표시한다", async () => {
+    answerText = `**확인된 범위**\n개별 조건의 자료는 있습니다.\n\n전체 조건의 전용 절차는 ${NOT_FOUND_MESSAGE}`;
+    const source = { document_id: 54, doc: "개별 조건 자료", page: 269, content: "적용 조건과 예외" };
+    mocks.searchContext.mockResolvedValue({ contextText: "개별 조건의 근거", sources: [source, source], degraded: false });
+
+    const payload = await (await POST(request())).json();
+
+    expect(payload.annotations[0].sources).toEqual([source]);
+    expect(messages.find(row => row.role === "assistant")?.sources).toEqual([source]);
+  });
+
+  it("검색에서 검출한 복합 조건을 답변 프롬프트 구성에 전달한다", async () => {
+    const topics = ["관통상 관련 개별 근거", "매달린 요구조자 관련 개별 근거"];
+    mocks.searchContext.mockResolvedValue({
+      contextText: "개별 조건 자료", sources: [], independentEvidenceTopics: topics,
+    });
+
+    await POST(request());
+
+    expect(mocks.buildSystemPrompt).toHaveBeenCalledWith("개별 조건 자료", expect.any(String), topics);
   });
 });

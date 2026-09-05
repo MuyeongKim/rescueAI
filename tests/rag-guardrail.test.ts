@@ -35,6 +35,40 @@ describe("buildSystemPrompt (환각 가드레일)", () => {
     expect(prompt).toContain("119 의료지도");
   });
 
+  it("복합 조건의 개별 근거를 완성된 행동절차로 결합하지 않는다", () => {
+    const prompt = buildSystemPrompt("서로 다른 상황을 다루는 개별 자료");
+
+    expect(prompt).toContain("개별 조건의 근거와 모든 조건이 동시에 성립하는 상황의 근거를 구분");
+    expect(prompt).toContain("'확인된 범위'와 '추가 확인이 필요한 범위'");
+    expect(prompt).toContain("각 자료의 적용 대상·전제·예외");
+    expect(prompt).toContain("표준 문구로 전체 답변을 대체하지 마세요");
+    expect(prompt).toContain("서로 다른 상황의 절차를 임의로 이어 붙여");
+    expect(prompt).toContain("적용 여부가 불확실한 절차는 수행하도록 권하지 말고");
+  });
+
+  it("복합 상황에서는 기본 절차 골격과 질문별 절차 지침을 모두 근거 범위 안내로 바꾼다", () => {
+    const procedureGuidance = "[답변 유형: 현장 절차형]\n1. 준비·사전점검\n2. 단계별 행동절차";
+    const prompt = buildSystemPrompt("각 상황의 개별 자료", procedureGuidance, [
+      "관통상 관련 개별 근거", "매달린 요구조자 관련 개별 근거",
+    ]);
+
+    expect(prompt).toContain("[답변 유형: 복합 상황의 근거 범위 안내형]");
+    expect(prompt).toContain("위 주제 목록은 검색된 근거가 있다는 보증이 아닙니다");
+    expect(prompt).toContain("적용 차이: 자료의 대상·전제·예외와 질문 상황의 차이");
+    expect(prompt).toContain("전용 절차가 없다는 단서를 붙인 뒤 통합 행동절차를 제시하는 방식도 금지");
+    expect(prompt).not.toContain(procedureGuidance);
+    expect(prompt).not.toContain("절차가 있으면 번호(1. 2. 3.)로 구분");
+  });
+
+  it("독립 조건이 하나이거나 중복이면 기존 질문별 절차 지침을 유지한다", () => {
+    const guidance = "[답변 유형: 현장 절차형]\n1. 준비·사전점검\n2. 단계별 행동절차";
+    for (const topics of [[], ["관통상"], ["관통상", " 관통상 ", ""]]) {
+      const prompt = buildSystemPrompt("자료", guidance, topics);
+      expect(prompt).toContain(guidance);
+      expect(prompt).not.toContain("[답변 유형: 복합 상황의 근거 범위 안내형]");
+    }
+  });
+
   it("구체적이고 풍부한 튜터 답변 구조를 요구한다", () => {
     const prompt = buildSystemPrompt("자료");
     expect(prompt).toContain("단답으로 끝내지 말고");

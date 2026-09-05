@@ -312,6 +312,116 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(peak).toBeLessThanOrEqual(MAX_CONCURRENT_KEYWORD_SEARCHES);
   });
 
+  it("관통상과 매달림의 실제 근거를 재순위 후에도 함께 보존하고 무관한 나무 자료는 제외한다", async () => {
+    const impalement = row(54, {
+      id: "impalement",
+      content: "관통상 환자에 관한 교재 근거다. 상처와 이물질에 관한 내용이 포함되어 있으며 해당 항목의 설명 범위를 원문 페이지에서 확인할 수 있다.",
+      metadata: { source: "소방전술3 구급.pdf", document_id: 54, page_num: 269, "Header 2": "관통상", edu_category: "구급" },
+    });
+    const suspension = row(27, {
+      id: "suspension",
+      content: "나무에 매달린 요구조자를 다루는 인명구조 교육 근거다. 구조 환경과 활동 조건을 설명하며 해당 장의 적용 범위를 원문 페이지에서 확인할 수 있다.",
+      metadata: { source: "THE 로프 구조 2025.pdf", document_id: 27, page_num: 706, "Header 2": "나무 구조", edu_category: "산악" },
+    });
+    const unrelated = row(79, {
+      id: "beehive",
+      content: "나무에 매달린 벌집을 제거하는 작업 자료다. 벌집의 위치에 따라 사용하는 도구와 장비를 설명하는 것으로 나무에 관한 구조 작업의 별도 자료다.",
+      metadata: { source: "구조 교재.pdf", document_id: 79, page_num: 483, "Header 2": "벌집 제거" },
+    });
+    const followup = { ...impalement, id: "impalement-followup", content: impalement.content + " 다음 페이지의 개별 관련 근거이며 합쳐진 상황의 절차가 아니다.", metadata: { ...impalement.metadata, page_num: 270 } };
+    const followup2 = { ...suspension, id: "suspension-followup", content: suspension.content + " 다른 구조 조건에 관한 개별 참고 근거를 포함한다.", metadata: { ...suspension.metadata, page_num: 707 } };
+    const supabase = createSupabaseMock((record) => ({
+      data: record.keyword === "관통상" ? [impalement, followup] :
+        record.keyword === "매달린 구조" ? [unrelated, suspension, followup2] : [unrelated],
+      error: null,
+    }));
+    supabase.client.rpc.mockResolvedValue({ data: [unrelated], error: null });
+    mocks.generateObject.mockResolvedValue({ object: { ranked: [1] } });
+    process.env.RERANK = "1";
+    try {
+      const result = await searchExternalRag(
+        "구조 대상자의 몸통이 나뭇가지에 관통되어 공중에 떠 있는 경우 행동절차", [0.1], 3,
+        null, [], supabase.client as never
+      );
+      expect(result.degraded).toBe(false);
+      expect(result.sources.map((source) => source.document_id)).toEqual(expect.arrayContaining([54, 27]));
+      expect(result.contextText).toContain("[확인 항목: 관통상 관련 개별 근거]");
+      expect(result.contextText).toContain("[확인 항목: 매달린 요구조자 관련 개별 근거]");
+      expect(result.contextText).not.toContain("벌집 제거");
+      expect(mocks.generateObject).toHaveBeenCalledTimes(1);
+      expect(supabase.client.rpc.mock.calls[0][1].filter).toEqual({});
+      expect(supabase.records.filter((record) => record.keyword !== undefined)).toHaveLength(5);
+    } finally {
+      process.env.RERANK = "0";
+    }
+  });
+
+  it("표현별 합집합에서 개요보다 처치 근거, 다른 환경보다 질문의 나무 환경을 먼저 보호한다", async () => {
+    const overview = row(22, {
+      content: "관통상은 날카로운 물체와 관련된 상처 유형이다. 환자에게 발생할 수 있는 손상의 분류와 배경을 설명하는 교재의 개요 페이지다.",
+      metadata: { source: "손상 개요.pdf", document_id: 22, page_num: 311, "Header 2": "관통상" },
+    });
+    const care = row(54, {
+      content: "관통상 환자에 관한 응급처치 근거다. 원문에는 이물질과 고정에 관련된 처치 내용 및 예외 조건이 있어 해당 항목의 적용 범위를 확인할 수 있다.",
+      metadata: { source: "구급 교재.pdf", document_id: 54, page_num: 270, "Header 2": "Page 270" },
+    });
+    const building = row(7, {
+      content: "고층 건물 난간에 매달린 요구조자에 관한 구조 근거다. 고층 건물의 진입 조건과 실내 접근 방식을 설명하는 구조 절차 페이지다.",
+      metadata: { source: "고층 건물 구조.pdf", document_id: 7, page_num: 5, "Header 2": "매달린 요구조자 구조" },
+    });
+    const tree = row(27, {
+      content: "나무에서의 요구조자 픽 - 오프 구조를 설명하는 교육 근거다. 아래에 있는 구조팀이 위에 있는 요구조자에게 접근하는 유형과 적용 환경을 다룬다.",
+      metadata: { source: "로프 교재.pdf", document_id: 27, page_num: 706, "Header 2": "Page 706" },
+    });
+    const results: Record<string, RagRow[]> = {
+      "관통상 처치": [care], "관통상": [overview],
+      "나무 요구조자": [tree], "매달린 구조": [building],
+    };
+    const supabase = createSupabaseMock((record) => ({
+      data: results[record.keyword ?? ""] ?? [overview, building], error: null,
+    }));
+    const result = await searchExternalRag(
+      "구조 대상자의 몸통이 나뭇가지에 관통되어 공중에 떠 있는 경우 행동절차", null, 2,
+      null, [], supabase.client as never
+    );
+    expect(result.sources.map((source) => source.document_id)).toEqual([54, 27]);
+    expect(result.independentEvidenceTopics).toEqual([
+      "관통상 관련 개별 근거", "매달린 요구조자 관련 개별 근거",
+    ]);
+    expect(result.contextText).not.toContain("손상 개요");
+    expect(result.contextText).not.toContain("고층 건물");
+  });
+
+  it("나무·환자 단어만 우연히 겹친 페이지를 매달림의 근거로 보호하지 않는다", async () => {
+    const treeAnchor = row(27, {
+      content: "환자의 접근 경로를 설명하는 나무 확보지점 교육 자료다. 나무의 높이와 위치를 확인하는 내용이며 매달리는 상황의 인명구조 절차는 다루지 않는다.",
+      metadata: { source: "로프 구조.pdf", document_id: 27, page_num: 151, "Header 2": "나무 확보지점" },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [treeAnchor], error: null }));
+    const result = await searchExternalRag(
+      "구조 대상자가 나무에 매달린 경우", null, 8, null, [], supabase.client as never
+    );
+    expect(result.matched).toBe(0);
+    expect(result.contextText).toBe("");
+    expect(result.independentEvidenceTopics).toEqual(["매달린 요구조자 관련 개별 근거"]);
+  });
+
+  it("명시된 분야 안에 상황 근거가 있으면 복합 질문도 필터를 자동 해제하지 않는다", async () => {
+    const evidence = row(54, {
+      content: "관통상 환자와 상처에 관한 구급 교재의 개별 근거다. 이 상황의 자료 범위와 제한을 원문에서 확인할 수 있도록 충분한 설명이 포함되어 있다.",
+      metadata: { source: "구급 교재.pdf", document_id: 54, page_num: 269, "Header 2": "관통상", edu_category: "구급" },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [evidence], error: null }));
+    const result = await searchExternalRag(
+      "관통상 환자가 공중에 매달린 경우 구조 절차", [0.1], 8, "구급", [], supabase.client as never
+    );
+    expect(result.matched).toBe(1);
+    expect(supabase.records.every((record) => hasCategoryFilter(record, "구급"))).toBe(true);
+    expect(supabase.client.rpc.mock.calls[0][1].filter).toEqual({ edu_category: "구급" });
+    expect(result.contextText).toContain("[확인 항목: 관통상 관련 개별 근거]");
+    expect(result.contextText).not.toContain("[확인 항목: 매달린 요구조자 관련 개별 근거]");
+  });
+
   it("분야 제한 후보가 0건이면 같은 검색을 전 분야로 한 번 재시도한다", async () => {
     const supabase = createSupabaseMock((record) => ({
       data: hasCategoryFilter(record, "드론 운용") ? [] : [droneRow(record.index)],

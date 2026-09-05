@@ -531,17 +531,20 @@ function rrfFuse(lists: RagRow[][], k = 60): RagRow[] {
     .map(([id]) => byId.get(id)!);
 }
 
-// 키워드 질의 구성: 공백·구두점으로 나눠 2자+ 토큰 + 확장 키워드를 OR 로 묶어 재현율 확보.
-// extra: 쿼리 확장 LLM이 뽑은 핵심어(복합어 분해·약어 풀이 포함). 본문 매칭률을 높인다.
+// 전체 OR 질의는 원문과 확장어에 슬롯을 번갈아 배정한다. 긴 문장의 앞 8개 토큰이
+// 예산을 모두 차지해 후속 핵심어·동의어가 검색에서 빠지는 일을 막는다.
 function buildKeywordQuery(query: string, extra: string[] = []): string {
-  const tokens = query.split(/[\s,.()[\]{}:;"'`/\\?!~·…\-—]+/);
-  const all = [...tokens, ...extra]
-    .map((t) => t.trim())
-    .filter((t) => t.length >= 2);
-  // 전체 OR 검색은 세부 facet 검색을 보완하는 용도다. 너무 많은 OR 절을 한 번에
-  // 보내면 GIN 인덱스가 있어도 동시 요청 시 statement timeout 가능성이 커지므로
-  // 질문 앞부분의 핵심어와 확장어를 합쳐 8개까지만 사용한다.
-  return Array.from(new Set(all)).slice(0, 8).join(" or ");
+  const tokenize = (text: string): string[] => text
+    .split(/[\s,.()[\]{}:;"'`/\\?!~·…\-—]+/)
+    .map((term) => term.trim())
+    .filter((term) => term.length >= 2 && !SUBJECT_STOP_WORDS.has(term));
+  const original = tokenize(query);
+  // OR 절 개수는 그대로 8개다. 확장어도 토큰 단위로 세어 실제 DB 검색 폭을 고정한다.
+  return interleaveUnique(
+    [original, extra.flatMap(tokenize)],
+    8,
+    (term) => term
+  ).join(" or ");
 }
 
 export type TopicSearchPlan = {
@@ -554,6 +557,10 @@ export type TopicSearchPlan = {
   protect: boolean;
   allowFacetOnly: boolean;
   scopeTerms: string[];
+  /** 복합 상황의 개별 근거. 전체 질문과 같은 주제가 아니어도 상황·범위를 본문에서 대조한다. */
+  independentEvidence?: boolean;
+  /** 질문에 명시된 적용 환경·요청 행동의 일치 우선순위. 없는 근거를 강제로 만들지는 않는다. */
+  preferredTerms?: string[];
 };
 
 type FacetDefinition = {
@@ -564,9 +571,13 @@ type FacetDefinition = {
   queryWithoutSubject?: boolean;
   allowFacetOnly?: boolean;
   scopeTerms?: string[];
+  independentEvidence?: boolean;
+  contextQueries?: { triggers: RegExp; terms: string[]; rankTerms?: string[] }[];
 };
 
 const FACET_DISPLAY_LABELS: Record<string, string> = {
+  "situation-impalement": "관통상 관련 개별 근거",
+  "situation-suspension": "매달린 요구조자 관련 개별 근거",
   "qualification-items": "평가 종목",
   "qualification-process": "평가 진행",
   "qualification-equipment": "준비물·장비",
@@ -606,6 +617,32 @@ export const MAX_CONCURRENT_KEYWORD_SEARCHES = 4;
 // 절차형 질문의 공통 단계. 화학보호복뿐 아니라 공기호흡기·로프·펌프·잠수장비에도
 // 같은 분해 규칙을 적용하고, OCR 별칭은 실제 적재 자료에서 확인된 최소 범위만 둔다.
 const PROCEDURE_FACETS: readonly FacetDefinition[] = [
+  // 서로 다른 분야의 근거가 필요한 실제 복합 질문에서 확인한 최소 상황만 분리한다.
+  // 확장 모델이 추가한 상황으로는 활성화하지 않으며, 완성된 특수 절차를 뜻하지 않는다.
+  {
+    id: "situation-impalement",
+    triggers: /관통상|(?:몸통|신체|흉부|복부|가슴|배에|팔에|다리에).{0,24}(?:관통|박힌|박혀)|(?:관통|박힌|박혀).{0,16}(?:몸통|신체|흉부|복부|가슴)|(?:환자|요구조자|대상자)(?:가|는|이|를).{0,20}(?:관통당|찔|관통되어|관통된)/,
+    queryTerms: [["관통상"]],
+    contextQueries: [{
+      triggers: /절차|방법|처치|행동|고정|대응|조치/,
+      terms: ["관통상", "처치"],
+      rankTerms: ["처치", "고정", "이물질"],
+    }],
+    recallTerms: ["관통상", "관통", "박힌", "박혀"],
+    queryWithoutSubject: true,
+    independentEvidence: true,
+    scopeTerms: ["구급", "응급처치", "환자", "상처", "출혈"],
+  },
+  {
+    id: "situation-suspension",
+    triggers: /(?:매달린|매달려\s*있는|(?:공중|허공)에?\s*(?:떠|뜬)\s*(?:있는)?)\s*(?:요구조자|대상자|환자|사람|대원)|(?:요구조자|대상자|환자|사람|대원이|대원은)(?:(?!벌집|드론).){0,90}(?:매달(?!(?:린|려\s*있는)\s*(?:벌집|드론))|(?:공중|허공)에?\s*(?:떠|뜬))/,
+    queryTerms: [["매달린", "구조"]],
+    contextQueries: [{ triggers: /나무|나뭇가지/, terms: ["나무", "요구조자"] }],
+    recallTerms: ["매달린", "매달려", "매달림", "픽오프"],
+    queryWithoutSubject: true,
+    independentEvidence: true,
+    scopeTerms: ["요구조자", "환자", "인명", "사람"],
+  },
   // 자격·실기평가를 포괄적으로 물어도 개요 한 쪽만 답하지 않도록, 실제 사용자가
   // 확인하는 평가 종목·진행·준비물·감점/실격을 독립 근거 슬롯으로 회수한다.
   {
@@ -849,10 +886,10 @@ const SOP_TOPIC_STOP_WORDS = new Set([
   "현장활동",
 ]);
 
-function normalizeSearchText(text: string): string {
+function normalizeSearchText(text: string, maxLength = 100): string {
   return text
     .normalize("NFC")
-    .slice(0, 100)
+    .slice(0, maxLength)
     .replace(/[\r\n\t]+/g, " ")
     .replace(/[.·,;\/|()[\]{}:!?~…—-]+/g, " ")
     .replace(/\s+/g, " ")
@@ -1020,6 +1057,13 @@ function classifyRowForSearchPlan(
   plan: TopicSearchPlan,
   row: RagRow
 ): TopicSubjectAffinity {
+  if (plan.independentEvidence) {
+    const pageText = `${row.metadata?.["Header 2"] ?? ""} ${row.content}`;
+    // 제목·본문에 상황과 인명/의료 범위가 함께 있어야 한다. 자료 파일명이나 FTS의
+    // 단어 일치만으로 벌집 제거·구조물 관통 같은 무관한 페이지를 보호하지 않는다.
+    return textMatchesFacet(pageText, plan.facetTerms) &&
+      textMatchesFacet(pageText, plan.scopeTerms) ? "B" : "D";
+  }
   const affinity = classifyTopicSubjectAffinity(
     plan.subject,
     plan.facetTerms,
@@ -1056,16 +1100,22 @@ export function buildTopicSearchPlans(
   topic: string,
   extraKeywords: string[] = []
 ): TopicSearchPlan[] {
-  const normalized = normalizeSearchText(topic);
+  // 상황 설명이 길어도 뒷부분의 조건을 탐지한다. 실제 OR/AND 요청 수·토큰 상한은 별도 유지한다.
+  const normalized = normalizeSearchText(topic, 1_000);
   if (!normalized) return [];
 
   const safeExtraKeywords = extraKeywords
     .slice(0, 8)
-    .map(normalizeSearchText)
+    .map((term) => normalizeSearchText(term))
     .filter(Boolean);
   const subject = inferTopicSubject(normalized);
   const detectionText = `${normalized} ${safeExtraKeywords.join(" ")}`.trim();
-  const broadAliases = PROCEDURE_FACETS.filter((facet) => facet.triggers.test(detectionText))
+  const explicitSituations = PROCEDURE_FACETS.filter(
+    (facet) => facet.independentEvidence && facet.triggers.test(normalized)
+  );
+  const broadAliases = PROCEDURE_FACETS.filter((facet) =>
+    facet.triggers.test(facet.independentEvidence ? normalized : detectionText)
+  )
     .flatMap((facet) => facet.recallTerms);
   const broadTerms = Array.from(
     new Set([normalized, ...safeExtraKeywords, ...broadAliases])
@@ -1090,11 +1140,21 @@ export function buildTopicSearchPlans(
 
   for (const facet of PROCEDURE_FACETS) {
     if (queryCount >= MAX_KEYWORD_SEARCH_QUERIES) break;
+    // 이때의 일반 '구조 절차/안전' 검색은 개별 상황 근거를 보강하지 못하므로 생략한다.
+    if (explicitSituations.length > 0 &&
+      (facet.id === "procedure-steps" || facet.id === "procedure-safety")) continue;
     const explicitFacet = facet.triggers.test(normalized);
+    if (facet.independentEvidence && !explicitFacet) continue;
     if (!explicitFacet && !facet.triggers.test(detectionText)) continue;
+    const contextQueries = (facet.contextQueries ?? []).filter(
+      (entry) => entry.triggers.test(normalized)
+    );
+    const preferredTerms = Array.from(new Set(contextQueries
+      .flatMap((entry) => entry.rankTerms ?? entry.terms)
+      .filter((term) => !GENERIC_SUBJECTS.has(term) && !facet.recallTerms.includes(term))));
     const queries = Array.from(
       new Set(
-        facet.queryTerms
+        [...contextQueries.map((entry) => entry.terms), ...facet.queryTerms]
           .map((terms) =>
             preciseKeywordQuery([
               ...(facet.queryWithoutSubject ? [] : [facetSearchSubject(subject)]),
@@ -1109,13 +1169,18 @@ export function buildTopicSearchPlans(
       id: facet.id,
       mode: "precise",
       queries,
-      terms: Array.from(new Set([subject, ...facet.recallTerms])).filter(Boolean),
+      terms: Array.from(new Set([
+        ...(facet.independentEvidence ? [] : [subject]), ...preferredTerms, ...facet.recallTerms,
+      ])).filter(Boolean),
       subject,
       facetTerms: [...facet.recallTerms],
       // LLM 확장어로만 생긴 보조 facet은 회수에는 쓰되 최종 슬롯을 강제로 잠그지 않는다.
-      protect: explicitFacet,
+      // 상황별 근거가 있는 질문에서는 일반 절차·안전이 최종 슬롯을 먼저 차지하지 않는다.
+      protect: explicitFacet && (explicitSituations.length === 0 || !!facet.independentEvidence),
       allowFacetOnly: facet.allowFacetOnly ?? false,
       scopeTerms: facet.scopeTerms ?? [],
+      ...(facet.independentEvidence ? { independentEvidence: true } : {}),
+      ...(preferredTerms.length > 0 ? { preferredTerms } : {}),
     });
     queryCount += queries.length;
   }
@@ -1334,12 +1399,24 @@ async function keywordRowsForPlan(
     }
   }
 
+  const combined = interleaveUnique(
+    results.map((result) => result.rows),
+    queryLimit,
+    (row) => row.id
+  );
+  // 독립 상황은 표현별 첫 결과를 그대로 보호하면 개요나 다른 환경의 자료가 남는다.
+  // 합집합을 재정렬해 질문에 명시된 환경/행동과 본문이 맞는 실제 적용 근거를 우선한다.
+  const rows = plan.independentEvidence
+    ? rankKeywordRows(combined, plan.terms).sort((a, b) => {
+        const preferredMatches = (row: RagRow): number => (plan.preferredTerms ?? [])
+          .filter((term) => textMatchesFacet(
+            `${row.metadata?.["Header 2"] ?? ""} ${row.content}`, [term]
+          )).length;
+        return preferredMatches(b) - preferredMatches(a);
+      })
+    : combined;
   return {
-    rows: interleaveUnique(
-      results.map((result) => result.rows),
-      queryLimit,
-      (row) => row.id
-    ),
+    rows,
     degraded: results.some((result) => result.degraded),
   };
 }
@@ -1381,6 +1458,11 @@ function inferSearchScopeFromKeywordRows(
   plans: readonly TopicSearchPlan[],
   keywordLists: readonly RagRow[][]
 ): InferredSearchScope {
+  // 복합 상황은 구급·로프 구조처럼 분야가 갈릴 수 있다. 사용자 분야 필터는 유지하고,
+  // 자동 분야/문서 추정만 생략해 한쪽 근거가 벡터 검색에서 사라지지 않게 한다.
+  if (plans.some((plan) => plan.independentEvidence)) {
+    return { category: null, primarySource: null };
+  }
   const scores = new Map<
     string,
     { score: number; sourceMatches: number; rowIds: Set<string> }
@@ -1540,7 +1622,9 @@ async function hybridCandidates(
 
   const keywordLists = keywordResults.map((result) => result.rows);
   const precisePlans = plans.filter((plan) => plan.mode === "precise");
-  const affinityEnabled = precisePlans.some((plan) => isSpecificTopicSubject(plan.subject));
+  const affinityEnabled = precisePlans.some(
+    (plan) => plan.independentEvidence || isSpecificTopicSubject(plan.subject)
+  );
   const precisePlanRows = plans
     .map((plan, index) => ({ plan, rows: keywordLists[index] ?? [] }))
     .filter(({ plan, rows }) => plan.mode === "precise" && rows.length > 0)
@@ -1767,6 +1851,11 @@ export async function searchExternalRag(
   // 노이즈(목차·총론)가 섞여도 본문 청크가 충분히 남도록 후보를 넉넉히 받는다.
   const candidateCount = Math.max(40, keep * 6);
   const plans = buildTopicSearchPlans(query, keywordTerms);
+  const independentEvidenceTopics = plans
+    .filter((plan) => plan.independentEvidence)
+    .map((plan) => FACET_DISPLAY_LABELS[plan.id] ?? plan.id);
+  const evidenceScope = independentEvidenceTopics.length > 0
+    ? { independentEvidenceTopics } : {};
 
   // ①② 하이브리드 후보 → ③ RRF 융합 → ④ 정제·노이즈 제외 → ⑤ LLM 재순위
   const candidates = await hybridCandidatesWithCategoryFallback(
@@ -1778,11 +1867,11 @@ export async function searchExternalRag(
   );
   const fused = candidates.rows;
   if (fused.length === 0) {
-    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded };
+    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded, ...evidenceScope };
   }
   const refined = refine(fused, Math.max(12, keep * 2));
   if (refined.length === 0) {
-    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded };
+    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded, ...evidenceScope };
   }
   const protectedIds = new Set(candidates.protectedIds);
   const protectedRows = refined
@@ -1830,7 +1919,7 @@ export async function searchExternalRag(
     sources.push(source);
   }
 
-  return { contextText, sources, matched: top.length, degraded: candidates.degraded };
+  return { contextText, sources, matched: top.length, degraded: candidates.degraded, ...evidenceScope };
 }
 
 // 자료제작용 청크 수 — 문서/슬라이드는 챗봇 답변보다 넓은 커버리지가 필요(챗봇 8 vs 생성 24).

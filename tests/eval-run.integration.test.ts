@@ -72,7 +72,7 @@ describe.skipIf(process.env.RUN_INTEGRATION !== "1")("튜터 자동 기준 점�
         });
         const { text } = await generateText({
           model: getChatModel(),
-          system: buildSystemPrompt(r.contextText, answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion))),
+          system: buildSystemPrompt(r.contextText, answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion)), r.independentEvidenceTopics),
           messages: convertToCoreMessages(messages),
           temperature: 0.2,
         });

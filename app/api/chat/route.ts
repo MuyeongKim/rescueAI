@@ -156,17 +156,23 @@ export async function POST(req: Request) {
       dataStream.writeData({ type: "conversationId", value: convId });
       let contextText = "";
       let sources: DocSource[] = [];
+      let independentEvidenceTopics: string[] = [];
       let ragFailed = false;
       try {
         const r = await searchContext(retrievalQuestion, category);
         contextText = r.contextText;
         sources = r.sources;
+        independentEvidenceTopics = r.independentEvidenceTopics ?? [];
         ragFailed = r.degraded ?? false;
       } catch (e) {
         ragFailed = true;
         console.error("[chat] RAG 인프라 장애 — 컨텍스트 없이 진행:", e);
       }
-      const system = buildSystemPrompt(contextText, answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion)));
+      const system = buildSystemPrompt(
+        contextText,
+        answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion)),
+        independentEvidenceTopics
+      );
 
       const result = streamText({
         model: getChatModel(modelKey),
@@ -177,9 +183,9 @@ export async function POST(req: Request) {
           const latencyMs = Date.now() - startedAt;
           const answerText = prepareChatAnswerText(text);
           if (!answerText.trim()) return;
-          // "확인되지 않습니다" 답변에는 출처를 붙이지 않는다(검색됐지만 무관한 출처가
-          // 근거 없음 답변과 모순되어 보이는 문제 방지).
-          const effectiveSources = answerText.includes(NOT_FOUND_MESSAGE)
+          // 전체가 표준 거절문인 답변에만 출처를 숨긴다. 일부 조건의 근거를 설명한 뒤
+          // 미확인 범위를 밝힌 답변은 표준 문구가 포함되어도 참고 자료를 보존한다.
+          const effectiveSources = answerText.replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE
             ? []
             : uniqueChatSources(sources);
           let saved: { id: number } | null = null;

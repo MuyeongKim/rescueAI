@@ -1,4 +1,5 @@
 import { loginAccessTrackingStartLabel } from "@/lib/login-access";
+import { WEB_RELEASE_SUMMARY } from "@/lib/web-release";
 
 type LoginAccessStatsProps = {
   today: number | null;
@@ -121,9 +122,15 @@ export function SidebarAccessStats({ today, total }: LoginAccessStatsProps) {
       </dl>
 
       {webUpdatedLabel && (
-        <p className="mt-2 border-t border-slate-700/70 pt-1.5 text-[11px] leading-4 text-slate-400 tabular-nums whitespace-nowrap">
-          최종 수정 · <time dateTime={webUpdatedAt} title="웹 버전 갱신 시각 · 한국시간(KST)">{webUpdatedLabel}</time>
-        </p>
+        <div className="mt-2 min-w-0 border-t border-slate-700/70 pt-1.5 text-[11px] leading-4 text-slate-400">
+          <p className="tabular-nums whitespace-nowrap">
+            최종 수정 · <time dateTime={webUpdatedAt} title="웹 버전 갱신 시각 · 한국시간(KST)">{webUpdatedLabel}</time>
+          </p>
+          <p className="mt-0.5 truncate" title={WEB_RELEASE_SUMMARY}>
+            <span className="sr-only">수정 내역: </span>
+            {WEB_RELEASE_SUMMARY}
+          </p>
+        </div>
       )}
 
       <p id="sidebar-access-stats-note" className="sr-only">

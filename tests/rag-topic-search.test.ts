@@ -50,6 +50,57 @@ describe("buildTopicSearchPlans", () => {
     );
   });
 
+  it("긴 원문이 확장 핵심어의 OR 검색 슬롯을 모두 차지하지 않는다", () => {
+    const plans = buildTopicSearchPlans(
+      "현장에 도착한 이후 동료 대원과 함께 장비 상태 및 주변 환경을 검토하는 방법",
+      ["기체", "배터리", "비행환경", "프로펠러"]
+    );
+    const tokens = plans[0].queries[0].split(" or ");
+    expect(tokens).toHaveLength(8);
+    expect(tokens).toEqual(expect.arrayContaining(["기체", "배터리", "비행환경", "프로펠러"]));
+  });
+
+  it("다단어 확장어도 OR 8개 예산 안에서 세고 평가 같은 원래 명사를 훼손하지 않는다", () => {
+    const plans = buildTopicSearchPlans("평가 안내", ["비행 환경 안전 점검 배터리 프로펠러 비상 대응"]);
+    const tokens = plans[0].queries[0].split(" or ");
+    expect(tokens).toHaveLength(8);
+    expect(tokens).toEqual(expect.arrayContaining(["평가", "안내"]));
+    expect(tokens.every((term) => !term.includes(" "))).toBe(true);
+  });
+
+  it.each([
+    "구조 대상자가 추락하면서 부러진 나뭇가지에 몸통이 관통 되어 공중에 떠 있는 경우 행동절차를 알려줘.",
+    "공중에 매달린 환자의 몸통이 나뭇가지에 관통된 상황의 구조 절차",
+    `${"현장 상황을 설명합니다. ".repeat(10)} 요구조자는 공중에 떠 있고 몸통에 관통상이 있습니다.`,
+  ])("문장 순서와 길이가 달라도 관통상·매달림의 개별 근거를 검색한다: %s", (query) => {
+    const plans = buildTopicSearchPlans(query);
+    expect(plans.filter((plan) => plan.protect).map((plan) => plan.id)).toEqual([
+      "situation-impalement", "situation-suspension",
+    ]);
+    expect(plans.flatMap((plan) => plan.queries)).toEqual(expect.arrayContaining([
+      "관통상", "매달린 구조",
+    ]));
+    expect(plans.flatMap((plan) => plan.queries).length).toBeLessThanOrEqual(5);
+    if (/나무|나뭇가지/.test(query)) {
+      expect(plans.find((plan) => plan.id === "situation-suspension")?.preferredTerms).toEqual(["나무", "요구조자"]);
+    } else {
+      expect(plans.flatMap((plan) => plan.queries)).not.toContain("나무 요구조자");
+    }
+    expect(plans.filter((plan) => plan.independentEvidence)).toHaveLength(2);
+  });
+
+  it.each([
+    ["나무를 관통하는 철물 구조 설명", []],
+    ["나무에 매달린 벌집 제거 절차", []],
+    ["신규대원인데 나무에 매달린 벌집 제거 방법을 알려줘", []],
+    ["환자 접근을 위해 벽 관통 구조 절차", []],
+    ["환자 접근로에 매달린 벌집을 제거하는 방법", []],
+    ["신규대원인데 드론이 공중에 떠 있는 경우 조종 방법", []],
+    ["일반 구조 절차", ["환자 관통상", "공중에 매달린 요구조자"]],
+  ])("실제 질문에 없는 인명·의료 상황을 추가하지 않는다: %s", (query, keywords) => {
+    expect(buildTopicSearchPlans(query, keywords).some((plan) => plan.independentEvidence)).toBe(false);
+  });
+
   it("짧고 포괄적인 주제는 확장 키워드로 필요한 절차 검색을 보탠다", () => {
     const plans = buildTopicSearchPlans("화학보호복 관련", [
       "착용",
