@@ -8,6 +8,15 @@ import { buildSystemPrompt, NOT_FOUND_MESSAGE, DEFAULT_TOP_K } from "@/lib/rag";
 // 이 앱의 존재 이유에 가장 가까운 규칙 — "근거 없으면 지어내지 않는다".
 // 시스템 프롬프트는 lib/rag.ts 단일 출처이므로, 문구가 조용히 사라지면 여기서 잡힌다.
 describe("buildSystemPrompt (환각 가드레일)", () => {
+  it("부족 조건을 항목별로 전달하되 단어 일치를 적용 타당성으로 취급하지 않는다", () => {
+    const prompt = buildSystemPrompt("관통상에 관한 개별 원문", "", ["관통상", "매달림"], {
+      requested: ["관통상", "매달림"], missing: ["매달림"], supplementalQueries: 1,
+    });
+    expect(prompt).toContain("최종 참고 자료에서 검색 단서가 부족한 항목: 매달림");
+    expect(prompt).toContain("적용 가능성이나 사실성 검증이 아닙니다");
+    expect(prompt).toContain("코퍼스 전체의 판정으로 바꾸지 마세요");
+    expect(prompt).toContain("결합 상황의 전용 절차가 확인됐다는 뜻은 아닙니다");
+  });
   it("검색된 참고 자료를 프롬프트에 그대로 싣는다", () => {
     const context = "[공기호흡기 착용 절차 p.3]\n면체 밀착 확인 후 양압을 개방한다.";
     const prompt = buildSystemPrompt(context);

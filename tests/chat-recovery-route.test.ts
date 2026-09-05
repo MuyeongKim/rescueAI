@@ -28,13 +28,15 @@ vi.mock("ai", () => ({
   }) => {
     const data: unknown[] = [];
     const annotations: unknown[] = [];
+    const text: unknown[] = [];
     try {
       await execute({
+        write: (value: unknown) => text.push(value),
         writeData: (value: unknown) => data.push(value),
         writeMessageAnnotation: (value: unknown) => annotations.push(value),
       });
       await Promise.all(mocks.finishes);
-      return Response.json({ data, annotations });
+      return Response.json({ data, annotations, text });
     } catch (error) {
       return Response.json({ error: onError(error) });
     }
@@ -189,6 +191,56 @@ describe("튜터 오류 복구와 저장 경계", () => {
     expect(messages.filter(row => row.role === "assistant")).toHaveLength(0);
   });
 
+  it("검색 본문이 비어 있으면 모델 없이 표준 응답을 전송·저장하고 복구 주소를 유지한다", async () => {
+    mocks.searchContext.mockResolvedValue({ contextText: " \n\t", sources: [], matched: 0, degraded: false });
+
+    const payload = await (await POST(request())).json();
+
+    expect(mocks.streamText).not.toHaveBeenCalled();
+    expect(mocks.buildSystemPrompt).not.toHaveBeenCalled();
+    expect(payload.text).toEqual([NOT_FOUND_MESSAGE]);
+    expect(payload.data).toEqual([{ type: "conversationId", value: requestId }]);
+    expect(payload.annotations).toEqual([{
+      messageId: expect.any(Number), conversationId: requestId, sources: [], degraded: false, saveFailed: false,
+    }]);
+    expect(messages.filter(row => row.role === "assistant")).toEqual([expect.objectContaining({
+      conversation_id: requestId, content: NOT_FOUND_MESSAGE, sources: null, retrieval_degraded: false,
+    })]);
+    expect(messages.filter(row => row.role === "user")).toHaveLength(1);
+  });
+
+  it("빈 검색과 답변 저장 장애가 겹쳐도 모델 호출 없이 두 장애 상태를 각각 전달한다", async () => {
+    failAssistantInsert = true;
+    mocks.searchContext.mockResolvedValue({
+      contextText: "", matched: 0, degraded: true,
+      sources: [{ document_id: 1, doc: "본문 없는 후보", page: 3, content: "" }],
+    });
+
+    const payload = await (await POST(request())).json();
+
+    expect(mocks.streamText).not.toHaveBeenCalled();
+    expect(payload.text).toEqual([NOT_FOUND_MESSAGE]);
+    expect(payload.data).toEqual([{ type: "conversationId", value: requestId }]);
+    expect(payload.annotations).toEqual([{
+      messageId: null, conversationId: requestId, sources: [], degraded: true, saveFailed: true,
+    }]);
+    expect(messages.filter(row => row.role === "assistant")).toHaveLength(0);
+    expect(messages.filter(row => row.role === "user")).toHaveLength(1);
+  });
+
+  it("검색 예외는 정상적인 자료 없음으로 저장하지 않고 degraded 응답을 보존한다", async () => {
+    mocks.searchContext.mockRejectedValue(new Error("retrieval unavailable"));
+
+    const payload = await (await POST(request())).json();
+
+    expect(mocks.streamText).not.toHaveBeenCalled();
+    expect(payload.text).toEqual([NOT_FOUND_MESSAGE]);
+    expect(payload.annotations[0]).toMatchObject({ degraded: true, saveFailed: false, sources: [] });
+    expect(messages.find(row => row.role === "assistant")).toMatchObject({
+      content: NOT_FOUND_MESSAGE, retrieval_degraded: true,
+    });
+  });
+
   it("전체가 근거 없음 답변이면 검색됐던 무관한 자료를 저장·표시하지 않는다", async () => {
     answerText = `\n ${NOT_FOUND_MESSAGE.replace(/ /g, "\n")} \n`;
     mocks.searchContext.mockResolvedValue({
@@ -209,18 +261,23 @@ describe("튜터 오류 복구와 저장 경계", () => {
 
     const payload = await (await POST(request())).json();
 
+    expect(mocks.streamText).toHaveBeenCalledOnce();
+    expect(payload.text).toEqual([]); // 일부 근거가 있는 응답은 표준 거절문으로 교체하지 않는다.
     expect(payload.annotations[0].sources).toEqual([source]);
-    expect(messages.find(row => row.role === "assistant")?.sources).toEqual([source]);
+    expect(messages.find(row => row.role === "assistant")).toMatchObject({
+      content: expect.stringContaining("전체 조건의 전용 절차"), sources: [source],
+    });
   });
 
   it("검색에서 검출한 복합 조건을 답변 프롬프트 구성에 전달한다", async () => {
     const topics = ["관통상 관련 개별 근거", "매달린 요구조자 관련 개별 근거"];
+    const coverage = { requested: topics, missing: [topics[1]], supplementalQueries: 1 };
     mocks.searchContext.mockResolvedValue({
-      contextText: "개별 조건 자료", sources: [], independentEvidenceTopics: topics,
+      contextText: "개별 조건 자료", sources: [], independentEvidenceTopics: topics, retrievalCoverage: coverage,
     });
 
     await POST(request());
 
-    expect(mocks.buildSystemPrompt).toHaveBeenCalledWith("개별 조건 자료", expect.any(String), topics);
+    expect(mocks.buildSystemPrompt).toHaveBeenCalledWith("개별 조건 자료", expect.any(String), topics, coverage);
   });
 });

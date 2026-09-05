@@ -403,6 +403,72 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     ]);
     expect(result.contextText).not.toContain("손상 개요");
     expect(result.contextText).not.toContain("고층 건물");
+    expect(supabase.records.filter((record) => record.keyword)).toHaveLength(3);
+    expect(result.retrievalCoverage).toMatchObject({ missing: [], supplementalQueries: 0 });
+  });
+
+  it("첫 검색에서 빠진 매달림 조건만 보완하고 이미 찾은 관통상 검색은 반복하지 않는다", async () => {
+    const care = row(54, {
+      content: "관통상 환자의 이물질 고정과 처치에 관한 실제 구급 교육 원문이다. 개별 근거의 적용 조건과 예외를 먼저 확인해야 한다.",
+      metadata: { source: "구급 교재.pdf", document_id: 54, page_num: 270, "Header 2": "관통상" },
+    });
+    const tree = row(27, {
+      content: "나무에 매달린 요구조자에게 접근하는 개별 로프 구조 교육 원문이다. 다른 상해 조건까지 함께 성립하는 절차를 설명한 자료는 아니다.",
+      metadata: { source: "로프 교재.pdf", document_id: 27, page_num: 706, "Header 2": "요구조자 접근" },
+    });
+    const supabase = createSupabaseMock((record) => ({
+      data: record.keyword === "관통상 처치" ? [care] : record.keyword === "매달린 구조" ? [tree] : [], error: null,
+    }));
+    const result = await searchExternalRag(
+      "구조 대상자의 몸통이 나뭇가지에 관통되어 공중에 떠 있는 경우 행동절차", null, 8,
+      null, [], supabase.client as never,
+    );
+    const queries = supabase.records.map((record) => record.keyword).filter(Boolean);
+    expect(queries).toHaveLength(4);
+    expect(queries).not.toContain("관통상");
+    expect(result.sources.map((source) => source.document_id)).toEqual([54, 27]);
+    expect(result.retrievalCoverage).toMatchObject({ missing: [], supplementalQueries: 1 });
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
+  it("짧은 물질명도 본문 조건이 있으면 모든 항목을 미확인으로 잘못 표시하지 않는다", async () => {
+    const evidence = row(12, {
+      content: "염소 누출 대응 자료는 물질 특성 확인, 보호장비 착용, 위험구역 통제와 누출 차단 및 제독을 설명한다. 단계별 절차와 안전 중단 보고 조건은 원문에서 각각 대조해야 한다.",
+      metadata: { source: "화학사고 교재.pdf", document_id: 12, page_num: 10, "Header 2": "염소" },
+    });
+    const supabase = createSupabaseMock(() => ({ data: [evidence], error: null }));
+    const result = await searchExternalRag("염소 누출 대응 절차", null, 8, "화학사고", [], supabase.client as never);
+    expect(result.retrievalCoverage?.requested.length).toBeGreaterThan(1);
+    expect(result.retrievalCoverage?.missing).toEqual([]);
+  });
+
+  it("보완 검색이 실패해도 확보한 근거를 보존하고 미확인 조건과 장애 상태를 남긴다", async () => {
+    const care = row(54, {
+      content: "관통상 환자의 이물질 고정과 처치에 관한 실제 구급 교육 원문이다. 자료가 다루는 개별 조건과 예외 범위를 확인해야 한다.",
+      metadata: { source: "구급 교재.pdf", document_id: 54, page_num: 270, "Header 2": "관통상" },
+    });
+    const supabase = createSupabaseMock((record) => ({
+      data: record.keyword === "관통상 처치" ? [care] : [],
+      error: record.keyword === "매달린 구조" ? { message: "statement timeout" } : null,
+    }));
+    const result = await searchExternalRag(
+      "구조 대상자의 몸통이 나뭇가지에 관통되어 공중에 떠 있는 경우 행동절차", null, 8,
+      "구급", [], supabase.client as never,
+    );
+    expect(result.degraded).toBe(true);
+    expect(result.sources.map((source) => source.document_id)).toEqual([54]);
+    expect(result.retrievalCoverage).toMatchObject({ missing: ["매달린 요구조자 관련 개별 근거"], supplementalQueries: 1 });
+    expect(supabase.records.every((record) => hasCategoryFilter(record, "구급"))).toBe(true);
+  });
+
+  it("자료제작의 부족 항목 검색은 주제 결과가 없으면 분야 전체 표본을 가져오지 않는다", async () => {
+    const supabase = createSupabaseMock((record) => ({ data: record.table === "rag_embedding_config" ? [GOOGLE_CONTRACT] : [], error: null }));
+    const result = await fetchExternalRagContext(
+      "화학사고", 24, TOPIC, supabase.client as never, { allowCategoryFallback: false },
+    );
+    expect(result).toMatchObject({ contextText: "", bindingSources: [], sources: [], degraded: false });
+    expect(supabase.records.filter((record) => record.table !== "rag_embedding_config").every((record) => record.keyword !== undefined)).toBe(true);
+    expect(supabase.records.filter((record) => record.keyword).length).toBeLessThanOrEqual(MAX_KEYWORD_SEARCH_QUERIES);
   });
 
   it("나무·환자 단어만 우연히 겹친 페이지를 매달림의 근거로 보호하지 않는다", async () => {

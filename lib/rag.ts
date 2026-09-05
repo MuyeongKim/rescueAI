@@ -32,6 +32,13 @@ type HybridRow = {
   rrf_score: number;
 };
 
+export type RetrievalCoverage = {
+  requested: string[];
+  // 최종 컨텍스트에 주제·상황 단서가 부족한 항목. 코퍼스 전체의 부재 판정은 아니다.
+  missing: string[];
+  supplementalQueries: number;
+};
+
 export type SearchResult = {
   contextText: string;
   sources: DocSource[];
@@ -39,6 +46,7 @@ export type SearchResult = {
   degraded?: boolean;
   // 질문에서 검출한 독립 조건. 해당 조건의 근거가 실제로 확보됐다는 의미는 아니다.
   independentEvidenceTopics?: string[];
+  retrievalCoverage?: RetrievalCoverage;
 };
 
 // 하이브리드 검색 → 컨텍스트 문자열 + 제공한 문서/페이지 전체(중복 제거)
@@ -131,7 +139,8 @@ export async function searchContext(
 export function buildSystemPrompt(
   contextText: string,
   answerGuidance = "",
-  independentEvidenceTopics: readonly string[] = []
+  independentEvidenceTopics: readonly string[] = [],
+  retrievalCoverage?: RetrievalCoverage
 ): string {
   const reference =
     contextText.trim().length > 0
@@ -141,11 +150,12 @@ export function buildSystemPrompt(
   const isCompoundSituation = separateTopics.length >= 2;
   const responseStructure = isCompoundSituation
     ? `7. 여러 조건이 결합된 질문이므로 다음 형식으로 답하세요. 절차를 요청했어도 하나의 구조 작업 순서로 구성하지 마세요.
+   첫 문장에서 질문의 모든 조건을 함께 다룬 통합 절차가 참고 자료에서 확인되는지 밝히세요. 확인되지 않으면 '이 복합 상황의 통합 절차는 자료에서 확인되지 않습니다'라고 명시한 뒤 개별 근거의 범위를 설명하세요.
    - 확인된 범위: 아래 개별 주제마다 실제 참고 자료가 뒷받침하는 내용만 분리하여 설명
    - 적용 차이: 자료의 대상·전제·예외와 질문 상황의 차이, 직접 적용할 수 있는지 확인이 필요한 이유
    - 추가 확인이 필요한 범위: 조건이 결합된 상황에서 자료로 확인되지 않는 내용
    개별 자료의 내용을 단계 1·단계 2 등의 연속 행동 순서로 배열하거나 서로 연결하는 절차를 만들지 마세요.
-   개별 주제의 설명은 자료가 다루는 원칙과 적용 범위를 요약하는 데 한정하세요. 질문 상황에 적용이 확인되지 않은 결속·하중 이전·절단·분리·이송 동작을 수행 지시로 제시하지 마세요.
+   개별 주제의 설명은 주제마다 2~3문장으로 자료가 다루는 원칙과 적용 범위를 요약하는 데 한정하세요. 처치·장비 조작의 세부 동작을 나열하면 질문 상황에 대한 실행 지시로 읽힐 수 있으므로 나열하지 마세요. 질문 상황에 적용이 확인되지 않은 결속·하중 이전·절단·분리·이송 동작을 수행 지시로 제시하지 마세요.
    참고 자료에 명시되지 않은 전제를 '지상 환자를 전제로 한다'처럼 만들어 내지 마세요. 원문에서 제거의 예외를 설명했다고 절단이나 다른 조작까지 허용된다고 바꾸지 마세요.`
     : `7. 기본 답변 구조는 다음과 같습니다. 질문 성격상 불필요한 항목은 억지로 만들지 말고 자연스럽게 생략하세요.
    - 핵심 답변: 먼저 결론과 요점을 2~4문장으로 설명
@@ -161,7 +171,7 @@ export function buildSystemPrompt(
     : answerGuidance;
 
   return `당신은 전북특별자치도 소방본부 구조대원을 지원하는 AI 어시스턴트입니다.
-아래 '참고 자료'(구조 매뉴얼·SOP·장비 자료)에 근거해, 현장에서 바로 쓸 수 있게 답하세요.
+아래 '참고 자료'(구조 매뉴얼·SOP·장비 자료)에 근거해, ${isCompoundSituation ? "자료가 확인하는 범위와 질문 상황의 적용 차이를 교육·검토할 수 있게" : "현장에서 바로 쓸 수 있게"} 답하세요.
 
 [규칙]
 1. '참고 자료'에 있는 내용만 근거로 답하세요. 자료에 없는 수치·절차·장비명을 지어내지 마세요.
@@ -188,6 +198,8 @@ ${responseStructure}
 9. 답변을 풍부하게 만들기 위해 일반 상식이나 추측을 덧붙이지 마세요. 내용이 부족하면 부족한 범위를 명확히 밝히세요.
 
 ${effectiveGuidance ? `[질문별 답변 구성]\n${effectiveGuidance}\n` : ""}
+
+${retrievalCoverage ? `[검색 범위 점검]\n질문에서 확인할 항목: ${retrievalCoverage.requested.join(" / ")}\n최종 참고 자료에서 검색 단서가 부족한 항목: ${retrievalCoverage.missing.join(" / ") || "없음"}\n이 점검은 단어·주제 단서 기준이며 적용 가능성이나 사실성 검증이 아닙니다. 부족하다고 표시된 항목은 원문으로 직접 확인할 수 있을 때만 설명하고, 확인할 수 없으면 해당 항목을 명시해 추가 확인 범위로 남기세요. 자료가 없다는 코퍼스 전체의 판정으로 바꾸지 마세요. 모든 개별 항목의 단서가 있어도 결합 상황의 전용 절차가 확인됐다는 뜻은 아닙니다.\n` : ""}
 
 [참고 자료]
 ${reference}`;

@@ -8,6 +8,7 @@ import {
 } from "@/lib/rag-external";
 import {
   generatedSourceLabel,
+  extractSourceLabels,
   splitGeneratedSourcesForDisplay,
   type GeneratedDocSource,
 } from "@/lib/generate";
@@ -81,6 +82,42 @@ export function limitGenerationContextText(general: string, sop = ""): string {
   );
   const limitedGeneral = fitWholeContextSegments(general, generalBudget);
   return `${limitedGeneral}${sopSection}`.trim();
+}
+
+/** 목차의 부족 조건에만 사용한다. 분야 범위를 넓히거나 SOP 확인 상태를 바꾸지 않는다. */
+export async function supplementGenerationContext(
+  current: GenerationContext,
+  category: string,
+  query: string,
+  suppliedClient: GenerationContextSupabaseClient,
+): Promise<GenerationContext> {
+  // 레거시 chunks 경로에는 주제 검색 계약이 없으므로 같은 범주 전체 조회를 반복하지 않는다.
+  if (!ragTableEnabled()) return current;
+  const additional = await fetchExternalRagContext(category, 24, query, suppliedClient, {
+    allowCategoryFallback: false,
+  });
+  if (!additional.contextText) return { ...current, degraded: current.degraded || additional.degraded };
+  const [general, sop = ""] = current.contextText.split(SOP_CONTEXT_HEADING);
+  const existingSegments = new Set(general.split(CONTEXT_SEPARATOR).map((segment) => segment.trim()));
+  const newSegments = additional.contextText.split(CONTEXT_SEPARATOR)
+    .map((segment) => segment.trim()).filter((segment) => segment && !existingSegments.has(segment));
+  const contextText = limitGenerationContextText(
+    [general, ...newSegments].filter(Boolean).join(CONTEXT_SEPARATOR), sop,
+  );
+  const retained = new Set(extractSourceLabels(contextText));
+  const candidates = [...current.bindingSources, ...additional.bindingSources]
+    .filter((source) => retained.has(generatedSourceLabel(source)));
+  const display = splitGeneratedSourcesForDisplay(
+    [...current.sources, ...additional.sources]
+      .filter((source) => retained.has(generatedSourceLabel(source))), 5,
+  );
+  return {
+    ...current,
+    contextText,
+    sources: display.sources,
+    bindingSources: splitGeneratedSourcesForDisplay(candidates, Number.MAX_SAFE_INTEGER).bindingSources,
+    degraded: current.degraded || additional.degraded,
+  };
 }
 
 // 분야 자료의 청크를 모아 생성 컨텍스트 + 출처 목록을 만든다.

@@ -25,6 +25,7 @@ import {
 import type { SopEvidence } from "@/lib/sop-evidence";
 import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 import { buildRerankPrompt } from "@/lib/rag-rerank-prompt";
+import { expandKoreanSearchTerms } from "@/lib/rag-korean-query";
 
 // 테이블·검색함수 이름은 RAG_TABLE 단일 출처에서 파생(이름 변경 시 env+SQL만 고치면 됨).
 // 검색 RPC 규칙: match_<테이블명> / search_<테이블명>_keywords.
@@ -609,6 +610,7 @@ type HybridCandidateResult = {
   degraded: boolean;
   protectedIds: string[];
   protectedFacets: Record<string, string[]>;
+  supplementalQueries: number;
 };
 
 // 전체 OR 질의까지 포함한 실제 Supabase textSearch 호출 수 상한.
@@ -1106,17 +1108,21 @@ export function buildTopicSearchPlans(
   const normalized = normalizeSearchText(topic, 1_000);
   if (!normalized) return [];
 
-  const safeExtraKeywords = extraKeywords
+  const korean = expandKoreanSearchTerms(topic);
+  const explicitFacet = (facet: FacetDefinition) => facet.independentEvidence
+    ? korean.explicitFacetIds.some((id) => id === facet.id)
+    : facet.triggers.test(normalized) || korean.matches.some((match) => match.id === facet.id);
+  const safeExtraKeywords = [...korean.keywords, ...extraKeywords]
     .slice(0, 8)
     .map((term) => normalizeSearchText(term))
     .filter(Boolean);
   const subject = inferTopicSubject(normalized);
   const detectionText = `${normalized} ${safeExtraKeywords.join(" ")}`.trim();
   const explicitSituations = PROCEDURE_FACETS.filter(
-    (facet) => facet.independentEvidence && facet.triggers.test(normalized)
+    (facet) => facet.independentEvidence && explicitFacet(facet)
   );
   const broadAliases = PROCEDURE_FACETS.filter((facet) =>
-    facet.triggers.test(facet.independentEvidence ? normalized : detectionText)
+    facet.independentEvidence ? explicitFacet(facet) : facet.triggers.test(detectionText)
   )
     .flatMap((facet) => facet.recallTerms);
   const broadTerms = Array.from(
@@ -1145,9 +1151,9 @@ export function buildTopicSearchPlans(
     // 이때의 일반 '구조 절차/안전' 검색은 개별 상황 근거를 보강하지 못하므로 생략한다.
     if (explicitSituations.length > 0 &&
       (facet.id === "procedure-steps" || facet.id === "procedure-safety")) continue;
-    const explicitFacet = facet.triggers.test(normalized);
-    if (facet.independentEvidence && !explicitFacet) continue;
-    if (!explicitFacet && !facet.triggers.test(detectionText)) continue;
+    const isExplicitFacet = explicitFacet(facet);
+    if (facet.independentEvidence && !isExplicitFacet) continue;
+    if (!isExplicitFacet && !facet.triggers.test(detectionText)) continue;
     const contextQueries = (facet.contextQueries ?? []).filter(
       (entry) => entry.triggers.test(normalized)
     );
@@ -1178,7 +1184,7 @@ export function buildTopicSearchPlans(
       facetTerms: [...facet.recallTerms],
       // LLM 확장어로만 생긴 보조 facet은 회수에는 쓰되 최종 슬롯을 강제로 잠그지 않는다.
       // 상황별 근거가 있는 질문에서는 일반 절차·안전이 최종 슬롯을 먼저 차지하지 않는다.
-      protect: explicitFacet && (explicitSituations.length === 0 || !!facet.independentEvidence),
+      protect: isExplicitFacet && (explicitSituations.length === 0 || !!facet.independentEvidence),
       allowFacetOnly: facet.allowFacetOnly ?? false,
       scopeTerms: facet.scopeTerms ?? [],
       ...(facet.independentEvidence ? { independentEvidence: true } : {}),
@@ -1249,7 +1255,10 @@ export async function expandQuery(
   }
 }
 
-const rerankSchema = z.object({ ranked: z.array(z.number()) });
+const rerankSchema = z.object({
+  ranked: z.array(z.number()),
+  noRelevantEvidence: z.boolean().optional(),
+});
 
 // LLM 재순위: 융합 후보 중 질문 관련도 높은 순으로 keep 개 선택. 실패 시 융합 순서 유지(안전).
 async function llmRerank(
@@ -1273,6 +1282,10 @@ async function llmRerank(
       providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
       abortSignal: AbortSignal.timeout(RAG_AUXILIARY_MODEL_MAX_MS),
     });
+    // 명시적인 무관 판정과 빈 선택이 함께 있을 때만 후보를 비운다. 일부 조건의
+    // 근거와 모델 장애/잘못된 응답을 근거 부재로 바꾸지 않는다. 보호된 개별 근거는
+    // 호출부가 따로 보존하므로 이 판정으로 복합 질문 전체가 사라지지 않는다.
+    if (object.noRelevantEvidence === true && object.ranked.length === 0) return [];
     const seen = new Set<number>();
     const picked: RefinedRagRow[] = [];
     for (const idx of object.ranked) {
@@ -1451,6 +1464,80 @@ async function keywordRowsForPlans(
   return results;
 }
 
+// 검색 후보의 주제·상황 단서만 확인한다. 단어/제목 일치는 절차의 적용 타당성이나
+// 답변 정확성을 증명하지 않으며, 최종 모델은 반드시 원문의 전제·예외를 다시 읽는다.
+function hasPlanEvidenceCues(plan: TopicSearchPlan, row: RagRow): boolean {
+  const affinity = classifyRowForSearchPlan(plan, row);
+  const pageText = `${row.metadata?.["Header 2"] ?? ""} ${row.content}`;
+  if (affinity === "legacy") {
+    if (!textMatchesFacet(row.content, plan.facetTerms)) return false;
+    if (plan.scopeTerms.length > 0 && !textMatchesFacet(pageText, plan.scopeTerms)) return false;
+  } else if (affinity !== "A" && affinity !== "B") return false;
+  return !plan.preferredTerms?.length || plan.preferredTerms.every((term) => textMatchesFacet(pageText, [term]));
+}
+
+// 명시 조건이 여러 개인 질문만 두 단계로 검색한다. 첫 표현으로 조건별 후보를 찾고,
+// 원문 단서가 없는 조건의 나머지 표현만 한 차례 보완한다. 추가 모델 호출은 없다.
+// 분야 범위별 전체 쿼리 12개/동시 4개 상한을 유지하고 보완은 최대 3개로 제한한다.
+// 튜터의 기존 분야 0건 폴백은 별도의 범위로 한 번 더 실행될 수 있다.
+async function adaptiveKeywordRowsForPlans(
+  supabase: ExternalRagSupabaseClient,
+  plans: readonly TopicSearchPlan[],
+  category: string | null | undefined,
+  queryLimit: number
+): Promise<{ results: { rows: RagRow[]; degraded: boolean }[]; supplementalQueries: number }> {
+  const required = plans.filter((plan) => plan.protect && plan.facetTerms.length > 0);
+  if (required.length < 2) {
+    return { results: await keywordRowsForPlans(supabase, plans, category, queryLimit), supplementalQueries: 0 };
+  }
+  const firstPlans = plans.map((plan) => ({ ...plan, queries: plan.queries.slice(0, 1) }));
+  const results = await keywordRowsForPlans(supabase, firstPlans, category, queryLimit);
+  const usableIds = new Set(refine(results.flatMap((result) => result.rows), Number.MAX_SAFE_INTEGER).map((row) => row.id));
+  const available = interleaveUnique(results.map((result) => result.rows), plans.length * queryLimit, (row) => row.id)
+    .filter((row) => usableIds.has(row.id));
+  let remaining = Math.min(3, MAX_KEYWORD_SEARCH_QUERIES - firstPlans.reduce((sum, plan) => sum + plan.queries.length, 0));
+  const followups: TopicSearchPlan[] = [];
+  const missingPlans: TopicSearchPlan[] = [];
+  for (const [index, plan] of plans.entries()) {
+    if (!plan.protect || plan.facetTerms.length === 0) continue;
+    const found = available.filter((row) => hasPlanEvidenceCues(plan, row));
+    if (found.length > 0) {
+      // 다른 첫 검색에서 찾은 같은 조건의 원문도 재사용해 중복 검색을 줄인다.
+      results[index].rows = interleaveUnique([results[index].rows, found], queryLimit, (row) => row.id);
+      continue;
+    }
+    if (plan.queries.length > 1) missingPlans.push(plan);
+  }
+  // 한 조건이 예산을 독점하지 않게 부족한 명시 조건마다 대체 표현을 하나씩 배정한다.
+  for (let queryIndex = 1; remaining > 0; queryIndex += 1) {
+    let added = false;
+    for (const plan of missingPlans) {
+      const query = plan.queries[queryIndex];
+      if (!query || remaining <= 0) continue;
+      const existing = followups.find((candidate) => candidate.id === plan.id);
+      if (existing) existing.queries.push(query);
+      else followups.push({ ...plan, queries: [query] });
+      remaining -= 1;
+      added = true;
+    }
+    if (!added) break;
+  }
+  const supplemental = await keywordRowsForPlans(supabase, followups, category, queryLimit);
+  for (const [index, plan] of followups.entries()) {
+    const target = plans.findIndex((original) => original.id === plan.id);
+    const added = supplemental[index];
+    results[target] = {
+      rows: interleaveUnique([results[target].rows, added.rows], queryLimit, (row) => row.id),
+      degraded: results[target].degraded || added.degraded,
+    };
+  }
+  for (const [index, plan] of plans.entries()) {
+    if (!plan.protect || plan.facetTerms.length === 0) continue;
+    results[index].rows.sort((a, b) => Number(hasPlanEvidenceCues(plan, b)) - Number(hasPlanEvidenceCues(plan, a)));
+  }
+  return { results, supplementalQueries: followups.reduce((sum, plan) => sum + plan.queries.length, 0) };
+}
+
 type InferredSearchScope = {
   category: string | null;
   primarySource: string | null;
@@ -1592,15 +1679,21 @@ async function hybridCandidates(
 
   let vecResult: { rows: RagRow[]; degraded: boolean };
   let keywordResults: { rows: RagRow[]; degraded: boolean }[];
+  let supplementalQueries = 0;
+  const searchKeywords = async (scope: string | null | undefined) => {
+    const result = await adaptiveKeywordRowsForPlans(supabase, plans, scope, queryLimit);
+    supplementalQueries = result.supplementalQueries;
+    return result.results;
+  };
   if (category?.trim()) {
     [vecResult, keywordResults] = await Promise.all([
       vectorRows(category),
-      keywordRowsForPlans(supabase, plans, category, queryLimit),
+      searchKeywords(category),
     ]);
   } else {
     // 자동 모드에서는 빠른 FTS 결과로 분야를 정한 뒤 벡터 검색을 보낸다. 정확한 문서명이
     // 있는 질문이 filter={} 전역 검색 시간 초과로 키워드 전용으로 강등되는 것을 막는다.
-    keywordResults = await keywordRowsForPlans(supabase, plans, null, queryLimit);
+    keywordResults = await searchKeywords(null);
     const inferredScope = inferSearchScopeFromKeywordRows(
       plans,
       keywordResults.map((result) => result.rows)
@@ -1775,6 +1868,7 @@ async function hybridCandidates(
   }
   return {
     rows: rows.slice(0, candidateCount),
+    supplementalQueries,
     protectedIds: protectedRows.map((row) => row.id),
     protectedFacets: Object.fromEntries(protectedFacets),
     degraded:
@@ -1810,6 +1904,7 @@ async function hybridCandidatesWithCategoryFallback(
   );
   return {
     ...unrestricted,
+    supplementalQueries: primary.supplementalQueries + unrestricted.supplementalQueries,
     // 분야 제한을 완화했음을 호출자가 알 수 있게 한다.
     degraded: true,
   };
@@ -1859,8 +1954,19 @@ export async function searchExternalRag(
   const independentEvidenceTopics = plans
     .filter((plan) => plan.independentEvidence)
     .map((plan) => FACET_DISPLAY_LABELS[plan.id] ?? plan.id);
-  const evidenceScope = independentEvidenceTopics.length > 0
-    ? { independentEvidenceTopics } : {};
+  const requestedPlans = plans.filter((plan) => plan.protect && plan.facetTerms.length > 0);
+  const evidenceScope = (rows: RefinedRagRow[], supplementalQueries: number) => ({
+    ...(independentEvidenceTopics.length > 0 ? { independentEvidenceTopics } : {}),
+    ...(requestedPlans.length >= 2 ? {
+      retrievalCoverage: {
+        requested: requestedPlans.map((plan) => FACET_DISPLAY_LABELS[plan.id] ?? plan.id),
+        missing: requestedPlans.filter((plan) => !rows.some((row) => hasPlanEvidenceCues(plan, {
+          id: row.id, content: row.text, metadata: row.meta,
+        }))).map((plan) => FACET_DISPLAY_LABELS[plan.id] ?? plan.id),
+        supplementalQueries,
+      },
+    } : {}),
+  });
 
   // ①② 하이브리드 후보 → ③ RRF 융합 → ④ 정제·노이즈 제외 → ⑤ LLM 재순위
   const candidates = await hybridCandidatesWithCategoryFallback(
@@ -1872,11 +1978,11 @@ export async function searchExternalRag(
   );
   const fused = candidates.rows;
   if (fused.length === 0) {
-    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded, ...evidenceScope };
+    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded, ...evidenceScope([], candidates.supplementalQueries) };
   }
   const refined = refine(fused, Math.max(12, keep * 2));
   if (refined.length === 0) {
-    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded, ...evidenceScope };
+    return { contextText: "", sources: [], matched: 0, degraded: candidates.degraded, ...evidenceScope([], candidates.supplementalQueries) };
   }
   const protectedIds = new Set(candidates.protectedIds);
   const protectedRows = refined
@@ -1924,7 +2030,7 @@ export async function searchExternalRag(
     sources.push(source);
   }
 
-  return { contextText, sources, matched: top.length, degraded: candidates.degraded, ...evidenceScope };
+  return { contextText, sources, matched: top.length, degraded: candidates.degraded, ...evidenceScope(top, candidates.supplementalQueries) };
 }
 
 // 자료제작용 청크 수 — 문서/슬라이드는 챗봇 답변보다 넓은 커버리지가 필요(챗봇 8 vs 생성 24).
@@ -2069,7 +2175,8 @@ export async function fetchExternalRagContext(
   category: string,
   limit = 40,
   topic?: string,
-  suppliedClient?: ExternalRagSupabaseClient
+  suppliedClient?: ExternalRagSupabaseClient,
+  options: { allowCategoryFallback?: boolean } = {}
 ): Promise<{
   contextText: string;
   sources: GeneratedDocSource[];
@@ -2128,12 +2235,19 @@ export async function fetchExternalRagContext(
           degraded: retrievalDegraded,
         };
       }
+      if (options.allowCategoryFallback === false) {
+        return { contextText: "", sources: [], bindingSources: [], degraded: retrievalDegraded };
+      }
       // 주제 검색 결과가 없으면 분야 전체로 폴백
       retrievalDegraded = true;
     } catch (e) {
       retrievalDegraded = true;
       console.error("[rag-external] 주제 키워드 검색까지 실패, 분야 전체로 폴백:", e);
     }
+  }
+
+  if (options.allowCategoryFallback === false) {
+    return { contextText: "", sources: [], bindingSources: [], degraded: retrievalDegraded };
   }
 
   // ② 분야 전체(폴백/주제 미지정): 원본 문서별 후보를 받은 뒤 라운드로빈으로 고른다.

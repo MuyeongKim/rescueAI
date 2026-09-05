@@ -62,4 +62,24 @@ describe("튜터 재순위 호출 계약", () => {
     expect(result.sources.map((source) => source.document_id)).toEqual([1]);
     expect(result.contextText).toContain(rows[0].content);
   });
+
+  it("모든 후보가 무관하다는 명시 판정과 빈 선택이 함께 있으면 무관 자료로 채우지 않는다", async () => {
+    const { client } = fixture();
+    mocks.generateObject.mockResolvedValue({ object: { ranked: [], noRelevantEvidence: true } });
+    const result = await searchExternalRag("도르래 설명", [0.1], 1, "일반구조", [], client as never);
+    expect(result).toMatchObject({ contextText: "", sources: [], matched: 0, degraded: false });
+    expect(mocks.generateObject).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { ranked: [], noRelevantEvidence: false },
+    { ranked: [] },
+    { ranked: [1], noRelevantEvidence: true },
+  ])("빈 선택이나 모순된 응답만으로 근거를 없애지 않는다: %j", async (object) => {
+    const { client } = fixture();
+    mocks.generateObject.mockResolvedValue({ object });
+    const result = await searchExternalRag("도르래 설명", [0.1], 1, "일반구조", [], client as never);
+    expect(result.matched).toBe(1);
+    expect(result.sources).toHaveLength(1);
+  });
 });

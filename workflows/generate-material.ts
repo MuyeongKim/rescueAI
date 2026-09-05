@@ -12,7 +12,17 @@ import {
 
 import { createGenerationWorkerClient } from "@/lib/supabase/generation-worker";
 import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
-import { fetchCategoryContext, type GenerationContext } from "@/lib/generate-context";
+import { fetchCategoryContext, supplementGenerationContext, type GenerationContext } from "@/lib/generate-context";
+import {
+  bindOutlineEvidence,
+  hasOutlineEvidenceExcerpt,
+  MAX_OUTLINE_EVIDENCE_SEARCHES,
+  outlineEvidenceGaps,
+  outlineEvidenceGuidance,
+  outlineEvidenceRequirementsSchema,
+  outlineEvidenceSearchQueries,
+  type OutlineEvidenceRequirement,
+} from "@/lib/generation-evidence-coverage";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
 import { generateRequestSchema, type ValidatedGenerateRequest } from "@/lib/generation-request";
 import { getChatModel } from "@/lib/llm";
@@ -49,7 +59,6 @@ import {
   type GenerationQualityReport,
 } from "@/lib/generate";
 import type { Database, Json } from "@/lib/database.types";
-import type { SopEvidence } from "@/lib/sop-evidence";
 
 const MODEL_CALL_MAX_MS = 235_000;
 const RETRIEVAL_STEP_MAX_MS = 215_000;
@@ -79,6 +88,7 @@ type SlideOutlineItem = {
   sopTarget: boolean;
   /** 새 작업은 필수. 과거 체크포인트를 이어가기 위해 읽을 때만 선택값으로 둔다. */
   actionRequirements?: string[];
+  evidenceRequirements?: OutlineEvidenceRequirement[];
 };
 
 type SlideOutline = {
@@ -95,6 +105,7 @@ type DocumentOutlineItem = {
   sourceRefs?: string[];
   /** 해당 섹션에서 실제로 보여 줄 행동·확인·이상 대응 요구사항. */
   actionRequirements?: string[];
+  evidenceRequirements?: OutlineEvidenceRequirement[];
 };
 
 type DocumentOutline = {
@@ -119,6 +130,12 @@ type GenerationCheckpoint = {
     evidenceSignature: string;
     partSignatures: string[];
     report: GenerationQualityReport;
+  };
+  outlineEvidence?: {
+    queries: string[];
+    completedQueries: string[];
+    addedContext: boolean;
+    reviewed: boolean;
   };
 };
 
@@ -491,6 +508,29 @@ function targetSlideCount(duration: ValidatedGenerateRequest["duration"]): numbe
   return slideCountRangeFor(duration)[1];
 }
 
+function outlineEvidencePrompt(): string {
+  return `[목차별 근거 연결]
+- evidenceRequirements에는 요청 주제와 직접 관련된 기술 내용·적용 조건 중 핵심 1~3개를 requirement로 적으세요. 일정·소개·일반 학습목표처럼 별도 기술 근거가 필요 없는 항목만 빈 배열로 둡니다.
+- 해당 요구사항을 실제로 뒷받침하는 sourceRef와 그 출처의 연속된 원문 12~360자를 excerpt에 정확히 복사하세요. 출처 제목이나 다른 페이지 문장을 대신 쓰지 마세요.
+- 요청에 필요한 조건을 현재 자료에서 확인하지 못하면 requirement는 남기고 sourceRef와 excerpt를 모두 null로 두세요. 부족한 근거를 확인할 기회가 있으므로, 출처가 있다는 이유만으로 조건이 맞는다고 판단하지 마세요.
+- 서로 다른 상황의 원문을 합쳐 복합 상황의 새로운 기술 절차를 만들지 마세요.`;
+}
+
+function outlineItems(checkpoint: GenerationCheckpoint): Array<SlideOutlineItem | DocumentOutlineItem> {
+  return checkpoint.outline?.slides ?? checkpoint.documentOutline?.sections ?? [];
+}
+
+function withEvidenceItems(
+  checkpoint: GenerationCheckpoint,
+  items: Array<SlideOutlineItem | DocumentOutlineItem>,
+): GenerationCheckpoint {
+  return checkpoint.outline
+    ? { ...checkpoint, outline: { ...checkpoint.outline, slides: items as SlideOutlineItem[] } }
+    : checkpoint.documentOutline
+      ? { ...checkpoint, documentOutline: { ...checkpoint.documentOutline, sections: items as DocumentOutlineItem[] } }
+      : checkpoint;
+}
+
 function qualityScore(report: GenerationQualityReport): readonly [number, number] {
   return [blockingGenerationQualityIssues(report).length, report.issues.length];
 }
@@ -530,7 +570,9 @@ function checkpointWithRepairMarker(
   };
 }
 
-function operationalWarnings(context: GenerationContext): string[] {
+function operationalWarnings(context: GenerationContext, checkpoint: GenerationCheckpoint): string[] {
+  const missing = Array.from(new Set(outlineEvidenceGaps(outlineItems(checkpoint), context.contextText)
+    .map((gap) => gap.requirement)));
   return [
     ...(context.sopEvidence.status === "not_found"
       ? ["관련 SOP 근거 미확인 — 시행 전 최신 SOP 확인 필요"]
@@ -538,6 +580,9 @@ function operationalWarnings(context: GenerationContext): string[] {
         ? ["SOP 자료 검색 상태 확인 불가 — 시행 전 다시 확인 필요"]
         : []),
     ...(context.degraded ? ["자료 검색 일부 기능 제한 — 회수 근거 확인 필요"] : []),
+    ...(missing.length > 0 ? [
+      `목차의 ${missing.length}개 조건은 조회한 근거에서 추가 확인이 필요합니다: ${missing.slice(0, 2).map((item) => item.slice(0, 80)).join(" / ")}${missing.length > 2 ? " 외" : ""}`,
+    ] : []),
   ];
 }
 
@@ -601,7 +646,7 @@ function resultWithQuality(
       sopEvidence: context.sopEvidence,
     };
     const report = withGroundingQuality(inspectCurrentGenerationQuality("slides", deck, request.duration), deck, request, checkpoint);
-    const messages = generationQualityMessages(report, operationalWarnings(context));
+    const messages = generationQualityMessages(report, operationalWarnings(context, checkpoint));
     return {
       result: {
         ...deck,
@@ -621,7 +666,7 @@ function resultWithQuality(
     sopEvidence: context.sopEvidence,
   };
   const report = withGroundingQuality(inspectCurrentGenerationQuality(request.type, doc, request.duration), doc, request, checkpoint);
-  const messages = generationQualityMessages(report, operationalWarnings(context));
+  const messages = generationQualityMessages(report, operationalWarnings(context, checkpoint));
   return {
     result: {
       ...doc,
@@ -826,6 +871,7 @@ async function generateDocumentOutlineStep(jobId: string, runToken: string): Pro
           keyPoints: z.array(z.string().min(2).max(120)).min(2).max(6),
           sourceRefs: z.array(labelSchema).min(1).max(4),
           actionRequirements: z.array(z.string().min(4).max(140)).min(1).max(6),
+          evidenceRequirements: outlineEvidenceRequirementsSchema(allowedSourceLabels(context) as [string, ...string[]]),
         })
       )
       .length(headings.length)
@@ -857,14 +903,15 @@ async function generateDocumentOutlineStep(jobId: string, runToken: string): Pro
 - 섹션 순서는 ${headings.join(" → ")}로 정확히 유지하세요.
 - 각 섹션의 역할과 반드시 다룰 근거 기반 핵심어를 먼저 확정하세요.
 - 각 섹션의 sourceRefs에는 실제로 그 섹션 작성에 사용할 참고 자료 라벨만 1~4개 지정하세요.
-- actionRequirements에는 그 섹션에서 대원이 실제로 할 행동, 행동 후 확인, 이상 시 조치·보고 또는 평가 연결 중 필요한 항목을 구체적으로 지정하세요. 자료에 고정 순서가 없으면 기술 절차를 만들지 마세요.`,
+- actionRequirements에는 그 섹션에서 대원이 실제로 할 행동, 행동 후 확인, 이상 시 조치·보고 또는 평가 연결 중 필요한 항목을 구체적으로 지정하세요. 자료에 고정 순서가 없으면 기술 절차를 만들지 마세요.
+${outlineEvidencePrompt()}`,
       temperature: 0.3,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
     });
     const documentOutline: DocumentOutline = {
       title: object.title,
       sections: object.sections.map((section) => ({
-        ...section,
+        ...bindOutlineEvidence(section, context.contextText),
         minutes: documentMinutes(request.type as "plan" | "lesson", request.duration, section.heading),
       })),
     };
@@ -878,6 +925,139 @@ async function generateDocumentOutlineStep(jobId: string, runToken: string): Pro
       }),
       { progress: 28 }
     );
+  } catch (error) {
+    await retryGenerationError(error, row, request);
+  }
+}
+
+async function supplementOutlineEvidenceStep(
+  jobId: string,
+  runToken: string,
+  searchIndex: number,
+): Promise<void> {
+  "use step";
+  if (searchIndex < 0 || searchIndex >= MAX_OUTLINE_EVIDENCE_SEARCHES) return;
+  let row = await loadWorkerJob(jobId, runToken);
+  const request = validatedRequest(row);
+  let checkpoint = checkpointOf(row.checkpoint);
+  // 배포 전에 초안 작성이 시작된 작업의 근거를 뒤늦게 교체하지 않는다.
+  if ((checkpoint.draft?.sections.length ?? 0) > 0 || (checkpoint.slides?.length ?? 0) > 0) return;
+  if (!checkpoint.outlineEvidence) {
+    const context = contextFromCheckpoint(checkpoint);
+    const queries = outlineEvidenceSearchQueries(
+      buildFocusedTrainingQuery(request.topic, request.focus ?? ""),
+      outlineEvidenceGaps(outlineItems(checkpoint), context.contextText),
+    );
+    row = await saveCheckpointCas(row, (current) => Boolean(current.outlineEvidence), (current) => ({
+      ...current,
+      outlineEvidence: { queries, completedQueries: [], addedContext: false, reviewed: queries.length === 0 },
+    }));
+    checkpoint = checkpointOf(row.checkpoint);
+  }
+  const state = checkpoint.outlineEvidence!;
+  const query = state.queries.slice(0, MAX_OUTLINE_EVIDENCE_SEARCHES)[searchIndex]?.trim().slice(0, 100);
+  if (!query || state.reviewed || state.completedQueries.includes(query)) return;
+  row = await announceWorkerStage(row, {
+    status: "retrieving",
+    stage: `목차에서 부족한 근거를 추가 확인하는 중 · ${searchIndex + 1}/${Math.min(state.queries.length, MAX_OUTLINE_EVIDENCE_SEARCHES)}`,
+    progress: row.progress,
+  });
+  const original = contextFromCheckpoint(checkpoint);
+  const context = await withRetrievalDeadline(supplementGenerationContext(
+    original, request.category, query, createGenerationWorkerClient(),
+  ));
+  await saveCheckpointCas(
+    row,
+    (current) => current.outlineEvidence?.completedQueries.includes(query) === true,
+    (current) => {
+      if (current.context?.contextText !== original.contextText) {
+        throw new RetryableError("최신 목차 근거를 기준으로 부족한 조건을 다시 확인합니다.", { retryAfter: "3s" });
+      }
+      const saved = current.outlineEvidence!;
+      return {
+        ...current,
+        context,
+        outlineEvidence: {
+          ...saved,
+          completedQueries: Array.from(new Set([...saved.completedQueries, query])).slice(0, MAX_OUTLINE_EVIDENCE_SEARCHES),
+          addedContext: saved.addedContext || context.contextText !== original.contextText,
+        },
+      };
+    },
+  );
+}
+
+async function reviewOutlineEvidenceStep(jobId: string, runToken: string): Promise<void> {
+  "use step";
+  let row = await loadWorkerJob(jobId, runToken);
+  const request = validatedRequest(row);
+  const checkpoint = checkpointOf(row.checkpoint);
+  const state = checkpoint.outlineEvidence;
+  if (!state || state.reviewed) return;
+  if ((checkpoint.draft?.sections.length ?? 0) > 0 || (checkpoint.slides?.length ?? 0) > 0) return;
+  const context = contextFromCheckpoint(checkpoint);
+  const items = outlineItems(checkpoint);
+  const gaps = outlineEvidenceGaps(items, context.contextText);
+  const finish = async (nextItems = items) => saveCheckpointCas(
+    row,
+    (current) => current.outlineEvidence?.reviewed === true,
+    (current) => {
+      if (current.context?.contextText !== context.contextText || !sameJson(outlineItems(current), items)) {
+        throw new RetryableError("최신 목차와 원문에 맞춰 근거 연결을 다시 검토합니다.", { retryAfter: "3s" });
+      }
+      return {
+        ...withEvidenceItems(current, nextItems.map((item) => bindOutlineEvidence(item, context.contextText))),
+        outlineEvidence: { ...current.outlineEvidence!, reviewed: true },
+      };
+    },
+  );
+  if (!state.addedContext || gaps.length === 0) {
+    await finish();
+    return;
+  }
+  const labels = allowedSourceLabels(context) as [string, ...string[]];
+  const schema = z.object({
+    bindings: z.array(z.object({
+      itemIndex: z.number().int().min(0).max(items.length - 1),
+      requirementIndex: z.number().int().min(0).max(2),
+      sourceRef: z.enum(labels).nullable(),
+      excerpt: z.string().min(12).max(360).nullable(),
+    })).max(gaps.length),
+  });
+  row = await announceWorkerStage(row, {
+    status: "drafting", stage: "추가로 찾은 원문과 목차의 적용 조건을 대조하는 중",
+    progress: row.progress,
+  });
+  try {
+    const { object } = await generateObject({
+      model: getChatModel(activeModelKey(checkpointOf(row.checkpoint), request)),
+      schema,
+      system: buildGenerateSystemPrompt(request.category, context.contextText, context.sopEvidence),
+      prompt: `${buildGeneratePrompt(request, context.sopEvidence)}
+[부족한 목차 근거 연결만 검토]
+${JSON.stringify(gaps)}
+- itemIndex와 requirementIndex를 그대로 사용해 위 미해결 항목만 검토하세요. 새로운 요구사항이나 본문은 작성하지 마세요.
+- 해당 요구사항의 대상·상황·적용 조건을 실제로 뒷받침하는 출처만 연결하고 연속 원문 12~360자를 그대로 복사하세요.
+- 단어만 비슷하거나 다른 상황에 대한 원문이면 sourceRef와 excerpt를 null로 남기세요. 검색 결과가 있다는 이유만으로 적용 가능하다고 판단하지 마세요.
+- 서로 다른 근거의 절차를 결합해 복합 상황을 해결했다고 처리하지 마세요.`,
+      temperature: 0,
+      abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
+    });
+    const byGap = new Map(gaps.map((gap) => [`${gap.itemIndex}:${gap.requirementIndex}`, gap]));
+    const nextItems = items.map((item) => ({
+      ...item, evidenceRequirements: item.evidenceRequirements?.map((requirement) => ({ ...requirement })),
+    }));
+    const used = new Set<string>();
+    for (const binding of object.bindings) {
+      const key = `${binding.itemIndex}:${binding.requirementIndex}`;
+      if (!byGap.has(key) || used.has(key)) continue;
+      used.add(key);
+      const requirement = nextItems[binding.itemIndex].evidenceRequirements?.[binding.requirementIndex];
+      if (!requirement) continue;
+      const candidate = { ...requirement, sourceRef: binding.sourceRef, excerpt: binding.excerpt };
+      if (hasOutlineEvidenceExcerpt(candidate, context.contextText)) Object.assign(requirement, candidate);
+    }
+    await finish(nextItems);
   } catch (error) {
     await retryGenerationError(error, row, request);
   }
@@ -975,7 +1155,8 @@ ${batchPlan
         section.minutes === null ? "" : ` / 이 섹션 시간 합계 정확히 ${section.minutes}분`
       } / 행동 요구 ${(section.actionRequirements ?? []).join("; ") || "기존 핵심 기준 적용"} / 허용 근거 ${(section.sourceRefs ?? []).join(", ") || "기존 전체 근거"}`
   )
-  .join("\n")}`,
+  .join("\n")}
+${outlineEvidenceGuidance(batchPlan, context.contextText)}`,
       temperature: 0.35,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
     });
@@ -1031,6 +1212,7 @@ async function generateSlideOutlineStep(
           sourceRefs: z.array(labelSchema).min(1).max(4),
           sopTarget: z.boolean(),
           actionRequirements: z.array(z.string().min(4).max(140)).min(1).max(5),
+          evidenceRequirements: outlineEvidenceRequirementsSchema(labels as [string, ...string[]]),
         })
       )
       .length(expectedCount)
@@ -1056,14 +1238,17 @@ async function generateSlideOutlineStep(
 - 학습 목표에서 개념·절차·장비·판단 사례·실습·안전·평가·요약으로 이어지는 흐름을 먼저 확정하세요.
 - 각 장마다 결론형 제목, 역할, 서로 다른 화면 구도, 교육 목적, 정확한 근거 라벨을 지정하세요.
 - actionRequirements에는 해당 장에서 대원이 할 행동, 확인 지점, 이상 시 조치 또는 평가 연결을 구체적으로 지정하세요. 참여 실습 장은 실제 행동 3~5개를 설계하세요.
-- SOP 적용 근거 장은 sopTarget=true로 표시하세요.`,
+- SOP 적용 근거 장은 sopTarget=true로 표시하세요.
+${outlineEvidencePrompt()}`,
       temperature: 0.3,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
     });
     await saveCheckpointCas(
       row,
       (current) => current.outline?.slides.length === expectedCount,
-      (current) => ({ ...current, outline: object, slides: [] }),
+      (current) => ({ ...current, outline: {
+        ...object, slides: object.slides.map((slide) => bindOutlineEvidence(slide, context.contextText)),
+      }, slides: [] }),
       { progress: 30 }
     );
   } catch (error) {
@@ -1136,7 +1321,8 @@ ${batchPlan
         slide.sopTarget ? " / 이 장에 SOP 적용 계약을 정확히 반영" : ""
       } / 행동 요구 ${(slide.actionRequirements ?? []).join("; ") || "기존 목적 적용"}`
   )
-  .join("\n")}`,
+  .join("\n")}
+${outlineEvidenceGuidance(batchPlan, context.contextText)}`,
       temperature: 0.35,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
     });
@@ -1286,7 +1472,8 @@ ${outlineItem ? `- 이 섹션의 목적: ${outlineItem.purpose}\n- 반드시 다
 ${outlineItem?.actionRequirements?.length ? `- 반드시 구현할 행동·확인 기준: ${outlineItem.actionRequirements.join("; ")}` : ""}
 ${outlineItem?.sourceRefs?.length ? `- 이 섹션에 허용된 근거: ${outlineItem.sourceRefs.join(", ")}` : ""}
 ${outlineItem?.minutes == null ? "" : `- [단계명 · 00분] 표기의 시간 합계를 정확히 ${outlineItem.minutes}분으로 맞추세요.`}
-- 다른 섹션의 내용을 대신 쓰거나 전체 sections 배열을 반환하지 마세요.`,
+- 다른 섹션의 내용을 대신 쓰거나 전체 sections 배열을 반환하지 마세요.
+${outlineEvidenceGuidance(outlineItem ? [outlineItem] : [], context.contextText)}`,
       temperature: 0.3,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
     });
@@ -1419,7 +1606,7 @@ async function repairSlideStep(
           slideOutline?.actionRequirements?.length
             ? ` / 구성안의 행동·확인 요구: ${slideOutline.actionRequirements.join("; ")}`
             : ""
-        }`,
+        }${outlineEvidenceGuidance(slideOutline ? [slideOutline] : [], context.contextText)}`,
       }),
       temperature: 0.3,
       abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
@@ -1581,6 +1768,8 @@ async function failGenerationJobStep(
 
 prepareGenerationJobStep.maxRetries = 6;
 generateDocumentOutlineStep.maxRetries = 6;
+supplementOutlineEvidenceStep.maxRetries = 3;
+reviewOutlineEvidenceStep.maxRetries = 3;
 generateDocumentBatchStep.maxRetries = 6;
 generateSlideOutlineStep.maxRetries = 6;
 generateSlideBatchStep.maxRetries = 6;
@@ -1603,6 +1792,10 @@ export async function generateMaterialWorkflow(
     const prepared = await prepareGenerationJobStep(jobId, runToken);
     if (prepared.type === "slides") {
       await generateSlideOutlineStep(jobId, runToken, prepared.slideCount);
+      for (let index = 0; index < MAX_OUTLINE_EVIDENCE_SEARCHES; index += 1) {
+        await supplementOutlineEvidenceStep(jobId, runToken, index);
+      }
+      await reviewOutlineEvidenceStep(jobId, runToken);
       for (let start = 0; start < prepared.slideCount; start += SLIDE_BATCH_SIZE) {
         await generateSlideBatchStep(
           jobId,
@@ -1613,6 +1806,10 @@ export async function generateMaterialWorkflow(
       }
     } else {
       await generateDocumentOutlineStep(jobId, runToken);
+      for (let index = 0; index < MAX_OUTLINE_EVIDENCE_SEARCHES; index += 1) {
+        await supplementOutlineEvidenceStep(jobId, runToken, index);
+      }
+      await reviewOutlineEvidenceStep(jobId, runToken);
       const headings = documentHeadings(prepared.type);
       for (let start = 0; start < headings.length; start += DOCUMENT_BATCH_SIZE) {
         await generateDocumentBatchStep(

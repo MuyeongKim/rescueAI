@@ -157,21 +157,66 @@ export async function POST(req: Request) {
       let contextText = "";
       let sources: DocSource[] = [];
       let independentEvidenceTopics: string[] = [];
+      let retrievalCoverage: import("@/lib/rag").RetrievalCoverage | undefined;
       let ragFailed = false;
       try {
         const r = await searchContext(retrievalQuestion, category);
         contextText = r.contextText;
         sources = r.sources;
         independentEvidenceTopics = r.independentEvidenceTopics ?? [];
+        retrievalCoverage = r.retrievalCoverage;
         ragFailed = r.degraded ?? false;
       } catch (e) {
         ragFailed = true;
-        console.error("[chat] RAG 인프라 장애 — 컨텍스트 없이 진행:", e);
+        console.error("[chat] RAG 인프라 장애 — 확인 불가 응답 반환:", e);
       }
+
+      const persistAnswer = async (text: string) => {
+        const latencyMs = Date.now() - startedAt;
+        const answerText = prepareChatAnswerText(text);
+        if (!answerText.trim()) return;
+        // 전체가 표준 거절문인 답변에만 출처를 숨긴다. 일부 조건의 근거를 설명한 뒤
+        // 미확인 범위를 밝힌 답변은 표준 문구가 포함되어도 참고 자료를 보존한다.
+        const effectiveSources = answerText.replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE
+          ? []
+          : uniqueChatSources(sources);
+        const { data: saved, error } = await supabase
+          .from("messages")
+          .insert({
+            conversation_id: convId,
+            role: "assistant",
+            content: answerText,
+            sources: effectiveSources.length > 0 ? effectiveSources : null,
+            latency_ms: latencyMs,
+            retrieval_degraded: ragFailed,
+          })
+          .select("id")
+          .single();
+        if (error) console.error("[chat] assistant 저장 실패:", error.message);
+
+        // 모델 응답과 표준 확인 불가 응답 모두 같은 저장·복구 메타데이터를 전달한다.
+        dataStream.writeMessageAnnotation({
+          messageId: saved?.id ?? null,
+          conversationId: convId,
+          sources: effectiveSources,
+          degraded: ragFailed,
+          saveFailed: saved == null,
+        });
+      };
+
+      if (!contextText.trim()) {
+        // 근거 없이 모델을 호출해 확인 불가 문구 뒤에 추측을 붙이지 않게 한다.
+        // 검색 장애 여부는 별도 표시해 정상적인 무근거 검색과 구분한다.
+        dataStream.write(formatDataStreamPart("text", NOT_FOUND_MESSAGE));
+        await persistAnswer(NOT_FOUND_MESSAGE);
+        return;
+      }
+
       const system = buildSystemPrompt(
         contextText,
         answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion)),
-        independentEvidenceTopics
+        independentEvidenceTopics,
+        retrievalCoverage
       );
 
       const result = streamText({
@@ -179,44 +224,7 @@ export async function POST(req: Request) {
         system,
         messages: convertToCoreMessages(messages),
         temperature: 0.2,
-        onFinish: async ({ text }) => {
-          const latencyMs = Date.now() - startedAt;
-          const answerText = prepareChatAnswerText(text);
-          if (!answerText.trim()) return;
-          // 전체가 표준 거절문인 답변에만 출처를 숨긴다. 일부 조건의 근거를 설명한 뒤
-          // 미확인 범위를 밝힌 답변은 표준 문구가 포함되어도 참고 자료를 보존한다.
-          const effectiveSources = answerText.replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE
-            ? []
-            : uniqueChatSources(sources);
-          let saved: { id: number } | null = null;
-          {
-            const { data, error } = await supabase
-              .from("messages")
-              .insert({
-                conversation_id: convId,
-                role: "assistant",
-                content: answerText,
-                sources: effectiveSources.length > 0 ? effectiveSources : null,
-                latency_ms: latencyMs,
-                retrieval_degraded: ragFailed,
-              })
-              .select("id")
-              .single();
-            if (error) {
-              console.error("[chat] assistant 저장 실패:", error.message);
-            }
-            saved = data;
-          }
-
-          // assistant 메시지에 출처/저장 id를 annotation으로 부착 (§8.1 응답)
-          dataStream.writeMessageAnnotation({
-            messageId: saved?.id ?? null,
-            conversationId: convId,
-            sources: effectiveSources,
-            degraded: ragFailed,
-            saveFailed: saved == null,
-          });
-        },
+        onFinish: async ({ text }) => persistAnswer(text),
       });
 
       // 클라이언트가 중간에 끊거나(Stop·탭 닫기) 연결이 끊겨도 스트림을 끝까지 소비해
