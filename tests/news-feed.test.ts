@@ -16,6 +16,9 @@ describe("최근 30일 뉴스 수집", () => {
   it("날짜 미상·잘못된 날짜·실행 가능한 링크를 최신 기사로 수집하지 않는다", () => {
     expect(parseNewsRss(rss(item("없음", "") + item("잘못된 날짜", "wrong") + item("링크", now.toUTCString(), "javascript:alert(1)")))).toEqual([]);
   });
+  it("소방 재단 골프 대회는 구조 기술 동향에 섞지 않는다", () => {
+    expect(parseNewsRss(rss(item("2026 Salem Fire Foundation Golf Tournament", now.toUTCString()) + item("소방 재단 골프 대회", now.toUTCString())))).toEqual([]);
+  });
   it("관련도순 상단이 오래된 기사여도 날짜를 먼저 걸러 최신 기사를 선택한다", async () => {
     const body = Array.from({ length: 25 }, (_, index) => item(`오래된${index}`, "Wed, 01 Jul 2026 00:00:00 GMT")).join("")
       + item("오늘", "Sat, 05 Sep 2026 00:00:00 GMT") + item("경계", "Thu, 06 Aug 2026 15:00:00 GMT")

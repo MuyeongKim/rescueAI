@@ -26,6 +26,8 @@ export function parseNewsRss(xml: string): RawNews[] {
     const source = pick("source");
     let title = pick("title");
     if (source && title.endsWith(` - ${source}`)) title = title.slice(0, -(source.length + 3)).trim();
+    // 소방 재단 기금 행사도 검색어에 걸릴 수 있으므로 구조 동향과 무관한 골프 대회는 제외한다.
+    if (/\bgolf\s+tournament\b|골프\s*대회/iu.test(title)) continue;
     const url = pick("link");
     const published = new Date(pick("pubDate"));
     // 날짜가 없거나 잘못된 기사를 수집일로 바꿔 최신 기사처럼 게시하지 않는다.

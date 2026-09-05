@@ -74,4 +74,5 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 기존 메시지는 장애 여부를 소급 판정하지 않고 `retrieval_degraded=false`로 초기화됩니다.
 초안은 공식 생성물과 별도이며, `snapshot`은 미완성 편집을 허용합니다. 공식 저장·공유의 품질 검사는
 계속 `generated_materials` 계약과 서버 API에서 수행합니다. 메시지 중복·소유권과 초안의 RLS·CAS·
-불변 식별자는 PGlite 회귀검사에 포함됩니다. 운영 Supabase에 적용했다는 의미는 아닙니다.
+불변 식별자는 PGlite 회귀검사에 포함됩니다. 두 마이그레이션은 2026-09-05 운영 Supabase에
+순서대로 적용했으며, 기존 데이터 보존·신규 컬럼·초안 RLS·역할별 권한을 확인했습니다.
