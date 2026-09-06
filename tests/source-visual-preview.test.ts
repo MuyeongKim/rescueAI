@@ -12,7 +12,7 @@ vi.mock("react-pdf", () => ({ pdfjs: {
         getOperatorList: async () => ({ fnArray: Array(page === 1 ? 1 : 6).fill(1) }),
         getTextContent: async () => ({ items: [{ str: "원문 도해" }] }),
         getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 400 * scale }),
-        render: () => { pdf.render(page); return { promise: Promise.resolve() }; }, cleanup: () => undefined,
+        render: (options: unknown) => { pdf.render(page, options); return { promise: Promise.resolve() }; }, cleanup: () => undefined,
       }),
     }) };
   },
@@ -21,6 +21,38 @@ vi.mock("react-pdf", () => ({ pdfjs: {
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe("원문 그림 사전 확인과 다운로드", () => {
+  it("선택 범위를 PDF에서 선명하게 다시 렌더하고 전체 원문도 보존하며 캐시 접근 권한을 재검증한다", async () => {
+    vi.stubGlobal("window", {});
+    vi.stubGlobal("document", { createElement: () => {
+      const canvas = { width: 1, height: 1, getContext: () => ({}), toDataURL: () => `data:image/jpeg;base64,${canvas.width}x${canvas.height}` };
+      return canvas;
+    } });
+    const fetchSource = vi.fn(async () => new Response(JSON.stringify({ url: "https://example.test/focus.pdf", title: "확대 교범" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSource);
+    const slide = { title: "원문 확대", bullets: ["그림을 확인합니다"], notes: "설명", composition: "visual-explanation" as const,
+      sourceRefs: ["[확대 교범 p.1]"], visual: { mode: "source-page" as const, documentId: 77002, page: 1, sourceRef: "[확대 교범 p.1]", sourceFocus: "bottom" as const } };
+    const deck: GeneratedSlideDeck = { title: "확대", slides: [slide], sources: [{ document_id: 77002, doc: "확대 교범", page: 1 }] };
+    const preview = await prepareDeckSourceVisuals(deck);
+    expect(preview.resolved).toBe(1);
+    expect(preview.deck.slides[0].visual).toMatchObject({ sourceFocus: "bottom", imageData: "data:image/jpeg;base64,1200x400", sourcePageImageData: "data:image/jpeg;base64,1200x800" });
+    expect(pdf.render).toHaveBeenCalledTimes(2);
+    expect(pdf.render.mock.calls[1][1]).toMatchObject({ transform: [1, 0, 0, 1, -0, -400] });
+
+    const download = await prepareDeckSourceVisuals(deck);
+    expect(download.deck.slides[0].visual).toEqual(preview.deck.slides[0].visual);
+    expect(pdf.render).toHaveBeenCalledTimes(2);
+    expect(fetchSource).toHaveBeenCalledTimes(2);
+    const full = await prepareDeckSourceVisuals({ ...deck, slides: [{ ...slide, visual: { ...slide.visual, sourceFocus: undefined } }] });
+    expect(full.deck.slides[0].visual?.imageData).toBe("data:image/jpeg;base64,1200x800");
+    expect(full.deck.slides[0].visual?.sourcePageImageData).toBeUndefined();
+    expect(full.deck.slides[0].visual?.sourceFocus).toBeUndefined();
+
+    fetchSource.mockImplementationOnce(async () => new Response("{}", { status: 403 }));
+    const denied = await prepareDeckSourceVisuals(deck);
+    expect(denied.resolved).toBe(0);
+    expect(denied.deck.slides[0].visual?.imageData).toBeUndefined();
+    expect(denied.deck.slides[0].visual?.sourcePageImageData).toBeUndefined();
+  });
   it("선택 페이지를 우선하고 확인한 그림을 재사용하되 현재 접근 권한을 다시 확인한다", async () => {
     vi.stubGlobal("window", {});
     vi.stubGlobal("document", { createElement: () => ({ width: 1, height: 1, getContext: () => ({}), toDataURL: () => "data:image/jpeg;base64,cHJldmlldw==" }) });

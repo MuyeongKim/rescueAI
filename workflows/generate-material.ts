@@ -62,6 +62,12 @@ import {
 import type { Database, Json } from "@/lib/database.types";
 
 const MODEL_CALL_MAX_MS = 235_000;
+// 보완은 같은 step에서 후보의 원문 의미 검토까지 마친다. 두 모델 호출과 DB I/O가
+// 300초 실행 상한을 넘지 않도록 작성 예산과 검토 예산을 따로 둔다.
+const REPAIR_MODEL_CALL_MAX_MS = 180_000;
+const REPAIR_REVIEW_MAX_MS = 45_000;
+// 원문 범위·의미 검토 규칙이 바뀌면 이전 배포의 통과 기록도 다시 대조한다.
+const GROUNDING_REVIEW_POLICY_VERSION = 2;
 const RETRIEVAL_STEP_MAX_MS = 215_000;
 // 모델 step은 load + 상태 저장 + 최대 235초 호출 + checkpoint 저장을 한 invocation에서
 // 수행하므로 원장 I/O를 짧게 실패시켜 300초 플랫폼 상한 안에서 Workflow 재시도로 넘긴다.
@@ -126,6 +132,7 @@ type GenerationCheckpoint = {
   repaired?: boolean;
   repairAttempts?: number;
   completedRepairs?: string[];
+  repairCandidateReviews?: Array<{ signature: string; report: GenerationQualityReport }>;
   groundingReview?: {
     signature: string;
     evidenceSignature: string;
@@ -592,13 +599,48 @@ function operationalWarnings(context: GenerationContext, checkpoint: GenerationC
 
 function groundingSignature(request: ValidatedGenerateRequest, checkpoint: GenerationCheckpoint): string {
   return createHash("sha256").update(JSON.stringify({
+    reviewPolicyVersion: GROUNDING_REVIEW_POLICY_VERSION,
     request, draft: checkpoint.draft, slides: checkpoint.slides,
+    slideTitle: checkpoint.outline?.title,
     context: checkpoint.context?.contextText,
   })).digest("hex");
 }
 
 function textSignature(text: string): string {
   return createHash("sha256").update(text).digest("hex");
+}
+
+function groundingPartSignatures(draft: GeneratedDoc | GeneratedSlideDeck): string[] {
+  return generationTextParts(draft).map((part, index) => {
+    if (!("slides" in draft)) return textSignature(part.text);
+    const slide = draft.slides[index];
+    return textSignature(JSON.stringify({
+      text: part.text,
+      sourceRefs: slide?.sourceRefs,
+      visualSource: slide?.visual && {
+        mode: slide.visual.mode, sourceRef: slide.visual.sourceRef,
+        documentId: slide.visual.documentId, page: slide.visual.page, assetId: slide.visual.assetId,
+      },
+    }));
+  });
+}
+
+function issuePartIndex(issue: GenerationQualityIssue): number {
+  if (issue.path === "title") return 0;
+  const match = /^(?:slides|sections)\.(\d+)(?:\.|$)/.exec(issue.path);
+  return match ? Number(match[1]) : -1;
+}
+
+function repairPreservesBlockingChecks(
+  current: GenerationQualityReport,
+  candidate: GenerationQualityReport,
+  index: number
+): boolean {
+  const prior = new Set(blockingGenerationQualityIssues(current)
+    .map((issue) => JSON.stringify([issue.code, issue.path])));
+  return blockingGenerationQualityIssues(candidate).every((issue) =>
+    prior.has(JSON.stringify([issue.code, issue.path])) &&
+    !(issue.code === "unsupported_technical_value" && issuePartIndex(issue) === index));
 }
 
 function withGroundingQuality(
@@ -611,17 +653,59 @@ function withGroundingQuality(
   // 하나를 고친 뒤에도 아직 바뀌지 않은 다른 부분의 검토 항목은 같은 보완 회차에
   // 처리한다. 완성본 통과 여부는 아래 최종 단계에서 전체 서명을 다시 검사한다.
   const parts = generationTextParts(draft);
+  const partSignatures = groundingPartSignatures(draft);
   const semanticIssues = reviewed?.signature === groundingSignature(request, checkpoint)
     ? reviewed.report.issues
     : reviewed?.evidenceSignature === textSignature(contextFromCheckpoint(checkpoint).contextText)
       ? reviewed.report.issues.filter((issue) => {
-          const index = parts.findIndex((part) => part.path === issue.path);
-          return index >= 0 && reviewed.partSignatures?.[index] === textSignature(parts[index].text);
+          const index = issuePartIndex(issue);
+          return index >= 0 && parts[index] !== undefined &&
+            reviewed.partSignatures?.[index] === partSignatures[index];
         })
       : [];
   const semantic = { ok: semanticIssues.length === 0, issues: semanticIssues };
   return mergeGroundingQuality(quality,
     inspectTechnicalGrounding(draft, contextFromCheckpoint(checkpoint).contextText, request), semantic);
+}
+
+/** 보완안은 원문 의미 검토를 통과하기 전까지 기존 초안을 대체하지 않는다. */
+async function reviewRepairCandidate(
+  request: ValidatedGenerateRequest,
+  checkpoint: GenerationCheckpoint,
+  candidate: GenerationCheckpoint,
+  index: number,
+  evidenceText: string
+): Promise<{ signature: string; report: GenerationQualityReport }> {
+  const { result } = resultWithQuality(request, candidate);
+  const draft = result as unknown as GeneratedDoc | GeneratedSlideDeck;
+  const part = generationTextParts(draft)[index];
+  if (!part) throw new Error("보완안의 원문 검토 위치를 확인하지 못했습니다.");
+  const signature = textSignature(JSON.stringify({
+    reviewPolicyVersion: GROUNDING_REVIEW_POLICY_VERSION, request, index, part, title: draft.title, evidenceText,
+    // 같은 문장이라도 출처·도식 연결을 바꾸면 재검토해야 한다.
+    item: "slides" in draft ? draft.slides[index] : draft.sections[index],
+    modelKey: activeModelKey(checkpoint, request),
+  }));
+  const cached = checkpoint.repairCandidateReviews?.find((review) => review.signature === signature);
+  if (cached) return cached;
+  const report = await reviewGenerationGrounding({
+    draft, evidenceText, request, partIndices: [index],
+    modelKey: activeModelKey(checkpoint, request), timeoutMs: REPAIR_REVIEW_MAX_MS,
+  });
+  return { signature, report };
+}
+
+function withRepairCandidateReview(
+  checkpoint: GenerationCheckpoint,
+  review: { signature: string; report: GenerationQualityReport }
+): GenerationCheckpoint {
+  return {
+    ...checkpoint,
+    repairCandidateReviews: [
+      ...(checkpoint.repairCandidateReviews ?? []).filter((item) => item.signature !== review.signature),
+      review,
+    ].slice(-8),
+  };
 }
 
 function resultWithQuality(
@@ -1413,7 +1497,7 @@ async function reviewGenerationStep(
         return { ...saved, groundingReview: {
           signature, report: grounding,
           evidenceSignature: textSignature(contextFromCheckpoint(checkpoint).contextText),
-          partSignatures: generationTextParts(draft).map((part) => textSignature(part.text)),
+          partSignatures: groundingPartSignatures(draft),
         } };
       });
     checkpoint = checkpointOf(row.checkpoint);
@@ -1504,7 +1588,7 @@ ${outlineItem?.minutes == null ? "" : `- [단계명 · 00분] 표기의 시간 �
 - 다른 섹션의 내용을 대신 쓰거나 전체 sections 배열을 반환하지 마세요.
 ${outlineEvidenceGuidance(outlineItem ? [outlineItem] : [], context.contextText)}`,
       temperature: 0.3,
-      abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
+      abortSignal: AbortSignal.timeout(REPAIR_MODEL_CALL_MAX_MS),
     });
     const labels = extractSourceLabels(context.contextText);
     const repairedSection = stripSectionInlineSourceRefs(
@@ -1523,19 +1607,28 @@ ${outlineEvidenceGuidance(outlineItem ? [outlineItem] : [], context.contextText)
       repaired: true,
       repairAttempts: Math.max(checkpoint.repairAttempts ?? 0, round),
     };
-    const { report: candidateReport } = resultWithQuality(request, candidateCheckpoint);
+    const candidateReview = sameJson(repairedSection, current)
+      ? undefined
+      : await reviewRepairCandidate(request, checkpoint, candidateCheckpoint, index, sectionContextText);
+    const { report: uncheckedCandidateReport } = resultWithQuality(request, candidateCheckpoint);
+    const candidateReport = candidateReview
+      ? mergeGroundingQuality(uncheckedCandidateReport, candidateReview.report)
+      : uncheckedCandidateReport;
     const hasGlobalIssue = relevantIssues.some(
       (issue) => !/^sections\.\d+(?:\.|$)/.test(issue.path)
     );
-    const accept =
+    const accept = candidateReview !== undefined && candidateReview.report.issues.length === 0 &&
+      repairPreservesBlockingChecks(currentReport, candidateReport, index) && (
       isQualityImprovement(currentReport, candidateReport) ||
-      (hasGlobalIssue && isQualityNonRegression(currentReport, candidateReport));
+      (hasGlobalIssue && isQualityNonRegression(currentReport, candidateReport))
+    );
     await saveCheckpointCas(
       row,
       (saved) => hasRepairMarker(saved, marker),
       (saved) => {
         const savedCurrent = saved.draft?.sections[index];
-        if (!sameJson(savedCurrent, current)) {
+        if (!sameJson(savedCurrent, current) ||
+            groundingSignature(request, saved) !== groundingSignature(request, checkpoint)) {
           throw new RetryableError("최신 문서 섹션을 기준으로 보완을 다시 계산합니다.", {
             retryAfter: "3s",
           });
@@ -1557,7 +1650,10 @@ ${outlineEvidenceGuidance(outlineItem ? [outlineItem] : [], context.contextText)
               ...saved,
               repairAttempts: Math.max(saved.repairAttempts ?? 0, round),
             };
-        return checkpointWithRepairMarker(next, marker);
+        return checkpointWithRepairMarker(
+          candidateReview ? withRepairCandidateReview(next, candidateReview) : next,
+          marker
+        );
       },
       { progress: repairProgress(round, index + 1, currentDraft.sections.length) }
     );
@@ -1638,7 +1734,7 @@ async function repairSlideStep(
         }${outlineEvidenceGuidance(slideOutline ? [slideOutline] : [], context.contextText)}`,
       }),
       temperature: 0.3,
-      abortSignal: AbortSignal.timeout(MODEL_CALL_MAX_MS),
+      abortSignal: AbortSignal.timeout(REPAIR_MODEL_CALL_MAX_MS),
     });
     const candidateSlides = slides.map((slide, slideIndex) =>
       slideIndex === index ? object : slide
@@ -1649,19 +1745,28 @@ async function repairSlideStep(
       repaired: true,
       repairAttempts: (checkpoint.repairAttempts ?? 0) + 1,
     };
-    const { report: candidateReport } = resultWithQuality(request, candidateCheckpoint);
+    const candidateReview = sameJson(object, current)
+      ? undefined
+      : await reviewRepairCandidate(request, checkpoint, candidateCheckpoint, index, context.contextText);
+    const { report: uncheckedCandidateReport } = resultWithQuality(request, candidateCheckpoint);
+    const candidateReport = candidateReview
+      ? mergeGroundingQuality(uncheckedCandidateReport, candidateReview.report)
+      : uncheckedCandidateReport;
     const hasGlobalIssue = relevantIssues.some(
       (issue) => !/^slides\.\d+(?:\.|$)/.test(issue.path)
     );
-    const accept =
+    const accept = candidateReview !== undefined && candidateReview.report.issues.length === 0 &&
+      repairPreservesBlockingChecks(currentReport, candidateReport, index) && (
       isQualityImprovement(currentReport, candidateReport) ||
-      (hasGlobalIssue && isQualityNonRegression(currentReport, candidateReport));
+      (hasGlobalIssue && isQualityNonRegression(currentReport, candidateReport))
+    );
     await saveCheckpointCas(
       row,
       (saved) => hasRepairMarker(saved, marker),
       (saved) => {
         const savedCurrent = saved.slides?.[index];
-        if (!sameJson(savedCurrent, current)) {
+        if (!sameJson(savedCurrent, current) ||
+            groundingSignature(request, saved) !== groundingSignature(request, checkpoint)) {
           throw new RetryableError("최신 슬라이드를 기준으로 보완을 다시 계산합니다.", {
             retryAfter: "3s",
           });
@@ -1679,7 +1784,10 @@ async function repairSlideStep(
               ...saved,
               repairAttempts: Math.max(saved.repairAttempts ?? 0, round),
             };
-        return checkpointWithRepairMarker(next, marker);
+        return checkpointWithRepairMarker(
+          candidateReview ? withRepairCandidateReview(next, candidateReview) : next,
+          marker
+        );
       },
       { progress: repairProgress(round, index + 1, slides.length) }
     );

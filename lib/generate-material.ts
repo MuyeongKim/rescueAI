@@ -3,6 +3,7 @@
 import { documentMetadataLines, prepareGeneratedDocForPlainTextExport, type DocumentMetadata } from "@/lib/document-export";
 import { normalizeDocumentText } from "@/lib/document-text";
 import { validSlideDiagram } from "@/lib/slide-diagram";
+import { validSourceVisualFocus } from "@/lib/source-visual-focus";
 import {
   AUDIENCES,
   DURATIONS,
@@ -157,7 +158,10 @@ function storedSlideVisual(value: unknown): GeneratedSlideVisual | undefined {
   if (SLIDE_VISUAL_FITS.includes(visual.fit as NonNullable<GeneratedSlideVisual["fit"]>)) {
     safe.fit = visual.fit as NonNullable<GeneratedSlideVisual["fit"]>;
   }
-  // imageData는 큰 런타임 데이터이므로 DB 저장본에서 절대 복원하지 않는다.
+  if (safe.mode === "source-page" || safe.mode === "source-crop") {
+    safe.sourceFocus = validSourceVisualFocus(visual.sourceFocus);
+  }
+  // 원문 이미지들은 큰 런타임 데이터이므로 DB 저장본에서 절대 복원하지 않는다.
   return safe;
 }
 

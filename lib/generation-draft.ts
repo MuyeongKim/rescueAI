@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { slideDiagramSchema } from "@/lib/slide-diagram";
+import { SOURCE_VISUAL_FOCUS } from "@/lib/source-visual-focus";
 import {
   AUDIENCES, DURATIONS, SLIDE_COMPOSITION_TYPES, SLIDE_DECK_MODES,
   SLIDE_LAYOUT_TYPES, SLIDE_ROLE_TYPES, SLIDE_VISUAL_FITS, SLIDE_VISUAL_MODES,
@@ -38,6 +39,7 @@ const slideSchema = z.object({
     documentId: z.number().int().safe().positive().optional(), page: z.number().int().safe().positive().optional(),
     sourceRef: text(300).optional(), altText: text(300).optional(), caption: text(200).optional(),
     fit: z.enum(SLIDE_VISUAL_FITS).optional(),
+    sourceFocus: z.enum(SOURCE_VISUAL_FOCUS).optional(),
   }).optional(),
 });
 /** 미완성 편집도 보존한다. 공식 저장·공유·내보내기의 품질 게이트를 대신하지 않는다. */

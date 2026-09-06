@@ -375,6 +375,14 @@ export async function buildPptxBytes(
         });
       }
     }
+    if (plan.imageContext && isSafeSlideImageData(s.visual?.sourcePageImageData)) {
+      const box = plan.imageContext;
+      slide.addImage({ data: s.visual.sourcePageImageData, ...box,
+        sizing: { type: "contain", w: box.w, h: box.h },
+        altText: `${s.visual.sourceRef ?? "근거 원문"} 전체 페이지. 확대 이미지와 함께 확인합니다.`,
+        objectName: "확대 그림의 전체 원문 페이지",
+      });
+    }
     for (const item of plan.texts) {
       slide.addText(item.lines.join("\n"), {
         x: item.x, y: item.y, w: item.w, h: item.h,

@@ -70,6 +70,7 @@ import type { DocumentSectionEvidenceState } from "@/lib/document-evidence";
 import { DocResult } from "@/components/generate/DocResult";
 import { NotebookLmResult } from "@/components/generate/NotebookLmResult";
 import { SlideDeckResult } from "@/components/generate/SlideDeckResult";
+import { replaceSlideRange } from "@/lib/slide-split";
 import { TopicFocusPanel } from "@/components/generate/TopicFocusPanel";
 import {
   CategoryRecommendationPanel,
@@ -1652,6 +1653,14 @@ export function GenerateForm({
       slides.splice(index + 1, 0, duplicate);
       return { ...previous, slides };
     });
+    setLocalQualityRevision((revision) => revision + 1);
+  }
+
+  function replaceSlideParts(index: number, expected: readonly GeneratedSlide[], replacement: readonly GeneratedSlide[]) {
+    if (savingRef.current || regenRequestRef.current || evidenceRepairRequestRef.current || qualityRepairRequestRef.current || exportBusyRef.current) return;
+    setSaved(false);
+    setRegenIdx(null);
+    setDeck((previous) => previous ? replaceSlideRange(previous, index, expected, replacement) : previous);
     setLocalQualityRevision((revision) => revision + 1);
   }
 
@@ -4307,6 +4316,7 @@ export function GenerateForm({
           onPatchBullet={patchBullet}
           onAddSlide={addSlide}
           onDuplicateSlide={duplicateSlide}
+          onReplaceSlideRange={replaceSlideParts}
           onMoveSlide={moveSlide}
           onDeleteSlide={deleteSlide}
           onDownloadPptx={handlePptx}

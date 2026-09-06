@@ -1,10 +1,20 @@
 import { describe, expect, it } from "vitest";
-import { generationTextParts, inspectTechnicalGrounding, mergeGroundingQuality, technicalValues } from "@/lib/generation-grounding";
+import { generationEvidenceForPart, generationTextParts, inspectTechnicalGrounding, mergeGroundingQuality, technicalValues } from "@/lib/generation-grounding";
 import { blockingGenerationQualityIssues, type GeneratedDoc, type GeneratedSlideDeck } from "@/lib/generate";
 
 const doc = (content: string): GeneratedDoc => ({ title: "장비 점검", sections: [{ heading: "훈련내용", content }], sources: [] });
 
 describe("교육자료 기술 수치 근거 대조", () => {
+  it("다른 장의 페이지에 같은 수치가 있어도 현재 장의 출처를 대신하지 않는다", () => {
+    const evidence = "[장비 A 교범 p.3]\n장비 A 사용압력 30 MPa\n\n---\n\n[장비 B 교범 p.4]\n장비 B 사용압력 20 MPa";
+    const deck: GeneratedSlideDeck = { title: "장비 B 점검", sources: [], slides: [{
+      title: "장비 B", bullets: ["장비 B 사용압력 30 MPa"], notes: "장비 B 교범의 기준을 확인합니다.", sourceRefs: ["[장비 B 교범 p.4]"],
+    }] };
+    expect(inspectTechnicalGrounding(deck, evidence).ok).toBe(false);
+    expect(generationEvidenceForPart(deck, 0, evidence)).not.toContain("장비 A 사용압력");
+    expect(inspectTechnicalGrounding({ ...deck, slides: [{ ...deck.slides[0], bullets: ["장비 B 사용압력 20 MPa"] }] }, evidence).ok).toBe(true);
+    expect(generationEvidenceForPart({ ...deck, slides: [{ ...deck.slides[0], sourceRefs: ["[없는 교범 p.4]"] }] }, 0, evidence)).toBe("");
+  });
   it("구조가 정상인 문서라도 원문에 없는 99999 MPa를 차단한다", () => {
     const report = inspectTechnicalGrounding(doc("시험압력은 99999 MPa로 설정합니다."), "사용압력 30 MPa");
     expect(report.ok).toBe(false);
@@ -15,6 +25,26 @@ describe("교육자료 기술 수치 근거 대조", () => {
   it("동일한 실제 값의 단위 변환을 허용하고 차원이 다른 값은 허용하지 않는다", () => {
     expect(inspectTechnicalGrounding(doc("300 bar / 50 cm / 1,000 N"), "30 MPa / 0.5m / 1 kN").ok).toBe(true);
     expect(inspectTechnicalGrounding(doc("장비의 시험압력 30 MPa"), "장비 질량 30 kg").ok).toBe(false);
+  });
+  it("한글·대소문자 압력 단위와 하이픈 범위도 검사한다", () => {
+    expect(technicalValues("280바 / 280BAR / 28mpa / 28MPa").map((value) => value.value))
+      .toEqual([28e6, 28e6, 28e6, 28e6]);
+    expect(inspectTechnicalGrounding(doc("경보45-55바"), "경보4.5~5.5MPa").ok).toBe(true);
+    expect(inspectTechnicalGrounding(doc("99999바"), "280bar").ok).toBe(false);
+  });
+  it("원문 내부의 대괄호 소제목을 출처 경계로 잘라내지 않는다", () => {
+    const deck: GeneratedSlideDeck = { title: "점검", sources: [], sourceLabels: ["[공기호흡기 교범 p.1]", "[주의사항]"], slides: [{ title: "점검",
+      bullets: ["착용 전 압력 280bar"], notes: "확인", sourceRefs: ["[공기호흡기 교범 p.1]"] }] };
+    const evidence = "[공기호흡기 교범 p.1]\n점검 항목\n[주의사항]\n착용 전 압력280bar";
+    expect(generationEvidenceForPart(deck, 0, evidence)).toContain("[주의사항]");
+    expect(inspectTechnicalGrounding(deck, evidence).ok).toBe(true);
+  });
+  it("덱 제목은 전체 출처로 검토하되 첫 장 본문은 다른 장 출처로 대신하지 않는다", () => {
+    const deck: GeneratedSlideDeck = { title: "300bar 장비 점검", sources: [], slides: [{ title: "교육 목표",
+      bullets: ["점검 순서를 설명합니다."], notes: "목표를 확인합니다.", sourceRefs: ["[개요 p.1]"] }] };
+    const evidence = "[개요 p.1]\n점검 순서를 설명합니다.\n\n---\n\n[장비 p.2]\n정격 압력300bar";
+    expect(inspectTechnicalGrounding(deck, evidence).ok).toBe(true);
+    expect(inspectTechnicalGrounding({ ...deck, slides: [{ ...deck.slides[0], bullets: ["압력300bar를 적용합니다."] }] }, evidence).ok).toBe(false);
   });
 
   it("교육 시간·인원·분량을 기술 한계값으로 오인하지 않는다", () => {

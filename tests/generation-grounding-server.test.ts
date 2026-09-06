@@ -54,7 +54,7 @@ describe("저장·공유·내보내기의 명시적 도식 근거 검토", () =>
     expect(await checkStoredMaterialGrounding(slideArgs)).toEqual({ ok: true });
     expect(mocks.evidence).toHaveBeenCalledOnce();
     expect(mocks.review).toHaveBeenCalledWith(expect.objectContaining({
-      draft: expect.objectContaining({ slides: [decision, decision] }),
+      draft: expect.objectContaining({ slides: slideArgs.content.slides }), partIndices: [1, 3],
       evidenceText: "장비 사용압력 30 MPa", modelKey: "gemini-flash", timeoutMs: 35_000,
     }));
   });
@@ -64,7 +64,7 @@ describe("저장·공유·내보내기의 명시적 도식 근거 검토", () =>
       { labelStepIndex: 1, bulletIndices: [1] }, { labelStepIndex: 2, bulletIndices: [0] },
     ] } };
     mocks.review.mockResolvedValue({ ok: false, issues: [{
-      code: "unsupported_evidence_claim", path: "slides.1.notes", partIndex: 1,
+      code: "unsupported_evidence_claim", path: "slides.3.notes", partIndex: 3,
       excerpt: "이상 있음 → 동료 확인 후 진행합니다", message: "이상이 있을 때 진행한다는 연결은 원문과 충돌합니다.",
     }] });
 
@@ -119,6 +119,29 @@ describe("저장·공유·내보내기의 명시적 도식 근거 검토", () =>
 });
 
 describe("서버 수치 검증의 실제 근거 경계", () => {
+  it("도식을 제거해도 같은 수치의 다른 장비 적용을 저장·다운로드 전에 검토한다", async () => {
+    mocks.review.mockResolvedValue({ ok: false, issues: [{
+      code: "unsupported_evidence_claim", path: "slides.1.bullets.0", partIndex: 1,
+      excerpt: "장비 B의 사용압력은 30 MPa", message: "원문은 장비 A에만 적용되는 압력입니다.",
+    }] });
+    const content = { ...slideArgs.content, slides: [legacy, { ...legacy, bullets: ["장비 B의 사용압력은 30 MPa"] }] };
+    expect(await checkStoredMaterialGrounding({ ...slideArgs, content })).toMatchObject({
+      ok: false, status: 422, error: expect.stringContaining("2번 슬라이드"),
+      issues: [{ path: "slides.1.bullets.0" }],
+    });
+    expect(mocks.review).toHaveBeenCalledWith(expect.objectContaining({ partIndices: [1], timeoutMs: 35_000 }));
+  });
+  it("도식 없는 기술 수치 검토의 시간초과도 저장 성공으로 처리하지 않는다", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.review.mockRejectedValue(new DOMException("timed out", "TimeoutError"));
+    expect(await checkStoredMaterialGrounding(args)).toMatchObject({ ok: false, status: 503 });
+    log.mockRestore();
+  });
+  it("훈련 시간과 교육 설계 평가율만 있는 자료는 모델을 추가 호출하지 않는다", async () => {
+    expect(await checkStoredMaterialGrounding({ ...args, content: { sections: [{ heading: "훈련평가",
+      content: "60분간 진행하고 체크리스트 항목의 80%를 수행하면 통과합니다." }], sources: [] } })).toEqual({ ok: true });
+    expect(mocks.review).not.toHaveBeenCalled();
+  });
   it("브라우저가 준 preview에 위조값이 있어도 서버 원문으로 거절한다", async () => {
     const result = await checkStoredMaterialGrounding({ ...args, content: {
       sections: [{ heading: "훈련내용", content: "압력 99999 MPa" }],

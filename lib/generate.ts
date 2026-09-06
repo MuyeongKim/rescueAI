@@ -3,6 +3,8 @@
 import { z } from "zod";
 import { inspectSlideDiagram, slideDiagramSchema, SLIDE_DIAGRAM_PROMPT, validSlideDiagram } from "@/lib/slide-diagram";
 import { normalizeDocumentText } from "@/lib/document-text";
+import { pressureClaims } from "@/lib/generation-pressure";
+import { validSourceVisualFocus, type SourceVisualFocus } from "@/lib/source-visual-focus";
 import {
   SOP_APPLICATION_MARKER,
   SOP_DEGRADED_DISCLOSURE,
@@ -290,11 +292,12 @@ const generatedSlideVisualMetadataSchema = z.object({
 
 export type GeneratedSlideVisualMetadata = z.infer<
   typeof generatedSlideVisualMetadataSchema
->;
+> & { sourceFocus?: SourceVisualFocus };
 
 /** 브라우저가 원문 페이지를 렌더한 뒤 PPTX 다운로드 직전에만 주입하는 런타임 값. */
 export type GeneratedSlideVisual = GeneratedSlideVisualMetadata & {
   imageData?: string;
+  sourcePageImageData?: string;
 };
 
 export const generatedSlideSchema = z.object({
@@ -563,7 +566,7 @@ export function bindSlideVisualsToSources(
       return {
         ...slide,
         visual: {
-          // 현재 브라우저 렌더러는 안전한 전체 페이지 삽입만 지원한다.
+          // 확대 범위는 같은 원문에 대한 사용자 선택일 때만 유지한다.
           mode: "source-page",
           documentId: source.document_id,
           page: source.page ?? undefined,
@@ -571,6 +574,7 @@ export function bindSlideVisualsToSources(
           altText: visual.altText,
           caption: visual.caption,
           fit: visual.fit ?? "contain",
+          sourceFocus: !mismatchedMetadata ? validSourceVisualFocus(visual.sourceFocus) : undefined,
         },
       };
     }),
@@ -630,6 +634,9 @@ export function buildGenerateSystemPrompt(
 - 훈련계획·교안은 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 않습니다. 검증된 출처는 서버가 문서 맨 뒤의 '근거 자료 및 출처' 목록으로 자동 구성합니다.
 - 슬라이드는 각 장의 sourceRefs에만 참고 자료에 표시된 라벨을 글자 하나 바꾸지 않고 적습니다(예: [문서명 p.3]).
 - 출처 라벨만으로 뒷받침되지 않는 새로운 주장·수치·절차를 추가하지 않습니다.
+- 기술 수치는 적용 대상·장비와 용도를 함께 씁니다. 훈련용 더미 설정, 대원 착용 전 점검, 충전, 경보·철수, 계산 예시를 서로 구분합니다.
+- 훈련·평가 교범의 값을 모든 현장의 진입·철수 기준으로 확대하지 않습니다. 해당 조건을 화면 문장에도 밝히고 같은 장의 출처와 연결합니다.
+- "자료에 없다/확인되지 않는다"는 안내도 원문과 대조합니다. 원문에 있는 주의사항을 누락 안내로 바꾸거나 일부 미확인을 전체 절차 부재로 확대하지 않습니다.
 
 [기술 사실과 훈련 가정의 경계]
 - 장비 사양·절차 순서·수치·위험성·중단 기준·SOP처럼 현장에서 사실로 받아들일 내용은 반드시 참고 자료에서 확인된 범위만 씁니다.
@@ -1145,7 +1152,6 @@ const PRESSURE_EQUIPMENT_FAMILIES = [
   },
 ] as const;
 type PressureEquipmentFamily = (typeof PRESSURE_EQUIPMENT_FAMILIES)[number]["key"];
-type PressureSemanticKind = "alarm" | "test" | "rated" | "entry" | "operating";
 
 const PRESSURE_DISTINCTION_CUE =
   /비교|구분|기종|모델|장비별|용기별|정격별|범위|[~∼]|부터|까지|이상.{0,20}(?:이하|미만)/;
@@ -1193,32 +1199,6 @@ function pressureEquipmentFamily(
   const local = PRESSURE_EQUIPMENT_FAMILIES.find(({ cue }) => cue.test(text));
   if (local) return local.key;
   return deckFamilies.size === 1 ? Array.from(deckFamilies)[0] : null;
-}
-
-function pressureSemanticKind(text: string, pressureIndex: number): PressureSemanticKind {
-  const cues: Array<{ kind: PressureSemanticKind; pattern: RegExp }> = [
-    { kind: "alarm", pattern: /경보|잔압|퇴각|철수|비상/g },
-    { kind: "test", pattern: /시험|검사|기밀|누설/g },
-    { kind: "rated", pattern: /정격|최대|완충|충전\s*(?:기준|압력)/g },
-    {
-      kind: "entry",
-      pattern: /최소|이상|미만|진입|착용\s*전|사용\s*전|출동\s*전|시작|초기|준비/g,
-    },
-  ];
-  let closestKind: PressureSemanticKind = "operating";
-  let closestDistance = Number.POSITIVE_INFINITY;
-  for (const { kind, pattern } of cues) {
-    let cue: RegExpExecArray | null;
-    while ((cue = pattern.exec(text)) !== null) {
-      const cueCenter = cue.index + cue[0].length / 2;
-      const distance = Math.abs(cueCenter - pressureIndex);
-      if (distance < closestDistance) {
-        closestKind = kind;
-        closestDistance = distance;
-      }
-    }
-  }
-  return closestKind;
 }
 
 function inspectSlideSafetyConsistency(
@@ -1291,36 +1271,29 @@ function inspectSlideSafetyConsistency(
   });
   const pressureGroups = new Map<
     string,
-    Array<{ valueBar: number; raw: string; slideIndex: number; comparison: boolean }>
+    Array<{ valueKey: string; raw: string; slideIndex: number; comparison: boolean }>
   >();
-  evidenceTexts.forEach((text, slideIndex) => {
-    const pattern = /(\d{1,4}(?:\.\d+)?)\s*(bar|바|mpa)/gi;
-    let match: RegExpExecArray | null;
-    while ((match = pattern.exec(text)) !== null) {
-      const start = Math.max(0, match.index - 55);
-      const end = Math.min(text.length, match.index + match[0].length + 55);
-      const context = text.slice(start, end);
-      const equipment = pressureEquipmentFamily(context, deckFamilies);
+  draft.slides.forEach((slide, slideIndex) => {
+    const text = [slide.title, ...slide.bullets, ...(slide.steps ?? []), slide.notes,
+      slide.visual?.caption, slide.visual?.altText].filter(Boolean).join("\n");
+    for (const claim of pressureClaims(text)) {
+      const equipment = pressureEquipmentFamily(claim.context, deckFamilies);
       if (!equipment) continue;
-      const kind = pressureSemanticKind(context, match.index - start);
-      const numericValue = Number(match[1]);
-      if (!Number.isFinite(numericValue)) continue;
-      const valueBar = match[2].toLocaleLowerCase() === "mpa" ? numericValue * 10 : numericValue;
-      const key = `${equipment}:${kind}`;
+      // A calculation example is not a universal operating threshold; its source is still reviewed.
+      if (claim.purpose === "example") continue;
+      const key = `${equipment}:${claim.subject}:${claim.purpose}`;
       const mentions = pressureGroups.get(key) ?? [];
       mentions.push({
-        valueBar,
-        raw: match[0],
+        valueKey: claim.valueKey,
+        raw: claim.raw,
         slideIndex,
-        comparison:
-          draft.slides[slideIndex].composition === "comparison" ||
-          PRESSURE_DISTINCTION_CUE.test(text),
+        comparison: PRESSURE_DISTINCTION_CUE.test(claim.context),
       });
       pressureGroups.set(key, mentions);
     }
   });
   pressureGroups.forEach((mentions) => {
-    const values = new Set(mentions.map(({ valueBar }) => valueBar));
+    const values = new Set(mentions.map(({ valueKey }) => valueKey));
     if (values.size <= 1) return;
     const slideIndices = new Set(mentions.map(({ slideIndex }) => slideIndex));
     const deliberateComparison =
@@ -2352,7 +2325,7 @@ ${slideRepairRules}
 - 시스템 프롬프트의 [참고 자료]에 있는 내용만 사용하세요. 분량을 채우려고 일반 상식·수치·절차·사례를 만들지 마세요.
 - 초안에 이미 있는 근거 있는 내용은 보존하되, 중복을 제거하고 교관·대원의 실제 행동과 평가 기준을 구체화하세요.
 - ${citationRepairRule} 확인할 수 없는 내용은 "참고 자료에서 확인되지 않습니다"라고 쓰세요.
-- 검사에서 지적하지 않은 항목도 앞뒤 흐름과 대상 수준이 자연스럽도록 함께 다듬으세요.
+- 지적된 문제를 해결하는 데 필요한 부분만 수정하세요. 근거가 확인된 다른 수치·적용 조건·행동 순서는 보존하세요. 문장을 다듬는 과정에서 새로운 기술 주장을 추가하지 마세요.
 - 설명이나 코드블록 없이, 요청 유형의 전체 JSON 객체만 반환하세요.
 
 [수정할 초안]
@@ -2522,6 +2495,7 @@ ${JSON.stringify({ composition: args.current.composition, steps: args.current.st
 - 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
 - ${condition.rule}
 - 다른 슬라이드와 중복되지 않게 작성하세요.
+- 수정 지시의 문제를 해결하는 데 필요한 부분만 바꾸고, 다른 수치·장비·훈련 조건과 행동 순서는 원문의 의미대로 보존하세요. 불확실한 한 항목 때문에 확인된 주의사항을 "자료에 없다"로 바꾸지 마세요.
 - 선택된 세부 훈련 방향이 있으면 그 범위에 집중하고 다른 방향을 새로 섞지 마세요.${sopRule}
 - 제목은 분류명이 아니라 이 장의 결론이 드러나는 서술형으로 ${MAX_SLIDE_TITLE_CHARS}자 이내로 쓰고, 핵심 문장은 구체적으로 2~4개를 각각 ${MAX_SLIDE_BULLET_CHARS}자 이내로 작성하세요.
 - 발표자 노트는 이유·시범 포인트·질문·흔한 실수·교정 방법 중 해당 내용을 포함해 4~7문장으로 작성하세요.

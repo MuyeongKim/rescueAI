@@ -18,12 +18,12 @@ export type GroundingRequest = {
 // 결정론적으로 대조하며, 같은 수치의 적용 조건·행동 순서는 별도 의미 검토가 담당한다.
 const NUMBER = "-?\\d+(?:,\\d{3})*(?:\\.\\d+)?";
 const TECHNICAL_VALUE = new RegExp(
-  `(${NUMBER})\\s*(?:[~∼–]\\s*(${NUMBER})\\s*)?(MPa|kPa|Pa|bar|psi|kN|N|kg|mm|cm|m|ppm|%|℃|°\\s*C)(?![a-zA-Z])`,
-  "g"
+  `(${NUMBER})\\s*(?:[~∼–-]\\s*(${NUMBER})\\s*)?(MPa|kPa|Pa|bar|바|psi|kN|N|kg|mm|cm|m|ppm|%|℃|°\\s*C)(?![a-zA-Z])`,
+  "gi"
 );
 const UNITS: Record<string, [string, number]> = {
-  MPa: ["pressure", 1e6], kPa: ["pressure", 1e3], Pa: ["pressure", 1],
-  bar: ["pressure", 1e5], psi: ["pressure", 6894.757293],
+  MPa: ["pressure", 1e6], mPa: ["pressure", 0.001], kPa: ["pressure", 1e3], Pa: ["pressure", 1],
+  bar: ["pressure", 1e5], "바": ["pressure", 1e5], psi: ["pressure", 6894.757293],
   kN: ["force", 1e3], N: ["force", 1], kg: ["mass", 1],
   mm: ["length", 0.001], cm: ["length", 0.01], m: ["length", 1],
   ppm: ["ppm", 1], "%": ["percent", 1], "℃": ["temperature", 1], "°C": ["temperature", 1],
@@ -32,7 +32,8 @@ const UNITS: Record<string, [string, number]> = {
 type TechnicalValue = { dimension: string; value: number; label: string };
 export function technicalValues(text: string): TechnicalValue[] {
   return Array.from(text.normalize("NFKC").replace(/−/g, "-").matchAll(TECHNICAL_VALUE)).flatMap((match) => {
-    const unit = match[3].replace(/\s/g, "");
+    const rawUnit = match[3].replace(/\s/g, "");
+    const unit = UNITS[rawUnit] ? rawUnit : Object.keys(UNITS).find((key) => key.toLowerCase() === rawUnit.toLowerCase())!;
     const [dimension, scale] = UNITS[unit];
     return [match[1], match[2]].filter(Boolean).map((number) => ({
       dimension,
@@ -56,6 +57,55 @@ export function generationTextParts(draft: GeneratedDoc | GeneratedSlideDeck) {
   if (parts.length === 0) return [{ path: "title", text: draft.title }];
   parts[0].text = `${draft.title}\n${parts[0].text}`;
   return parts;
+}
+
+/** A review still addresses one authored part, but an actionable issue points to its actual input. */
+export function generationFieldForExcerpt(
+  draft: GeneratedDoc | GeneratedSlideDeck, partIndex: number, excerpt: string
+): string {
+  const normalize = (text: string) => text.replace(/\s+/g, " ").trim();
+  const part = generationTextParts(draft)[partIndex];
+  if (!part) throw new Error("근거 검토 위치를 확인하지 못했습니다.");
+  if (!("slides" in draft)) return part.path;
+  const slide = draft.slides[partIndex];
+  if (!slide) return part.path;
+  const fields = [
+    { path: `slides.${partIndex}.title`, text: slide.title },
+    ...slide.bullets.map((text, i) => ({ path: `slides.${partIndex}.bullets.${i}`, text })),
+    ...(slide.steps ?? []).map((text, i) => ({ path: `slides.${partIndex}.steps.${i}`, text })),
+    { path: `slides.${partIndex}.notes`, text: slide.notes },
+    { path: `slides.${partIndex}.visual.caption`, text: slide.visual?.caption ?? "" },
+    { path: `slides.${partIndex}.visual.altText`, text: slide.visual?.altText ?? "" },
+  ];
+  return fields.find(({ text }) => normalize(text).includes(normalize(excerpt)))?.path ?? part.path;
+}
+
+/** Labeled evidence is scoped strictly: a missing selected label cannot fall back to another page. */
+export function generationEvidenceForPart(
+  draft: GeneratedDoc | GeneratedSlideDeck, partIndex: number, evidenceText: string
+): string {
+  return generationEvidenceBlocks(draft, partIndex, evidenceText).join("\n\n");
+}
+
+/** Independent source blocks can be shared by several slides without multiplying review input. */
+export function generationEvidenceBlocks(
+  draft: GeneratedDoc | GeneratedSlideDeck, partIndex: number, evidenceText: string
+): string[] {
+  if (!("slides" in draft)) return [evidenceText];
+  const refs = draft.slides[partIndex]?.sourceRefs ?? [];
+  const key = (value: string) => value.normalize("NFKC").replace(/\s+/g, "").toLocaleLowerCase();
+  const knownLabels = new Set([
+    ...draft.sources.map((source) => `[${source.doc.trim()}${source.page == null ? "" : ` p.${source.page}`}]`),
+  ].map(key));
+  const headers = Array.from(evidenceText.matchAll(/(?:^|\n)(\[[^\[\]\r\n]{2,}\])(?=\r?\n)/g))
+    .filter((header) => knownLabels.has(key(header[1])) || /\bp\.\s*\d+\]$/i.test(header[1]));
+  // Old stored material and native unlabelled context retain their original contract.
+  if (headers.length === 0) return [evidenceText];
+  const selected = new Set(refs.map(key));
+  const prefix = evidenceText.slice(0, headers[0].index).trim();
+  return [...(refs.length === 0 && prefix ? [prefix] : []), ...headers.flatMap((header, index) => refs.length === 0 || selected.has(key(header[1]))
+    ? [evidenceText.slice(header.index, headers[index + 1]?.index ?? evidenceText.length).trim()]
+    : [])];
 }
 
 function sameValue(left: TechnicalValue, right: TechnicalValue) {
@@ -100,17 +150,23 @@ export function inspectTechnicalGrounding(
   evidenceText: string,
   request: GroundingRequest = {}
 ): GenerationQualityReport {
-  const supported = technicalValues(evidenceText);
   // 사용자 요청은 장비 압력/농도/온도/하중 등의 근거가 아니다. 명시한 훈련장
   // 평면 크기만 장소 조건으로 사용할 수 있으며, 기술 안전 기준은 원문이 필요하다.
   const trainingPlaceConditions = contextualValues(request.conditions ?? "").filter(isTrainingPlaceLength);
   const issues: GenerationQualityIssue[] = [];
-  for (const part of generationTextParts(draft)) {
+  for (const [partIndex, part] of generationTextParts(draft).entries()) {
+    const supported = technicalValues(generationEvidenceForPart(draft, partIndex, evidenceText));
+    const separateTitle = "slides" in draft && partIndex === 0 && draft.slides.length > 0;
+    const bodyText = separateTitle ? part.text.slice(draft.title.length + 1) : part.text;
+    const claims = [
+      ...contextualValues(bodyText).map((claim) => ({ ...claim, supported })),
+      ...(separateTitle ? contextualValues(draft.title).map((claim) => ({ ...claim, supported: technicalValues(evidenceText) })) : []),
+    ];
     const seen = new Set<string>();
-    for (const claim of contextualValues(part.text)) {
+    for (const claim of claims) {
       const key = `${claim.dimension}:${claim.value}`;
       if (seen.has(key)) continue;
-      const found = supported.some((value) => sameValue(claim, value)) ||
+      const found = claim.supported.some((value) => sameValue(claim, value)) ||
         isEducationalDesignValue(claim, trainingPlaceConditions);
       if (found) continue;
       // 허용된 평가율/가상 구간과 같은 수치가 실제 기술 기준에도 쓰이면 검사한다.

@@ -15,6 +15,7 @@ import {
   Maximize2,
   Plus,
   Presentation,
+  Scissors,
   Trash2,
   X,
 } from "lucide-react";
@@ -29,6 +30,8 @@ import type {
 import { generatedPptxSlideCount } from "@/lib/pptx-plan";
 import { buildSlideLayoutPlan, inspectSlideDeckLayout, type SlideTextMeasurer } from "@/lib/slide-layout";
 import { validSlideDiagram } from "@/lib/slide-diagram";
+import { planSlideSplit } from "@/lib/slide-split";
+import { SOURCE_VISUAL_FOCUS, SOURCE_VISUAL_FOCUS_LABELS, validSourceVisualFocus } from "@/lib/source-visual-focus";
 import { editableDiagramKind, SlideDiagramEditor, SlideDiagramReadable } from "@/components/generate/SlideDiagramEditor";
 import { SlideLayoutIssues, slideIssueLocation } from "@/components/generate/SlideLayoutIssues";
 import { SlidePlanPreview as SlidePreview } from "@/components/generate/SlidePlanPreview";
@@ -368,6 +371,8 @@ export function normalizedCompositionPatch(
         altText: `${sourceCandidate.documentTitle} ${sourceCandidate.page}쪽 원문 페이지`,
         caption: sourceCandidate.label,
         fit: "contain",
+        sourceFocus: slide.visual?.documentId === sourceCandidate.documentId && slide.visual?.page === sourceCandidate.page
+          ? validSourceVisualFocus(slide.visual.sourceFocus) : undefined,
       },
     };
   }
@@ -572,6 +577,7 @@ export function SlideDeckResult({
   onPatchSlide,
   onAddSlide,
   onDuplicateSlide,
+  onReplaceSlideRange,
   onMoveSlide,
   onDeleteSlide,
   onDownloadPptx,
@@ -590,6 +596,7 @@ export function SlideDeckResult({
   onPatchBullet: (slideIndex: number, bulletIndex: number, value: string) => void;
   onAddSlide: (afterIndex: number) => void;
   onDuplicateSlide: (index: number) => void;
+  onReplaceSlideRange?: (index: number, expected: readonly GeneratedSlide[], replacement: readonly GeneratedSlide[]) => void;
   onMoveSlide: (index: number, direction: -1 | 1) => void;
   onDeleteSlide: (index: number) => void;
   onDownloadPptx: () => void;
@@ -612,6 +619,7 @@ export function SlideDeckResult({
   } | null>(null);
   useEffect(() => () => { sourcePreviewRequestRef.current += 1; }, []);
   const [announcement, setAnnouncement] = useState("");
+  const [lastSplit, setLastSplit] = useState<{ index: number; original: GeneratedSlide; parts: [GeneratedSlide, GeneratedSlide] } | null>(null);
   const pendingIssueFocusRef = useRef<{ index: number | null; fieldId?: string } | null>(null);
   const [textMeasurer, setTextMeasurer] = useState<SlideTextMeasurer | undefined>();
   const [fontCheckFailed, setFontCheckFailed] = useState(false);
@@ -623,6 +631,8 @@ export function SlideDeckResult({
     return () => { active = false; };
   }, []);
   const selectedSlide = deck.slides[selectedIndex];
+  const splitPlan = selectedSlide ? planSlideSplit(selectedSlide, deck.slides.length) : null;
+  const splitCanUndo = lastSplit !== null && JSON.stringify(deck.slides.slice(lastSplit.index, lastSplit.index + 2)) === JSON.stringify(lastSplit.parts);
   const selectedVisualCandidates = selectedSlide
     ? verifiedSlideVisualCandidates(selectedSlide, deck.sources)
     : [];
@@ -677,8 +687,8 @@ export function SlideDeckResult({
   });
   const expandedSlide = expandedIndex !== null ? deck.slides[expandedIndex] : undefined;
 
-  async function handlePreviewSource(index: number) {
-    const slide = deck.slides[index];
+  async function handlePreviewSource(index: number, selected?: GeneratedSlide) {
+    const slide = selected ?? deck.slides[index];
     if (!slide || slideVisualKind(slide) !== "source") return;
     const key = previewKey(slide);
     const request = ++sourcePreviewRequestRef.current;
@@ -691,7 +701,7 @@ export function SlideDeckResult({
       setSourcePreview({
         key, slide: next, status: prepared.resolved > 0 ? "ready" : "fallback",
         message: prepared.resolved > 0
-          ? `원문 그림 확인 완료 · ${next.visual?.sourceRef ?? "연결된 페이지"}`
+          ? `원문 그림 확인 완료 · ${next.visual?.sourceRef ?? "연결된 페이지"}${next.visual?.sourceFocus ? ` · ${SOURCE_VISUAL_FOCUS_LABELS[next.visual.sourceFocus]} 확대` : ""}`
           : prepared.fallbacks.some((fallback) => fallback.reason === "text-only-page")
             ? "그림이 없는 텍스트 위주 페이지입니다. 다운로드에서도 아래 내용 구도로 대체합니다."
             : "원문 그림을 가져오지 못해 현재는 아래 내용 구도로 표시합니다. 다운로드할 때 다시 확인합니다.",
@@ -712,6 +722,16 @@ export function SlideDeckResult({
           {current?.status === "loading" ? "원문 그림 확인 중…" : current ? "원문 그림 다시 확인" : "원문 그림 미리 확인"}
         </Button>
         <p role="status" className="text-sm leading-relaxed text-muted-foreground">{current?.message ?? "실제 원문 그림과 대체 여부를 다운로드 전에 확인합니다."}</p>
+        {current?.slide?.visual?.sourcePageImageData && (
+          <details className="rounded-md border bg-background p-3">
+            <summary className="min-h-12 cursor-pointer py-3 text-base font-medium">전체 원문과 확대 범위 확인</summary>
+            <p className="mb-3 text-sm leading-relaxed text-muted-foreground">
+              {SOURCE_VISUAL_FOCUS_LABELS[current.slide.visual.sourceFocus!]}을 확대했습니다. 그림의 설명이나 주의사항이 범위 밖에 있으면 전체 페이지로 되돌려 주세요. PPT에도 전체 페이지를 함께 넣습니다.
+            </p>
+            <Image src={current.slide.visual.sourcePageImageData} alt={`${current.slide.visual.sourceRef ?? "원문"} 전체 페이지`}
+              width={900} height={1200} unoptimized className="h-auto w-full object-contain" />
+          </details>
+        )}
       </div>
     );
   }
@@ -805,6 +825,21 @@ export function SlideDeckResult({
     onDuplicateSlide(selectedIndex);
     setSelectedIndex(selectedIndex + 1);
     setAnnouncement(`슬라이드 ${selectedIndex + 1}을 복제해 ${selectedIndex + 2}번에 추가했습니다.`);
+  }
+
+  function handleSplitSelected() {
+    if (editorLocked || !selectedSlide || !splitPlan?.ok || !onReplaceSlideRange) return;
+    onReplaceSlideRange(selectedIndex, [selectedSlide], splitPlan.slides);
+    setLastSplit({ index: selectedIndex, original: selectedSlide, parts: splitPlan.slides });
+    setAnnouncement(`슬라이드 ${selectedIndex + 1}을 두 장으로 나눴습니다. 문장·발표자 노트·출처를 유지했습니다. 나눈 장을 수정하기 전에는 되돌릴 수 있습니다.`);
+  }
+
+  function handleUndoSplit() {
+    if (editorLocked || !lastSplit || !splitCanUndo || !onReplaceSlideRange) return;
+    onReplaceSlideRange(lastSplit.index, lastSplit.parts, [lastSplit.original]);
+    setSelectedIndex(lastSplit.index);
+    setLastSplit(null);
+    setAnnouncement("장 나누기를 되돌렸습니다. 다른 장의 수정 내용은 유지됩니다.");
   }
 
   function confirmDelete() {
@@ -1084,6 +1119,10 @@ export function SlideDeckResult({
                       >
                         <Copy className="h-4 w-4" aria-hidden="true" /> 복제
                       </Button>
+                      {onReplaceSlideRange && <Button type="button" variant="outline" className="h-12 gap-1.5 md:h-11"
+                        disabled={editorLocked || !splitPlan?.ok} aria-describedby="slide-split-guidance" onClick={handleSplitSelected}>
+                        <Scissors className="h-4 w-4" aria-hidden="true" /> 장 나누기
+                      </Button>}
                       <Button
                         type="button"
                         variant="outline"
@@ -1107,6 +1146,12 @@ export function SlideDeckResult({
                       </Button>
                     </div>
                   </div>
+
+                  {onReplaceSlideRange && splitPlan && <div className="space-y-1 text-sm text-muted-foreground">
+                    <p id="slide-split-guidance">{splitPlan.ok ? splitPlan.description : splitPlan.reason}</p>
+                    {lastSplit && (splitCanUndo ? <Button type="button" variant="outline" className="min-h-12" disabled={editorLocked} onClick={handleUndoSplit}>나누기 되돌리기</Button>
+                      : <p>나눈 장이 수정되거나 이동되어 되돌리기를 종료했습니다. 현재 편집 내용은 유지됩니다.</p>)}
+                  </div>}
 
                   <article className="overflow-hidden rounded-lg border bg-card">
                     <div className="grid gap-4 p-3 xl:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.1fr)]">
@@ -1239,6 +1284,27 @@ export function SlideDeckResult({
                               <p className="text-xs leading-relaxed text-muted-foreground">
                                 실제 사진·도해·표가 없는 페이지는 내보낼 때 자동으로 도형·내용 구도로 대체합니다.
                               </p>
+                              {selectedVisualCandidate && (
+                                <div className="space-y-1.5 pt-3">
+                                  <label htmlFor={`slide-source-focus-${selectedIndex}`} className="text-sm font-semibold">원문 확대 범위</label>
+                                  <select id={`slide-source-focus-${selectedIndex}`} value={selectedSlide.visual?.sourceFocus ?? "full"}
+                                    disabled={editorLocked} aria-describedby={`slide-source-focus-help-${selectedIndex}`}
+                                    className="h-12 w-full rounded-md border border-input bg-background px-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    onChange={(event) => {
+                                      if (!selectedSlide.visual) return;
+                                      const visual = { ...selectedSlide.visual, sourceFocus: validSourceVisualFocus(event.target.value),
+                                        imageData: undefined, sourcePageImageData: undefined, fit: "contain" as const };
+                                      onPatchSlide(selectedIndex, { visual });
+                                      void handlePreviewSource(selectedIndex, { ...selectedSlide, visual });
+                                    }}>
+                                    <option value="full">전체 페이지</option>
+                                    {SOURCE_VISUAL_FOCUS.map((focus) => <option key={focus} value={focus}>{SOURCE_VISUAL_FOCUS_LABELS[focus]} 확대</option>)}
+                                  </select>
+                                  <p id={`slide-source-focus-help-${selectedIndex}`} className="text-sm leading-relaxed text-muted-foreground">
+                                    원문을 보고 필요한 범위를 선택하세요. 확대해도 전체 페이지와 출처는 함께 유지하며, 언제든 전체 표시로 되돌릴 수 있습니다.
+                                  </p>
+                                </div>
+                              )}
                             </div>
                           )}
 

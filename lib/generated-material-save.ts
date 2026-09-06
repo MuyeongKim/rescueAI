@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { inspectSlideDiagram, slideDiagramSchema } from "@/lib/slide-diagram";
+import { SOURCE_VISUAL_FOCUS } from "@/lib/source-visual-focus";
 
 import {
   MAX_GENERATION_CONDITIONS_CHARS,
@@ -31,7 +32,7 @@ export class LimitedJsonBodyError extends Error {
 
 /**
  * Content-Length가 없거나 거짓이어도 실제 스트림 바이트를 세어 상한을 지킨다.
- * JSON reviver 단계에서 imageData를 제거해 이후 어떤 스키마가 추가되더라도 저장되지 않게 한다.
+ * JSON reviver 단계에서 원문·확대 런타임 이미지를 제거해 어떤 스키마에서도 저장되지 않게 한다.
  */
 export async function readLimitedJsonBody(
   request: Request,
@@ -88,7 +89,7 @@ export async function readLimitedJsonBody(
   }
 
   try {
-    return JSON.parse(text, (key, value) => (key === "imageData" ? undefined : value));
+    return JSON.parse(text, (key, value) => (key === "imageData" || key === "sourcePageImageData" ? undefined : value));
   } catch {
     throw new LimitedJsonBodyError("올바른 JSON 요청이 아닙니다.", 400);
   }
@@ -163,6 +164,7 @@ const visualSchema = z
     altText: optionalText(300),
     caption: optionalText(200),
     fit: z.enum(SLIDE_VISUAL_FITS).optional(),
+    sourceFocus: z.enum(SOURCE_VISUAL_FOCUS).optional(),
   })
   .strip();
 

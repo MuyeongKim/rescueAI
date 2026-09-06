@@ -2,14 +2,40 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import JSZip from "jszip";
 import { buildPptxBytes } from "@/lib/pptx";
 import { generatedPptxSlideCount, planPptxSourceAppendix } from "@/lib/pptx-plan";
-import { buildSlideLayoutPlan, inspectSlideDeckLayout } from "@/lib/slide-layout";
-import { conservativeSlideTextMeasure, fitSlideText, wrapSlideText } from "@/lib/slide-text";
+import { buildSlideLayoutPlan, coverTitlePlan, inspectSlideDeckLayout } from "@/lib/slide-layout";
+import { conservativeSlideTextMeasure, fitSlideText, wrapSlideText, wrapSlideTitle } from "@/lib/slide-text";
 import type { GeneratedSlideDeck } from "@/lib/generate";
 
 const compact = (text: string) => text.normalize("NFC").replace(/\s/g, "");
 const deck: GeneratedSlideDeck = { title: "교육 검증", slides: [{ title: "상태 확인", bullets: ["진입 전 상태를 확인합니다."], notes: "교관 설명" }], sources: [] };
 
 describe("한글 글폭과 전문 보존", () => {
+  it("긴 표지 제목의 마지막 짧은 단어를 이웃 단어와 배치하고 줄 수를 늘리지 않는다", async () => {
+    const title = "배포 검증용 — 공기호흡기 점검과 안전한 착용 절차";
+    const plan = coverTitlePlan(title);
+    const greedy = wrapSlideText(title, 11.55 * 72 - 1.5, plan.fontSize, true);
+    const imbalance = (lines: string[]) => {
+      const widths = lines.map((line) => conservativeSlideTextMeasure(line, plan.fontSize, true));
+      return Math.max(...widths) - Math.min(...widths);
+    };
+    expect(plan.fits).toBe(true);
+    expect(plan.lines).toHaveLength(greedy.length);
+    expect(plan.lines.at(-1)).not.toBe("절차");
+    expect(imbalance(plan.lines)).toBeLessThan(imbalance(greedy));
+    expect(compact(plan.lines.join(""))).toBe(compact(title));
+    const zip = await JSZip.loadAsync(await buildPptxBytes({ ...deck, title }, "일반구조", ""));
+    const xml = await zip.file("ppt/slides/slide1.xml")!.async("string");
+    for (const line of plan.lines) expect(xml).toContain(line);
+  });
+
+  it("제목에서 명시한 줄바꿈과 긴 단어를 보존하고 측정한 폭을 넘지 않는다", () => {
+    const paragraphs = ["현장 안전 조건과 보고 절차", "Supercalifragilisticexpialidocious 확인"];
+    const lines = wrapSlideTitle(paragraphs.join("\n"), 180, 22);
+    expect(lines).toEqual(paragraphs.flatMap((paragraph) => wrapSlideTitle(paragraph, 180, 22)));
+    expect(compact(lines.join(""))).toBe(compact(paragraphs.join("")));
+    expect(lines.every((line) => conservativeSlideTextMeasure(line, 22, true) <= 180)).toBe(true);
+  });
+
   it("NFD로 저장된 한글은 NFC와 같은 줄 수로 배치하고 자모 중간을 나누지 않는다", () => {
     const text = "재난현장 표준작전절차 구조대원 안전관리 지침";
     const decomposed = text.normalize("NFD");

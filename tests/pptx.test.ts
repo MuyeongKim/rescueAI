@@ -150,6 +150,20 @@ describe("PPTX 발표자 노트 출처", () => {
 });
 
 describe("PPTX 실제 파일 생성", () => {
+  it("원문 확대 그림과 전체 페이지를 독립 이미지로 넣고 실제 출처를 유지한다", async () => {
+    const imageData = `data:image/png;base64,${readFileSync(join(process.cwd(), "public/logo-jbfire.png")).toString("base64")}`;
+    const current = slide("원문 일부를 확대해 확인합니다", { composition: "visual-explanation",
+      visual: { mode: "source-page", imageData, sourcePageImageData: imageData, sourceFocus: "bottom",
+        sourceRef: "[장비 교범 p.3]", caption: "사용자가 고른 그림의 설명" }, sourceRefs: ["[장비 교범 p.3]"] });
+    const zip = await JSZip.loadAsync(await buildPptxBytes({ title: "원문 확대 검증", slides: [current], sources: [] }, "화재", ""));
+    const xml = await zip.file("ppt/slides/slide2.xml")!.async("string");
+    expect(xml.match(/<p:pic>/g)).toHaveLength(2);
+    expect(xml).toContain("확대 그림의 전체 원문 페이지");
+    expect(xml).toContain("하단 절반 확대");
+    expect(xml).toContain("[장비 교범 p.3]");
+    expect(xml).toContain("사용자가 고른 그림의 설명");
+  });
+
   it("구도를 바꿔도 모든 핵심 문장과 마지막 중단·보고 단계를 PPT 본문에 보존한다", async () => {
     const compositions = ["statement", "list", "process", "comparison", "timeline", "decision-flow", "checklist", "scenario", "visual-explanation", "summary"] as const;
     const input = compositions.map((composition) => slide(`${composition} 보존 검사`, {

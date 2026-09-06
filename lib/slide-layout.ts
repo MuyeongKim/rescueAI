@@ -1,6 +1,7 @@
 import type { GeneratedSlide, GeneratedSlideDeck, SlideDeckMode } from "@/lib/generate";
 import { validSlideDiagram, type SlideDiagram } from "@/lib/slide-diagram";
-import { fitSlideText, type SlideTextMeasurer, type SlideTextBox } from "@/lib/slide-text";
+import { SOURCE_VISUAL_FOCUS_LABELS, validSourceVisualFocus } from "@/lib/source-visual-focus";
+import { fitSlideText, fitSlideTitle, type SlideTextMeasurer, type SlideTextBox } from "@/lib/slide-text";
 export { SLIDE_FONT_FAMILY, SLIDE_LINE_HEIGHT } from "@/lib/slide-text";
 export type { SlideTextMeasurer } from "@/lib/slide-text";
 
@@ -20,7 +21,7 @@ export type SlidePlanShape = Box & {
 };
 export type SlideLayoutPlan = {
   layout: RenderLayout; texts: SlidePlanText[]; shapes: SlidePlanShape[];
-  image?: Box; dark: boolean; title: SlidePlanText; issues: SlideLayoutIssue[];
+  image?: Box; imageContext?: Box; dark: boolean; title: SlidePlanText; issues: SlideLayoutIssue[];
   variant: string;
 };
 export type SlideLayoutIssue = {
@@ -100,7 +101,7 @@ export function resolveSlideLayout(slide: GeneratedSlide): RenderLayout {
 
 /** 표지와 부록도 같은 글폭·최소 크기 규칙을 사용한다. */
 export function coverTitlePlan(title: string, options: SlideLayoutOptions = {}) {
-  return fitSlideText(title, SLIDE_COVER_TITLE_BOX, [44, 38, 32, 28], true, options.measureText);
+  return fitSlideTitle(title, SLIDE_COVER_TITLE_BOX, [44, 38, 32, 28], options.measureText);
 }
 
 function itemPath(id: string): string {
@@ -118,7 +119,7 @@ export function buildSlideLayoutPlan(slide: GeneratedSlide, mode: SlideDeckMode 
   const requested = resolveSlideLayout(slide);
   const diagram = validSlideDiagram(slide);
   const measure = options.measureText;
-  const titleFit = fitSlideText(slide.title, SLIDE_TITLE_BOX, [36, 32, 28], true, measure);
+  const titleFit = fitSlideTitle(slide.title, SLIDE_TITLE_BOX, [36, 32, 28], measure);
   const title: SlidePlanText = { id: "title", text: slide.title, ...SLIDE_TITLE_BOX,
     fontSize: titleFit.fontSize, lines: titleFit.lines, bold: true, color: requested === "summary" ? "white" : "ink" };
   const headerIssues: SlideLayoutIssue[] = titleFit.fits ? [] : [{ code: "slide_layout_overflow", severity: "error", path: "title",
@@ -147,10 +148,29 @@ export function buildSlideLayoutPlan(slide: GeneratedSlide, mode: SlideDeckMode 
     add(plan, `step-${index}`, steps[index] ?? "", box, sizes, { bold: true, align, color });
   const describe = (plan: SlideLayoutPlan, indices: number[], box: Box, sizes = [22, 20, 18]) => {
     const gap = indices.length > 1 ? 0.12 : 0;
-    const h = (box.h - Math.max(0, indices.length - 1) * gap) / Math.max(1, indices.length);
-    indices.forEach((index, position) => bullet(plan, index, { ...box, y: box.y + position * (h + gap), h }, sizes));
+    const available = box.h - Math.max(0, indices.length - 1) * gap;
+    let fontSize = sizes.at(-1) ?? 18;
+    let heights: number[] = [];
+    for (const size of sizes) {
+      fontSize = size;
+      heights = indices.map((index) => fitSlideText(bullets[index], { ...box, h: 100 }, [size], false, measure).requiredHeight);
+      if (heights.reduce((sum, height) => sum + height, 0) <= available) break;
+    }
+    const total = heights.reduce((sum, height) => sum + height, 0);
+    let y = box.y;
+    indices.forEach((index, position) => {
+      const h = total <= available ? heights[position] + (available - total) / indices.length : available * heights[position] / total;
+      bullet(plan, index, { ...box, y, h }, [fontSize]);
+      y += h + gap;
+    });
   };
   const bodyErrors = (plan: SlideLayoutPlan) => plan.issues.some((issue) => issue.severity === "error" && issue.path !== "title");
+  const groupHeight = (indices: number[], width: number, size = 22) => indices.reduce((sum, index) =>
+    sum + fitSlideText(bullets[index], { x: 0, y: 0, w: width, h: 100 }, [size], false, measure).requiredHeight, 0) + Math.max(0, indices.length - 1) * 0.12;
+  const rowHeights = (desired: number[], available: number) => {
+    const total = desired.reduce((sum, height) => sum + height, 0);
+    return desired.map((height) => total <= available ? height + (available - total) / desired.length : height * available / total);
+  };
 
   const generic = (): SlideLayoutPlan => {
     const plan = makePlan(requested === "summary" ? "summary" : "content", "full-width");
@@ -182,14 +202,18 @@ export function buildSlideLayoutPlan(slide: GeneratedSlide, mode: SlideDeckMode 
     const plan = makePlan(requested === "timeline" ? "timeline" : "process", vertical ? "process-rows" : "process-columns");
     const count = data.nodes.length;
     if (vertical) {
-      const row = 4.6 / count;
+      const heights = rowHeights(data.nodes.map((node) => Math.max(0.5,
+        fitSlideText(steps[node.stepIndex], { x: 0, y: 0, w: 2.5, h: 100 }, [24], true, measure).requiredHeight,
+        groupHeight(node.bulletIndices, 8.15)) + 0.12), 4.6);
+      let y = 2.1;
       data.nodes.forEach((node, index) => {
-        const y = 2.1 + row * index;
+        const row = heights[index];
         if (index < count - 1) shape(plan, "line", { x: 1.03, y: y + 0.45, w: 0, h: row - 0.38 }, { stroke: "line", arrow: true });
         shape(plan, "ellipse", { x: 0.8, y, w: 0.46, h: 0.46 }, { fill: "navy" });
         add(plan, `number-${index}`, String(index + 1), { x: 0.8, y: y + 0.06, w: 0.46, h: 0.34 }, [16], { bold: true, color: "white", align: "center" });
         step(plan, node.stepIndex, { x: 1.48, y, w: 2.5, h: row - 0.1 }, [24, 22, 20, 18]);
         describe(plan, node.bulletIndices, { x: 4.22, y, w: 8.15, h: row - 0.12 }, [22, 20, 18, 16]);
+        y += row;
       });
     } else {
       const w = 11.6 / count;
@@ -228,11 +252,16 @@ export function buildSlideLayoutPlan(slide: GeneratedSlide, mode: SlideDeckMode 
     shape(plan, "rect", box, { fill: "navy" });
     step(plan, data.conditionStepIndex, { x: box.x + 0.18, y: box.y + 0.13, w: box.w - 0.36, h: box.h - 0.18 }, [28, 24, 20], "center", "white");
     if (rows) {
+      const heights = rowHeights(data.branches.map((branch) => Math.max(
+        fitSlideText(steps[branch.labelStepIndex], { x: 0, y: 0, w: 3.05, h: 100 }, [24], true, measure).requiredHeight,
+        groupHeight(branch.bulletIndices, 8.2)) + 0.08), 3.24);
+      let y = 3.23;
       data.branches.forEach((branch, index) => {
-        const y = 3.23 + index * 1.69;
-        step(plan, branch.labelStepIndex, { x: 0.9, y, w: 3.05, h: 1.44 }, [28, 24, 20]);
-        describe(plan, branch.bulletIndices, { x: 4.2, y, w: 8.2, h: 1.44 }, [22, 20, 18, 16]);
-        if (index === 0) shape(plan, "line", { x: 0.9, y: y + 1.58, w: 11.5, h: 0 }, { stroke: "line" });
+        const h = heights[index];
+        step(plan, branch.labelStepIndex, { x: 0.9, y, w: 3.05, h }, [28, 24, 20]);
+        describe(plan, branch.bulletIndices, { x: 4.2, y, w: 8.2, h }, [22, 20, 18, 16]);
+        if (index === 0) shape(plan, "line", { x: 0.9, y: y + h + 0.1, w: 11.5, h: 0 }, { stroke: "line" });
+        y += h + 0.2;
       });
     } else {
       shape(plan, "line", { x: 6.66, y: 3.11, w: 0, h: 0.36 }, { stroke: "ink" });
@@ -268,11 +297,17 @@ export function buildSlideLayoutPlan(slide: GeneratedSlide, mode: SlideDeckMode 
     candidate = makePlan(requested, "source-explanation");
     const caption = slide.visual?.caption?.trim() || slide.visual?.sourceRef?.trim() || "원문 출처는 발표자 노트에서 확인";
     const visualHeight = steps.length ? 3.64 : 4.5;
-    const captionFit = fitSlideText(caption, { x: 0.9, y: 0, w: 5.58, h: 100 }, [16], false, measure);
-    const captionHeight = Math.max(0.45, captionFit.requiredHeight + 0.05);
+    const focus = validSourceVisualFocus(slide.visual?.sourceFocus);
+    const showContext = Boolean(focus && slide.visual?.sourcePageImageData);
+    const captionWidth = showContext ? 4.43 : 5.58;
+    const sourceRef = slide.visual?.sourceRef?.trim();
+    const displayCaption = showContext ? `${SOURCE_VISUAL_FOCUS_LABELS[focus!]} 확대 · 왼쪽은 전체 원문\n${caption}${sourceRef && !caption.includes(sourceRef) ? `\n${sourceRef}` : ""}` : caption;
+    const captionFit = fitSlideText(displayCaption, { x: 0.9, y: 0, w: captionWidth, h: 100 }, [16], false, measure);
+    const captionHeight = Math.max(showContext ? 1.25 : 0.45, captionFit.requiredHeight + 0.05);
     const imageHeight = Math.max(1.15, visualHeight - captionHeight - 0.14);
     candidate.image = { x: 0.9, y: 2.13, w: 5.58, h: imageHeight };
-    add(candidate, "image-caption", caption, { x: 0.9, y: 2.13 + imageHeight + 0.14, w: 5.58, h: visualHeight - imageHeight - 0.14 }, [16], { color: "muted" });
+    if (showContext) candidate.imageContext = { x: 0.9, y: 2.13 + imageHeight + 0.14, w: 1, h: visualHeight - imageHeight - 0.14 };
+    add(candidate, "image-caption", displayCaption, { x: showContext ? 2.05 : 0.9, y: 2.13 + imageHeight + 0.14, w: captionWidth, h: visualHeight - imageHeight - 0.14 }, [16], { color: "muted" });
     describe(candidate, bullets.map((_, index) => index), { x: 7.02, y: 2.13, w: 5.37, h: steps.length ? 3.64 : 4.5 }, [22, 20, 18, 16]);
     const w = 11.48 / Math.max(1, steps.length);
     steps.forEach((_, index) => step(candidate, index, { x: 0.9 + w * index, y: 5.98, w: w - 0.08, h: 0.71 }, [18, 16], "center"));

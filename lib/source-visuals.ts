@@ -7,6 +7,7 @@ import {
   type GeneratedSlideDeck,
 } from "@/lib/generate";
 import { validSlideDiagram } from "@/lib/slide-diagram";
+import { sourceVisualFocusRegion, validSourceVisualFocus, type SourceVisualFocus } from "@/lib/source-visual-focus";
 
 const PDF_WORKER_PATH = "/pdf.worker.min.mjs";
 const MAX_SOURCE_VISUALS_PER_DECK = 8;
@@ -17,7 +18,7 @@ const MAX_RENDER_WIDTH = 1440;
 const MAX_RENDER_HEIGHT = 1080;
 const MAX_RENDER_PIXELS = MAX_RENDER_WIDTH * MAX_RENDER_HEIGHT;
 const JPEG_QUALITY = 0.84;
-// 사전 확인과 다운로드가 같은 페이지를 사용한다. 브라우저 메모리에만 최대 8장/2분 보관하며,
+// 사전 확인과 다운로드가 같은 페이지를 사용한다. 브라우저 메모리에만 최대 8장과 그 확대 그림/2분 보관하며,
 // 재사용할 때도 signedDocumentUrl로 현재 원문 접근 권한을 먼저 확인한다.
 const previewImages = new Map<string, { imageData: string; score: number; expiresAt: number; sourcePath: string }>();
 function cachedPreviewImage(key: string, sourceUrl: string) {
@@ -28,7 +29,7 @@ function cachedPreviewImage(key: string, sourceUrl: string) {
 }
 function rememberPreviewImage(key: string, imageData: string, score: number, sourceUrl: string) {
   previewImages.delete(key);
-  while (previewImages.size >= MAX_SOURCE_VISUALS_PER_DECK) {
+  while (previewImages.size >= MAX_SOURCE_VISUALS_PER_DECK * 2) {
     const oldest = previewImages.keys().next().value;
     if (oldest) previewImages.delete(oldest); else break;
   }
@@ -82,6 +83,7 @@ export type SourceVisualRequest = {
   page: number;
   title: string;
   candidates: SourceVisualCandidate[];
+  sourceFocus?: SourceVisualFocus;
 };
 
 type RejectedVisualRequest = {
@@ -465,7 +467,7 @@ export function planSourceVisualRequests(deck: GeneratedSlideDeck): SourceVisual
     requested += 1;
     const normalizedSlide: GeneratedSlide = {
       ...slide,
-      visual: { ...visual, mode: "source-page" },
+      visual: { ...visual, mode: "source-page", sourceFocus: validSourceVisualFocus(visual.sourceFocus) },
     };
     const candidates = sourceVisualCandidates(slide, sourceByLabel);
     const primary = candidates[0];
@@ -509,6 +511,7 @@ export function planSourceVisualRequests(deck: GeneratedSlideDeck): SourceVisual
       page,
       title: slide.title,
       candidates: boundedCandidates,
+      sourceFocus: validSourceVisualFocus(visual.sourceFocus),
     });
     return normalizedSlide;
   });
@@ -535,6 +538,7 @@ type PdfPageForVisualInspection = {
     canvasContext: CanvasRenderingContext2D;
     viewport: { width: number; height: number };
     background: string;
+    transform?: number[];
   }) => { promise: Promise<unknown> };
   cleanup: () => void;
 };
@@ -600,7 +604,7 @@ async function inspectSourcePdfPage(
   };
 }
 
-async function renderSourcePdfPage(page: PdfPageForVisualInspection): Promise<string> {
+async function renderSourcePdfPage(page: PdfPageForVisualInspection, focus?: SourceVisualFocus): Promise<string> {
   const base = page.getViewport({ scale: 1 });
   if (
     !Number.isFinite(base.width) ||
@@ -610,25 +614,30 @@ async function renderSourcePdfPage(page: PdfPageForVisualInspection): Promise<st
   ) {
     throw new Error("PDF 페이지 크기가 올바르지 않습니다.");
   }
-  const pixelScale = Math.sqrt(MAX_RENDER_PIXELS / (base.width * base.height));
+  const region = sourceVisualFocusRegion(focus);
+  const regionWidth = base.width * region.width;
+  const regionHeight = base.height * region.height;
+  const pixelScale = Math.sqrt(MAX_RENDER_PIXELS / (regionWidth * regionHeight));
   // 작은 보통 문서는 최대 2배까지 선명하게, 비정상적으로 큰 MediaBox는 반드시 축소한다.
   const scale = Math.max(
     Number.EPSILON,
     Math.min(
       2,
-      MAX_RENDER_WIDTH / base.width,
-      MAX_RENDER_HEIGHT / base.height,
+      MAX_RENDER_WIDTH / regionWidth,
+      MAX_RENDER_HEIGHT / regionHeight,
       pixelScale
     )
   );
   const viewport = page.getViewport({ scale });
   const canvas = document.createElement("canvas");
-  canvas.width = Math.max(1, Math.min(MAX_RENDER_WIDTH, Math.ceil(viewport.width)));
-  canvas.height = Math.max(1, Math.min(MAX_RENDER_HEIGHT, Math.ceil(viewport.height)));
+  canvas.width = Math.max(1, Math.min(MAX_RENDER_WIDTH, Math.ceil(viewport.width * region.width)));
+  canvas.height = Math.max(1, Math.min(MAX_RENDER_HEIGHT, Math.ceil(viewport.height * region.height)));
   const context = canvas.getContext("2d", { alpha: false });
   if (!context) throw new Error("PDF 페이지 렌더링 화면을 만들지 못했습니다.");
   try {
-    await page.render({ canvasContext: context, viewport, background: "#FFFFFF" }).promise;
+    await page.render({ canvasContext: context, viewport, background: "#FFFFFF",
+      ...(focus ? { transform: [1, 0, 0, 1, -viewport.width * region.x, -viewport.height * region.y] } : {}),
+    }).promise;
     return canvas.toDataURL("image/jpeg", JPEG_QUALITY);
   } finally {
     canvas.width = 1;
@@ -844,10 +853,26 @@ export async function prepareDeckSourceVisuals(
     ).values()
   );
   const renderedByPage = new Map<string, string>();
+  const focusByPage = new Map<string, Set<SourceVisualFocus>>();
+  const renderedFocus = new Map<string, string>();
+  const focusedKey = (candidate: SourceVisualCandidate, focus: SourceVisualFocus) => `${candidateKey(candidate)}:${focus}`;
+  for (const request of plan.requests) {
+    const selected = selectedCandidateBySlide.get(request.slideIndex)?.candidate;
+    // 대체 원문으로 바뀌었으면 예전 페이지의 확대 범위를 적용하지 않는다.
+    if (!selected || !request.sourceFocus || selected.documentId !== request.documentId || selected.page !== request.page) continue;
+    const key = candidateKey(selected);
+    const focuses = focusByPage.get(key) ?? new Set<SourceVisualFocus>();
+    focuses.add(request.sourceFocus);
+    focusByPage.set(key, focuses);
+  }
   for (const candidate of selectedPages) {
     const source = signedSources.get(candidate.documentId);
     const cached = source ? cachedPreviewImage(candidateKey(candidate), source.url) : undefined;
     if (cached) renderedByPage.set(candidateKey(candidate), cached.imageData);
+    for (const focus of focusByPage.get(candidateKey(candidate)) ?? []) {
+      const cachedFocus = source ? cachedPreviewImage(focusedKey(candidate, focus), source.url) : undefined;
+      if (cachedFocus) renderedFocus.set(focusedKey(candidate, focus), cachedFocus.imageData);
+    }
   }
   const selectedDocumentIds = Array.from(
     new Set(selectedPages.map((candidate) => candidate.documentId))
@@ -856,7 +881,8 @@ export async function prepareDeckSourceVisuals(
   for (const documentId of selectedDocumentIds) {
     const source = signedSources.get(documentId);
     const selectedDocumentPages = selectedPages.filter(
-      (candidate) => candidate.documentId === documentId && !renderedByPage.has(candidateKey(candidate))
+      (candidate) => candidate.documentId === documentId && (!renderedByPage.has(candidateKey(candidate)) ||
+        [...(focusByPage.get(candidateKey(candidate)) ?? [])].some((focus) => !renderedFocus.has(focusedKey(candidate, focus))))
     );
     if (!source || selectedDocumentPages.length === 0) continue;
     let pdf: Awaited<ReturnType<typeof pdfjs.getDocument>["promise"]> | null = null;
@@ -868,9 +894,19 @@ export async function prepareDeckSourceVisuals(
           const pageNumber = exactPdfPageNumber(candidate.page, pdf.numPages);
           if (pageNumber === null) continue;
           page = (await pdf.getPage(pageNumber)) as unknown as PdfPageForVisualInspection;
-          const imageData = await renderSourcePdfPage(page);
-          renderedByPage.set(candidateKey(candidate), imageData);
-          rememberPreviewImage(candidateKey(candidate), imageData, evaluatedByPage.get(candidateKey(candidate))?.score ?? 0, source.url);
+          const score = evaluatedByPage.get(candidateKey(candidate))?.score ?? 0;
+          if (!renderedByPage.has(candidateKey(candidate))) {
+            const imageData = await renderSourcePdfPage(page);
+            renderedByPage.set(candidateKey(candidate), imageData);
+            rememberPreviewImage(candidateKey(candidate), imageData, score, source.url);
+          }
+          for (const focus of focusByPage.get(candidateKey(candidate)) ?? []) {
+            const key = focusedKey(candidate, focus);
+            if (renderedFocus.has(key)) continue;
+            const imageData = await renderSourcePdfPage(page, focus);
+            renderedFocus.set(key, imageData);
+            rememberPreviewImage(key, imageData, score, source.url);
+          }
         } catch {
           // 해당 슬라이드는 아래에서 안전한 편집 도형·내용 구도로 폴백한다.
         } finally {
@@ -884,14 +920,24 @@ export async function prepareDeckSourceVisuals(
     }
   }
 
-  const selectedBySlide = new Map<number, EvaluatedCandidate & { imageData: string }>();
+  const selectedBySlide = new Map<number, EvaluatedCandidate & { imageData: string; sourcePageImageData?: string; sourceFocus?: SourceVisualFocus }>();
   for (const request of plan.requests) {
     const selected = selectedCandidateBySlide.get(request.slideIndex);
     const imageData = selected
       ? renderedByPage.get(candidateKey(selected.candidate))
       : undefined;
     if (selected && imageData) {
-      selectedBySlide.set(request.slideIndex, { ...selected, imageData });
+      const focus = request.sourceFocus && selected.candidate.documentId === request.documentId && selected.candidate.page === request.page
+        ? request.sourceFocus : undefined;
+      const focusImage = focus ? renderedFocus.get(focusedKey(selected.candidate, focus)) : undefined;
+      if (focus && !focusImage) {
+        // 선택한 확대 그림을 확인하지 못한 상태로 다른 범위의 그림을 내보내지 않는다.
+        fallbackBySlide.set(request.slideIndex, { slideIndex: request.slideIndex, title: request.title, reason: "render-failed" });
+      } else {
+        selectedBySlide.set(request.slideIndex, { ...selected, imageData: focusImage ?? imageData,
+          ...(focusImage ? { sourceFocus: focus, sourcePageImageData: imageData } : {}),
+        });
+      }
     } else if (selected) {
       fallbackBySlide.set(request.slideIndex, {
         slideIndex: request.slideIndex,
@@ -932,6 +978,8 @@ export async function prepareDeckSourceVisuals(
               (sameSource ? slide.visual.caption?.trim() : "") || candidate.sourceRef,
             fit: "contain",
             imageData: selected.imageData,
+            sourceFocus: selected.sourceFocus,
+            sourcePageImageData: selected.sourcePageImageData,
           },
         };
       }

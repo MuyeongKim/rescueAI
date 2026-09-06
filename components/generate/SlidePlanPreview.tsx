@@ -32,6 +32,8 @@ export function SlidePlanPreview({
   };
   const imageData = slide.visual?.imageData;
   const hasImage = typeof imageData === "string" && /^data:image\/(?:png|jpe?g|gif);base64,/i.test(imageData);
+  const contextImageData = slide.visual?.sourcePageImageData;
+  const hasContextImage = typeof contextImageData === "string" && /^data:image\/(?:png|jpe?g|gif);base64,/i.test(contextImageData);
   return (
     <svg
       viewBox={`0 0 ${WIDTH} ${HEIGHT}`}
@@ -66,6 +68,10 @@ export function SlidePlanPreview({
           <text x={(plan.image.x + plan.image.w / 2) * PX} y={(plan.image.y + plan.image.h / 2) * PX} textAnchor="middle" fontSize={26} fill={colors.muted}>원문 그림 확인 전</text>
         </g>
       ))}
+      {plan.imageContext && hasContextImage && (
+        <image href={contextImageData} x={plan.imageContext.x * PX} y={plan.imageContext.y * PX}
+          width={plan.imageContext.w * PX} height={plan.imageContext.h * PX} preserveAspectRatio="xMidYMid meet" />
+      )}
       {plan.texts.map((item) => (
         <foreignObject key={item.id} data-slide-text={item.id} x={item.x * PX} y={item.y * PX} width={item.w * PX} height={item.h * PX}>
           <div style={{ fontFamily: SLIDE_FONT_FAMILY, fontSize: item.fontSize * PX / 72, lineHeight: SLIDE_LINE_HEIGHT, color: item.color === "accent" ? slideAccentTextColor(accent, plan.dark) : colors[item.color], fontWeight: item.bold ? 700 : 400, textAlign: item.align ?? "left", whiteSpace: "pre" }}>{item.lines.join("\n")}</div>

@@ -23,7 +23,7 @@ import { generateMaterialWorkflow } from "@/workflows/generate-material";
 import { generationTextParts } from "@/lib/generation-grounding";
 import { generateRequestSchema } from "@/lib/generation-request";
 import { SOP_NOT_FOUND_DISCLOSURE } from "@/lib/sop-evidence";
-import { inspectCurrentGenerationQuality, type GeneratedDoc, type GeneratedDocDraft, type GenerationQualityIssue } from "@/lib/generate";
+import { inspectCurrentGenerationQuality, type GeneratedDoc, type GeneratedDocDraft, type GeneratedSlide, type GeneratedSlideDeck, type GenerationQualityIssue } from "@/lib/generate";
 
 const jobId = "10000000-0000-4000-8000-000000000001";
 const runToken = "20000000-0000-4000-8000-000000000002";
@@ -73,6 +73,10 @@ type Checkpoint = {
   };
   groundingReview?: { signature: string; evidenceSignature: string; partSignatures: string[]; report: { ok: boolean; issues: GenerationQualityIssue[] } };
   completedRepairs?: string[];
+  repairCandidateReviews?: Array<{ signature: string; report: { ok: boolean; issues: GenerationQualityIssue[] } }>;
+  documentOutline?: { title: string; sections: Array<{ heading: string; purpose: string; keyPoints: string[]; minutes: number | null; sourceRefs: string[] }> };
+  slides?: GeneratedSlide[];
+  outline?: { title: string; slides: Array<{ title: string; role: string; composition: string; purpose: string; sourceRefs: string[]; sopTarget: boolean }> };
   selectedRepairIndices?: number[];
   selectedRepairRunToken?: string;
 };
@@ -126,11 +130,26 @@ function reviewedDoc(): GeneratedDoc {
 function seedPassingReview() {
   const hash = (text: string) => createHash("sha256").update(text).digest("hex");
   job.checkpoint.groundingReview = {
-    signature: hash(JSON.stringify({ request, draft: job.checkpoint.draft, context: job.checkpoint.context.contextText })),
+    signature: hash(JSON.stringify({ reviewPolicyVersion: 2, request, draft: job.checkpoint.draft, context: job.checkpoint.context.contextText })),
     evidenceSignature: hash(job.checkpoint.context.contextText),
     partSignatures: generationTextParts(reviewedDoc()).map(part => hash(part.text)),
     report: { ok: true, issues: [] },
   };
+}
+
+function seedSlideJob() {
+  job.request = generateRequestSchema.parse({ ...request, type: "slides" });
+  job.checkpoint.selectedRepairIndices = [2];
+  job.checkpoint.selectedRepairRunToken = runToken;
+  job.checkpoint.slides = Array.from({ length: 12 }, (_, index) => ({
+    title: `${index + 1}번째 장비 상태를 확인합니다`,
+    bullets: [`${index + 1}번째 점검 지점을 확인합니다`, "확인 결과를 동료에게 보고합니다"],
+    notes: fill(`${index + 1}번째 시범에서 교관은 확인 위치와 흔한 실수를 설명합니다. 대원은 수행 결과를 말하고 이상이 있으면 중단하고 보고합니다.`, 165),
+    layout: "concept", role: "concept", composition: "list", visual: { mode: "none" }, sourceRefs: [sourceLabel],
+  }));
+  job.checkpoint.outline = { title: "공기호흡기 점검", slides: job.checkpoint.slides.map(slide => ({
+    title: slide.title, role: "concept", composition: "list", purpose: "점검 기준 확인", sourceRefs: [sourceLabel], sopTarget: false,
+  })) };
 }
 
 beforeEach(() => {
@@ -183,9 +202,9 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
   it("서로 다른 두 섹션의 의미 오류를 같은 첫 보완 회차에서 각각 수정한다", async () => {
     job.checkpoint.draft.sections[0].content += " 첫째미확인주장";
     job.checkpoint.draft.sections[2].content += " 둘째미확인주장";
-    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft }: { draft: GeneratedDoc }) => {
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft, partIndices }: { draft: GeneratedDoc; partIndices?: number[] }) => {
       const issues = draft.sections.flatMap((section, index) =>
-        section.content.includes("미확인주장") ? [semanticIssue(index)] : []);
+        (!partIndices || partIndices.includes(index)) && section.content.includes("미확인주장") ? [semanticIssue(index)] : []);
       return { ok: issues.length === 0, issues };
     });
     mocks.generateObject.mockImplementation(async ({ schema }) => {
@@ -197,7 +216,9 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
     expect(job.checkpoint.completedRepairs).toEqual([
       `document:${runToken}:1:0`, `document:${runToken}:1:2`,
     ]);
-    expect(mocks.reviewGenerationGrounding).toHaveBeenCalledTimes(2);
+    expect(mocks.reviewGenerationGrounding).toHaveBeenCalledTimes(4);
+    expect(mocks.reviewGenerationGrounding.mock.calls.map(([args]) => args.partIndices))
+      .toEqual([undefined, [0], [2], undefined]);
   });
 
   it("선택 보완은 선택 부분만 고치되 선택하지 않은 오류도 최종 완료를 막는다", async () => {
@@ -205,7 +226,11 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
     job.checkpoint.draft.sections[2].content += " 둘째미확인주장";
     job.checkpoint.selectedRepairIndices = [2];
     job.checkpoint.selectedRepairRunToken = runToken;
-    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft }: { draft: GeneratedDoc }) => ({ ok: false, issues: draft.sections.flatMap((section, index) => section.content.includes("미확인주장") ? [semanticIssue(index)] : []) }));
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft, partIndices }: { draft: GeneratedDoc; partIndices?: number[] }) => {
+      const issues = draft.sections.flatMap((section, index) =>
+        (!partIndices || partIndices.includes(index)) && section.content.includes("미확인주장") ? [semanticIssue(index)] : []);
+      return { ok: issues.length === 0, issues };
+    });
     mocks.generateObject.mockImplementation(async ({ schema }) => {
       const current = job.checkpoint.draft.sections.find((section) => section.heading === schema.shape.heading.value)!;
       return { object: { ...current, content: current.content.replace(/ (첫째|둘째)미확인주장/g, "") } };
@@ -218,17 +243,143 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
     expect(job.quality_issues).toEqual(expect.arrayContaining([expect.objectContaining({ path: "sections.0.content", blocking: true })]));
   });
 
-  it("보완안이 실제 의미 오류를 해결하지 않으면 새 서명 검토 후에도 통과시키지 않는다", async () => {
+  it("같은 의미 오류를 남긴 보완안은 원문을 대체하지 않고 동일 후보의 재검토를 재사용한다", async () => {
+    const original = structuredClone(job.checkpoint.draft);
     mocks.reviewGenerationGrounding.mockResolvedValue({ ok: false, issues: [semanticIssue(2)] });
     mocks.generateObject.mockImplementation(async ({ schema }) => {
       const current = job.checkpoint.draft.sections.find(section => section.heading === schema.shape.heading.value)!;
       return { object: { ...current, content: `${current.content} 표현만 바꿉니다.` } };
     });
     expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("needs_attention");
-    expect(mocks.reviewGenerationGrounding).toHaveBeenCalledTimes(3);
+    expect(mocks.reviewGenerationGrounding).toHaveBeenCalledTimes(2);
+    expect(job.checkpoint.draft).toEqual(original);
+    expect(job.checkpoint.repairCandidateReviews).toHaveLength(1);
     expect(job.quality_passed).toBe(false);
     expect(job.result).toBeNull();
     expect(updates.some(update => update.quality_passed === true)).toBe(false);
+  });
+
+  it("지적된 주장을 지우면서 원문에 있는 주의사항을 없다고 만든 보완안은 기존 내용을 덮지 않는다", async () => {
+    job.checkpoint.draft.sections[2].content += " 기존미확인주장";
+    const original = structuredClone(job.checkpoint.draft);
+    job.checkpoint.documentOutline = { title: original.title, sections: original.sections.map(section => ({
+      heading: section.heading, purpose: "기존 근거 확인", keyPoints: [], minutes: null, sourceRefs: [sourceLabel],
+    })) };
+    const scopedEvidence = `${job.checkpoint.context.contextText}\n사용 중 이상이 있으면 작업을 중지하고 안전한 장소에서 점검합니다.`;
+    job.checkpoint.context.contextText = `${scopedEvidence}\n\n---\n\n[다른 장비 교범 p.2]\n다른 장비의 정비 절차`;
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft, evidenceText, partIndices }) => {
+      if (partIndices) {
+        expect(partIndices).toEqual([2]);
+        expect(evidenceText).toBe(scopedEvidence);
+        expect(job.checkpoint.draft).toEqual(original);
+        return { ok: false, issues: [semanticIssue(2, "추가 주의사항은 참고 자료에서 확인되지 않습니다")] };
+      }
+      expect(draft.sections[2].content).toContain("기존미확인주장");
+      return { ok: false, issues: [semanticIssue(2, "기존미확인주장")] };
+    });
+    mocks.generateObject.mockImplementation(async () => ({ object: {
+      ...original.sections[2],
+      content: original.sections[2].content.replace("기존미확인주장", "추가 주의사항은 참고 자료에서 확인되지 않습니다"),
+    } }));
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("needs_attention");
+    expect(job.checkpoint.draft).toEqual(original);
+    expect(mocks.reviewGenerationGrounding).toHaveBeenCalledTimes(2);
+    expect(updates.some(update =>
+      (update.checkpoint as Checkpoint | undefined)?.draft.sections[2].content.includes("추가 주의사항"))).toBe(false);
+  });
+
+  it("보완안 검토가 실패하면 기존 초안은 유지하고 완성본을 공개하지 않는다", async () => {
+    job.checkpoint.draft.sections[2].content += " 기존미확인주장";
+    const original = structuredClone(job.checkpoint.draft);
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ partIndices }) => {
+      if (partIndices) throw new Error("candidate review unavailable");
+      return { ok: false, issues: [semanticIssue(2)] };
+    });
+    mocks.generateObject.mockResolvedValue({ object: {
+      ...original.sections[2], content: original.sections[2].content.replace("기존미확인주장", "새로운 보완 내용"),
+    } });
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("failed");
+    expect(job.checkpoint.draft).toEqual(original);
+    expect(job.quality_passed).toBe(false);
+    expect(job.result).toBeNull();
+  });
+
+  it("의미 오류 두 개를 원문에 없는 수치 하나로 바꿔 총 오류 수를 줄여도 채택하지 않는다", async () => {
+    job.checkpoint.draft.sections[2].content += " 첫미확인주장 둘째미확인주장";
+    const original = structuredClone(job.checkpoint.draft);
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ partIndices }) => partIndices
+      ? { ok: true, issues: [] }
+      : { ok: false, issues: [semanticIssue(2, "첫미확인주장"), semanticIssue(2, "둘째미확인주장")] });
+    mocks.generateObject.mockResolvedValue({ object: {
+      ...original.sections[2], content: original.sections[2].content.replace("첫미확인주장 둘째미확인주장", "시험 압력을 99999 MPa로 설정합니다."),
+    } });
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("needs_attention");
+    expect(job.checkpoint.draft).toEqual(original);
+    expect(job.result).toBeNull();
+  });
+
+  it("첫 후보가 거절돼도 다음 회차의 다른 후보는 새 검토 후 채택한다", async () => {
+    job.checkpoint.draft.sections[2].content += " 기존미확인주장";
+    const original = structuredClone(job.checkpoint.draft);
+    let attempt = 0;
+    mocks.generateObject.mockImplementation(async () => ({ object: {
+      ...original.sections[2], content: original.sections[2].content.replace("기존미확인주장", ++attempt === 1 ? "새미확인주장" : ""),
+    } }));
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft, partIndices }) => {
+      const issues = draft.sections.flatMap((section: GeneratedDoc["sections"][number], index: number) =>
+        (!partIndices || partIndices.includes(index)) && section.content.includes("미확인주장") ? [semanticIssue(index)] : []);
+      return { ok: issues.length === 0, issues };
+    });
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("completed");
+    expect(mocks.generateObject).toHaveBeenCalledTimes(2);
+    expect(mocks.reviewGenerationGrounding).toHaveBeenCalledTimes(4);
+    expect(job.checkpoint.draft.sections[2].content).not.toContain("미확인주장");
+    expect(job.checkpoint.repairCandidateReviews).toHaveLength(2);
+  });
+
+  it("슬라이드 핵심 문장의 새 근거 오류도 저장 전에 검토하여 이전 장을 보존한다", async () => {
+    seedSlideJob();
+    job.checkpoint.slides![2].bullets[0] = "훈련 점검 기준을 모든 현장 진입에 적용합니다";
+    const original = structuredClone(job.checkpoint.slides);
+    mocks.generateObject.mockResolvedValue({ object: {
+      ...original[2], bullets: ["추가 주의사항은 참고 자료에서 확인되지 않습니다", original[2].bullets[1]],
+    } });
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft, partIndices }: { draft: GeneratedSlideDeck; partIndices?: number[] }) => ({
+      ok: false, issues: [{ code: "unsupported_evidence_claim", path: "slides.2.bullets.0",
+        excerpt: draft.slides[2].bullets[0], message: partIndices ? "원문에 있는 주의사항이 없다고 잘못 설명합니다." : "훈련의 적용 조건을 생략했습니다." }],
+    }));
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("needs_attention");
+    expect(job.checkpoint.slides).toEqual(original);
+    expect(mocks.reviewGenerationGrounding.mock.calls.map(([args]) => args.partIndices)).toEqual([undefined, [2]]);
+    expect(job.result).toBeNull();
+  });
+
+  it("본문이 같아도 잘못 연결된 출처를 고치면 이전 의미 오류 캐시를 버리고 보완을 채택한다", async () => {
+    seedSlideJob();
+    const correctedSource = { document_id: 2, doc: "정확한 장비 교범", page: 2 };
+    const correctedLabel = "[정확한 장비 교범 p.2]";
+    job.checkpoint.context.sources.push(correctedSource);
+    job.checkpoint.context.bindingSources.push(correctedSource);
+    job.checkpoint.context.contextText += `\n\n---\n\n${correctedLabel}\n3번째 점검 지점을 확인하고 결과를 동료에게 보고합니다.`;
+    const original = structuredClone(job.checkpoint.slides![2]);
+    const candidate = { ...original, sourceRefs: [correctedLabel] };
+    mocks.generateObject.mockResolvedValue({ object: candidate });
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft, partIndices, evidenceText }: { draft: GeneratedSlideDeck; partIndices?: number[]; evidenceText: string }) => {
+      if (partIndices) {
+        expect(partIndices).toEqual([2]);
+        expect(evidenceText).toContain(correctedLabel);
+      }
+      const issues = draft.slides[2].sourceRefs?.includes(correctedLabel) ? [] : [{
+        code: "unsupported_evidence_claim", path: "slides.2.bullets.0",
+        excerpt: original.bullets[0], message: "현재 출처는 다른 장비의 절차입니다.",
+      }];
+      return { ok: issues.length === 0, issues };
+    });
+    await generateMaterialWorkflow(jobId, runToken);
+    expect(job.checkpoint.slides![2]).toEqual(candidate);
+    expect(job.checkpoint.slides![2].bullets).toEqual(original.bullets);
+    expect(mocks.reviewGenerationGrounding.mock.calls.map(([args]) => args.partIndices))
+      .toEqual([undefined, [2], undefined]);
   });
 
   it("의미 검토 호출 실패는 저장된 초안을 남기고 quality_passed를 false로 종료한다", async () => {
@@ -245,6 +396,40 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
     expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("completed");
     expect(mocks.reviewGenerationGrounding).not.toHaveBeenCalled();
     expect(job.quality_passed).toBe(true);
+  });
+
+  it("이전 검토 정책의 통과 서명은 본문·근거가 같아도 새 정책으로 다시 검토한다", async () => {
+    seedPassingReview();
+    job.checkpoint.groundingReview!.signature = createHash("sha256").update(JSON.stringify({
+      request, draft: job.checkpoint.draft, context: job.checkpoint.context.contextText,
+    })).digest("hex");
+    mocks.reviewGenerationGrounding.mockRejectedValue(new Error("new source-scoped review failed"));
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("failed");
+    expect(mocks.reviewGenerationGrounding).toHaveBeenCalledOnce();
+    expect(job.quality_passed).toBe(false);
+    expect(job.result).toBeNull();
+  });
+
+  it("이전 후보 검토 정책의 통과 캐시도 새 보완안 검토를 생략하지 못한다", async () => {
+    job.checkpoint.draft.sections[2].content += " 기존미확인주장";
+    const original = structuredClone(job.checkpoint.draft);
+    const candidate = { ...original.sections[2], content: original.sections[2].content.replace("기존미확인주장", "새미확인주장") };
+    const candidateDoc: GeneratedDoc = {
+      ...reviewedDoc(), sections: original.sections.map((section, index) => index === 2 ? candidate : section),
+    };
+    job.checkpoint.repairCandidateReviews = [{
+      signature: createHash("sha256").update(JSON.stringify({
+        version: 1, request, index: 2, part: generationTextParts(candidateDoc)[2],
+        evidenceText: job.checkpoint.context.contextText, item: candidate, modelKey: request.model,
+      })).digest("hex"),
+      report: { ok: true, issues: [] },
+    }];
+    mocks.reviewGenerationGrounding.mockResolvedValue({ ok: false, issues: [semanticIssue(2)] });
+    mocks.generateObject.mockResolvedValue({ object: candidate });
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("needs_attention");
+    expect(mocks.reviewGenerationGrounding.mock.calls.map(([args]) => args.partIndices)).toEqual([undefined, [2]]);
+    expect(job.checkpoint.draft).toEqual(original);
+    expect(job.checkpoint.repairCandidateReviews).toHaveLength(2);
   });
 
   it.each(["본문", "근거", "요청"])("통과한 옛 서명 이후 %s이 바뀌면 재검토 실패를 무시하지 않는다", async (changed) => {
