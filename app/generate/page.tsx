@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { ChevronRight, FolderOpen, Users, Wand2 } from "lucide-react";
+import { ChevronDown, ChevronRight, FolderOpen, Users, Wand2 } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/server";
 import { DEMO, demoDocuments } from "@/lib/demo";
@@ -154,8 +154,12 @@ export default async function GeneratePage({
         </Link>
       </div>
 
-      <GenerationRecoveryList jobs={jobs} drafts={drafts} />
-      {resolvedSearchParams.d && !initialDraft && <p role="alert" className="rounded-md border p-3 text-base">편집 초안을 찾을 수 없습니다. 본인 계정인지 확인하거나 위의 최근 작업에서 다시 열어 주세요.</p>}
+      {resolvedSearchParams.d && !initialDraft && (
+        <p role="alert" className="rounded-md border p-3 text-base">
+          편집 초안을 찾을 수 없습니다. 본인 계정인지 확인해 주세요.
+          {(jobs.length > 0 || drafts.length > 0) && " 아래의 ‘이어서 작업하기’를 펼쳐 보관된 작업을 다시 열 수 있습니다."}
+        </p>
+      )}
       {categories.length === 0 && !editableMaterial && !initialDraft && !initialJob && !requestedJobId ? (
         <p className="border border-l-4 border-l-primary bg-card py-12 text-center text-sm text-muted-foreground">
           아직 인덱싱된 자료가 없습니다. 자료를 올리면 분야가 자동으로 나타납니다.
@@ -179,21 +183,34 @@ export default async function GeneratePage({
         />
       )}
 
+      <GenerationRecoveryList jobs={jobs} drafts={drafts} collapsible />
+
       {recentSaved.length > 0 && (
-        <section className="space-y-3 border-t-2 border-t-slate-900 pt-3 dark:border-t-slate-200">
-          <div className="flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-base font-semibold">
-              <FolderOpen className="h-4 w-4 text-primary" /> 저장한 자료
+        <details className="group/saved rounded-lg border bg-card" aria-labelledby="generation-saved-heading">
+          <summary className="min-h-14 cursor-pointer list-none rounded-lg px-4 py-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
+            <h2 id="generation-saved-heading" className="flex flex-wrap items-center gap-x-2 gap-y-1 text-base font-semibold">
+              <FolderOpen aria-hidden="true" className="h-4 w-4 shrink-0 text-primary" />
+              <span>저장한 자료</span>
+              <span className="text-sm font-normal text-muted-foreground">최근 {recentSaved.length}개</span>
+              <span aria-hidden="true" className="ml-auto flex items-center gap-1 text-sm font-medium text-muted-foreground">
+                <span className="group-open/saved:hidden">펼치기</span>
+                <span className="hidden group-open/saved:inline">접기</span>
+                <ChevronDown className="h-4 w-4 group-open/saved:rotate-180" />
+              </span>
             </h2>
-            <Link
-              href="/generate/saved"
-              className="flex items-center gap-0.5 text-sm font-medium text-primary hover:underline"
-            >
-              전체 보기 <ChevronRight className="h-4 w-4" />
-            </Link>
+          </summary>
+          <div className="space-y-3 border-t px-4 pb-4 pt-3">
+            <div className="flex justify-end">
+              <Link
+                href="/generate/saved"
+                className="inline-flex min-h-12 items-center gap-0.5 rounded-sm text-sm font-medium text-primary hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                전체 보기 <ChevronRight aria-hidden="true" className="h-4 w-4" />
+              </Link>
+            </div>
+            <SavedList initial={recentSaved} />
           </div>
-          <SavedList initial={recentSaved} />
-        </section>
+        </details>
       )}
     </div>
   );
