@@ -13,6 +13,7 @@ import {
   type GeneratedDocSource,
 } from "@/lib/generate";
 import type { SopEvidence } from "@/lib/sop-evidence";
+import { generationRetrievalQuery } from "@/lib/generation-evidence-coverage";
 import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 
 export type GenerationContext = {
@@ -127,12 +128,15 @@ export async function fetchCategoryContext(
   limit = 40,
   topic?: string,
   suppliedClient?: GenerationContextSupabaseClient,
+  options: { conditions?: string } = {},
 ): Promise<GenerationContext> {
   // RAG_TABLE=rag_rescue: 외부에서 임베딩해 둔 기존 테이블 사용
   if (ragTableEnabled()) {
     const query = topic?.trim() || `${category} 분야 핵심 훈련`;
     const [general, sop] = await Promise.all([
-      fetchExternalRagContext(category, limit, query, suppliedClient),
+      fetchExternalRagContext(category, limit, generationRetrievalQuery(query, options.conditions), suppliedClient),
+      // SOP 적용 가능성은 DB와 같은 원래 주제·세부 방향으로 제한한다. 현장 조건의
+      // '대원·보고' 같은 공통어가 다른 절차를 해당 주제의 SOP로 승격하면 안 된다.
       fetchExternalSopContext(category, query, 4, suppliedClient),
     ]);
 

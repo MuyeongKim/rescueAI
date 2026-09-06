@@ -122,10 +122,10 @@ describe("POST /api/generate 입력 경계", () => {
     expect(generationProDraftCallMaxMs("slides")).toBe(180_000);
   });
 
-  it("동기 생성도 Workflow·저장 검증과 같이 현장 조건과 세부 방향으로 검색한다", async () => {
+  it("동기 생성도 원래 주제·방향과 일반 RAG용 현장 조건을 분리해서 전달한다", async () => {
     const response = await POST(requestWith(validBody({ conditions: "야간 동료 확인", focus: "착용 전 점검" })));
     expect(response.status).toBe(422);
-    expect(mocks.fetchCategoryContext).toHaveBeenCalledWith("화재", 40, "야간 동료 확인 착용 전 점검 / 상위 주제: 공기호흡기 착용 방법");
+    expect(mocks.fetchCategoryContext).toHaveBeenCalledWith("화재", 40, "착용 전 점검 / 상위 주제: 공기호흡기 착용 방법", undefined, { conditions: "야간 동료 확인" });
     expect(mocks.generateObject).not.toHaveBeenCalled();
   });
 

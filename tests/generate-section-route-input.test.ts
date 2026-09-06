@@ -98,10 +98,10 @@ describe("POST /api/generate/section 입력 경계", () => {
     vi.restoreAllMocks();
   });
 
-  it.each([validSectionBody, validSlideBody])("문서·슬라이드 부분 재생성에서도 원래 현장 조건을 검색에 포함한다", async (makeBody) => {
+  it.each([validSectionBody, validSlideBody])("문서·슬라이드 부분 재생성에서도 원래 주제와 일반 RAG용 현장 조건을 분리한다", async (makeBody) => {
     const response = await POST(requestWith(makeBody({ conditions: "야간 동료 확인", focus: "착용 전 점검" })));
     expect(response.status).toBe(422);
-    expect(mocks.fetchCategoryContext).toHaveBeenCalledWith("화재", 40, "야간 동료 확인 착용 전 점검 / 상위 주제: 공기호흡기 착용 방법");
+    expect(mocks.fetchCategoryContext).toHaveBeenCalledWith("화재", 40, "착용 전 점검 / 상위 주제: 공기호흡기 착용 방법", undefined, { conditions: "야간 동료 확인" });
     expect(mocks.generateObject).not.toHaveBeenCalled();
   });
 

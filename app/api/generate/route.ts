@@ -26,7 +26,6 @@ import { DEMO } from "@/lib/demo";
 import { fetchCategoryContext } from "@/lib/generate-context";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
-import { generationRetrievalQuery } from "@/lib/generation-evidence-coverage";
 import {
   LimitedJsonBodyError,
   readLimitedJsonBody,
@@ -237,7 +236,9 @@ export async function POST(req: Request) {
   } = await fetchCategoryContext(
     category,
     40,
-    generationRetrievalQuery(buildFocusedTrainingQuery(genReq.topic ?? "", genReq.focus ?? ""), genReq.conditions)
+    buildFocusedTrainingQuery(genReq.topic ?? "", genReq.focus ?? ""),
+    undefined,
+    { conditions: genReq.conditions }
   );
   if (!contextText) {
     return Response.json(

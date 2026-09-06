@@ -43,7 +43,7 @@ describe("내보내기 전 실제 출처·SOP·수치 검증 API", () => {
     const response = await POST(request(valid()));
     expect(await response.json()).toEqual({ ok: true, scope: "source-provenance-sop-and-technical-values" });
     expect(mocks.check).toHaveBeenCalledWith(expect.objectContaining({ request: expect.objectContaining({ conditions: "실내 훈련", focus: "착용 전 점검" }) }));
-    expect(mocks.sop).toHaveBeenCalledWith("화재", "실내 훈련 착용 전 점검 / 상위 주제: 공기호흡기 점검", 4);
+    expect(mocks.sop).toHaveBeenCalledWith("화재", "착용 전 점검 / 상위 주제: 공기호흡기 점검", 4);
   });
   it.each([
     ["비활성 원본", []],

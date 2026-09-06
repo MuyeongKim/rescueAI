@@ -1,7 +1,6 @@
 import type { createClient } from "@/lib/supabase/server";
 import { generatedSourceLabels, type GenType } from "@/lib/generate";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
-import { generationRetrievalQuery } from "@/lib/generation-evidence-coverage";
 import { ragTableEnabled } from "@/lib/rag-external";
 import { inspectSopContract, type SopEvidence, type SopInspectableResult } from "@/lib/sop-evidence";
 import { rebindNormalizedSlideContent } from "@/lib/generated-material-save";
@@ -70,9 +69,8 @@ export async function verifySopBeforeSave(
   if (body.category && body.topic && ragTableEnabled()) {
     try {
       const focus = typeof body.content.focus === "string" ? body.content.focus : "";
-      const conditions = typeof body.content.conditions === "string" ? body.content.conditions : undefined;
-      // 생성·부분 보완과 같은 조건으로 검색해야 정상 근거 집합을 변경으로 오인하지 않는다.
-      const query = generationRetrievalQuery(buildFocusedTrainingQuery(body.topic, focus), conditions);
+      // 일반 RAG의 현장 조건 확장과 분리하여 생성·DB의 SOP 주제 계약을 유지한다.
+      const query = buildFocusedTrainingQuery(body.topic, focus);
       if (!ragReader) throw new Error("서버 RAG 검증기가 준비되지 않았습니다.");
       const result = await ragReader.fetchSopContext(body.category, query, 4);
       expected = options.requireAvailable && result.degraded

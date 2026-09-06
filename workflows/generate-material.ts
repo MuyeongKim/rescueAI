@@ -15,7 +15,6 @@ import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 import { fetchCategoryContext, supplementGenerationContext, type GenerationContext } from "@/lib/generate-context";
 import {
   bindOutlineEvidence,
-  generationRetrievalQuery,
   hasOutlineEvidenceExcerpt,
   MAX_OUTLINE_EVIDENCE_SEARCHES,
   outlineEvidenceGaps,
@@ -826,8 +825,9 @@ async function prepareGenerationJobStep(
       fetchCategoryContext(
         request.category,
         40,
-        generationRetrievalQuery(buildFocusedTrainingQuery(request.topic, request.focus ?? ""), request.conditions),
-        admin
+        buildFocusedTrainingQuery(request.topic, request.focus ?? ""),
+        admin,
+        { conditions: request.conditions }
       )
     );
     if (!context.contextText) {

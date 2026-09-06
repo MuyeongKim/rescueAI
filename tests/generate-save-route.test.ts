@@ -1021,12 +1021,12 @@ describe("POST /api/generate/save", () => {
     expect(client.spies.update).not.toHaveBeenCalled();
   });
 
-  it.each(["plan", "lesson", "slides"] as const)("%s 생성 때의 현장 조건·세부 방향을 유지하여 정상 SOP 집합을 충돌로 오인하지 않는다", async (kind) => {
+  it.each(["plan", "lesson", "slides"] as const)("%s 저장 SOP는 현장 조건의 공통어 대신 생성·DB와 같은 원래 주제와 세부 방향으로 검증한다", async (kind) => {
     const client = makeClient();
     mocks.createClient.mockResolvedValue(client);
     const original = validFoundContractBody(kind);
     const body = { ...original, content: { ...original.content, conditions: "야간 중단 및 보고", focus: "장비 점검" } };
-    const expectedQuery = "야간 중단 및 보고 장비 점검 / 상위 주제: 산악사고 대비 훈련";
+    const expectedQuery = "장비 점검 / 상위 주제: 산악사고 대비 훈련";
     mocks.fetchExternalSopContext.mockImplementation(async (_category, query) => sopLookupResult(
       query === expectedQuery ? original.content.sopEvidence : { status: "not_found", sourceLabels: [] }
     ));
