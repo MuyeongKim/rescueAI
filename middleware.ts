@@ -17,6 +17,7 @@ const PROTECTED_PREFIXES = [
   "/news",
   "/notices",
   "/me",
+  "/guide",
   "/change-password",
 ];
 

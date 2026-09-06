@@ -3,6 +3,7 @@
 import Link from "next/link";
 import {
   CircleUser,
+  BookOpen,
   Megaphone,
   Menu,
   Newspaper,
@@ -28,6 +29,7 @@ const MORE_ITEMS = [
   { key: "generate-shared", href: "/generate/shared", label: "공유 자료실", icon: Users },
   { key: "notices", href: "/notices", label: "공지사항", icon: Megaphone },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
+  { key: "guide", href: "/guide", label: "사용설명서", icon: BookOpen },
 ];
 
 // 관리자 메뉴는 admin-nav-items 단일 출처 공유

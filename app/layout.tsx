@@ -2,6 +2,8 @@ import type { Metadata, Viewport } from "next";
 import { ThemeProvider } from "next-themes";
 import "./globals.css";
 import { Toaster } from "@/components/ui/sonner";
+import { UserGuideOnboarding } from "@/components/guide/UserGuideOnboarding";
+import { GuideSessionProvider } from "@/components/guide/GuideSessionProvider";
 
 export const metadata: Metadata = {
   title: "전북소방 구조 AI",
@@ -25,8 +27,11 @@ export default function RootLayout({
     <html lang="ko" className="h-full" suppressHydrationWarning>
       <body className="min-h-full bg-background font-sans text-foreground antialiased">
         <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-          {children}
-          <Toaster position="top-center" richColors />
+          <GuideSessionProvider>
+            {children}
+            <UserGuideOnboarding />
+            <Toaster position="top-center" richColors />
+          </GuideSessionProvider>
         </ThemeProvider>
       </body>
     </html>

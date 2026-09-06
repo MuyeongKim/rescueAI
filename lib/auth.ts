@@ -76,7 +76,7 @@ export function isAdmin(profile: Profile | null): boolean {
 }
 
 export type ApiAuthResult =
-  | { ok: true; user: AuthedUser }
+  | { ok: true; user: AuthedUser; userMetadata?: Record<string, unknown> }
   | { ok: false; response: Response };
 
 const MUST_CHANGE_PASSWORD_RESPONSE = () =>
@@ -109,7 +109,8 @@ export async function requireApiUser(client?: ServerClient): Promise<ApiAuthResu
     return { ok: false, response: MUST_CHANGE_PASSWORD_RESPONSE() };
   }
 
-  return { ok: true, user: { id: user.id, email: user.email } };
+  // 사용자 설정 읽기용이며 역할·접근권한 판단에는 사용하지 않는다.
+  return { ok: true, user: { id: user.id, email: user.email }, userMetadata: user.user_metadata };
 }
 
 /** route handler 용 관리자 인증 — 세션 + role='admin' + 초기 비번 변경 완료. */

@@ -3,6 +3,7 @@ import Link from "next/link";
 import type { LucideIcon } from "lucide-react";
 import {
   CircleUser,
+  BookOpen,
   FileText,
   Home,
   LogOut,
@@ -28,6 +29,7 @@ export type NavKey =
   | "news"
   | "docs"
   | "me"
+  | "guide"
   | "notices"
   | "admin"
   | "admin-news"
@@ -51,6 +53,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: "news", href: "/news", label: "구조 동향", icon: Newspaper },
   { key: "notices", href: "/notices", label: "공지사항", icon: Megaphone },
   { key: "me", href: "/me", label: "마이페이지", icon: CircleUser },
+  { key: "guide", href: "/guide", label: "사용설명서", icon: BookOpen },
 ];
 
 const ADMIN_ITEMS = ADMIN_NAV_ITEMS;
