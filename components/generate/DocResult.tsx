@@ -5,7 +5,8 @@ import { Check, Copy, Download, FileText, Loader2 } from "lucide-react";
 
 import type { GeneratedDoc, GeneratedSection } from "@/lib/generate";
 import { docToText } from "@/lib/generate-material";
-import { prepareGeneratedDocForExport } from "@/lib/document-export";
+import { documentMetadataLines, prepareGeneratedDocForExport, type DocumentMetadata } from "@/lib/document-export";
+import type { DocumentSectionEvidenceState } from "@/lib/document-evidence";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import {
@@ -15,8 +16,9 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { GeneratedSourceLink } from "@/components/generate/GeneratedSourceLink";
+import { DocumentSectionBody } from "@/components/generate/DocumentSectionBody";
+import { DocumentSectionEvidence } from "@/components/generate/DocumentSectionEvidence";
 import {
   AccentBar,
   EditToggleButton,
@@ -42,6 +44,9 @@ export function DocResult({
   quality,
   planDetails,
   onPlanDetailsChange,
+  documentMetadata,
+  sectionEvidence,
+  onLoadSectionEvidence,
 }: {
   doc: GeneratedDoc;
   chrome: ResultChrome;
@@ -56,10 +61,15 @@ export function DocResult({
   quality?: GenerationQuality | null;
   planDetails?: { date: string; place: string };
   onPlanDetailsChange?: (patch: Partial<{ date: string; place: string }>) => void;
+  documentMetadata?: DocumentMetadata;
+  sectionEvidence?: Record<number, DocumentSectionEvidenceState>;
+  onLoadSectionEvidence?: (index: number) => void;
 }) {
   const { accent, editing } = chrome;
   // 이전 저장본에 남은 인라인 인용도 화면에서는 숨기고, 마지막 출처 목록으로만 보여 준다.
   const displayDoc = prepareGeneratedDocForExport(doc);
+  const metadata = { ...documentMetadata, ...planDetails };
+  const visibleMetadata = documentMetadataLines({ ...metadata, date: undefined, place: undefined });
   const editorLocked =
     chrome.saving || Boolean(chrome.locked) || regen.loadingIndex !== null || exporting !== null;
   const outputBlocked = Boolean(chrome.outputBlocked);
@@ -105,6 +115,7 @@ export function DocResult({
           {statusMessage}
         </p>
         <QualityBanner quality={quality} />
+        {visibleMetadata.length > 0 && <div className="flex flex-wrap gap-x-4 gap-y-1 rounded-lg border bg-muted/20 p-3 text-base" aria-label="현재 문서 제작 조건">{visibleMetadata.map((line) => <p key={line}>{line}</p>)}</div>}
         {planDetails && (
           <section className="rounded-lg border bg-muted/20 p-3" aria-label="현재 훈련계획 일자와 장소">
             {editing ? <div className="grid gap-3 sm:grid-cols-2">
@@ -116,7 +127,7 @@ export function DocResult({
               </label>
               <label className="space-y-1 text-base">이 문서의 훈련 장소<Input value={planDetails.place} maxLength={100} disabled={editorLocked} onChange={(e) => onPlanDetailsChange?.({ place: e.target.value })} className="min-h-12 text-base" /></label>
             </div> : <p className="text-base">훈련 일자: {planDetails.date || "미정"} · 장소: {planDetails.place || "미정"}</p>}
-            <p className="mt-2 text-sm text-muted-foreground">현재 문서의 저장·한글 양식에 반영됩니다. 위의 새 자료 제작 조건과 별도로 관리합니다.</p>
+            <p className="mt-2 text-sm text-muted-foreground">현재 문서의 저장·한글·워드·텍스트 복사에 반영됩니다. 위의 새 자료 제작 조건과 별도로 관리합니다.</p>
           </section>
         )}
         {editing ? (
@@ -129,13 +140,9 @@ export function DocResult({
             {displayDoc.sections.map((s, i) => (
               <section key={i} className="space-y-1">
                 <h3 className="text-base font-semibold">{s.heading}</h3>
-                <Textarea
-                  value={s.content}
-                  onChange={(e) => onPatchSection(i, { content: e.target.value })}
-                  className="min-h-[160px] text-base leading-relaxed"
-                  aria-label={`섹션 ${i + 1} 본문`}
-                />
+                <DocumentSectionBody section={s} index={i} editing disabled={editorLocked} onChange={(content) => onPatchSection(i, { content })} />
                 <RegenControls index={i} regen={regen} />
+                {onLoadSectionEvidence && <DocumentSectionEvidence heading={s.heading} state={sectionEvidence?.[i]} onLoad={() => onLoadSectionEvidence(i)} />}
               </section>
             ))}
           </fieldset>
@@ -143,9 +150,8 @@ export function DocResult({
           displayDoc.sections.map((s, i) => (
             <section key={i} className="space-y-1">
               <h3 className="mb-1 font-semibold">{s.heading}</h3>
-              <p className="whitespace-pre-wrap break-words text-base leading-relaxed text-foreground">
-                {s.content}
-              </p>
+              <DocumentSectionBody section={s} index={i} editing={false} disabled={editorLocked} onChange={(content) => onPatchSection(i, { content })} />
+              {onLoadSectionEvidence && <DocumentSectionEvidence heading={s.heading} state={sectionEvidence?.[i]} onLoad={() => onLoadSectionEvidence(i)} />}
             </section>
           ))
         )}
@@ -197,7 +203,7 @@ export function DocResult({
           <Button
             variant="outline"
             className="h-12 flex-1 gap-2 text-base"
-            onClick={() => onCopy(docToText(displayDoc))}
+            onClick={() => onCopy(docToText(displayDoc, metadata))}
             disabled={editorLocked || outputBlocked}
             title={outputBlocked ? "핵심 품질 오류를 수정한 뒤 복사할 수 있습니다." : undefined}
           >

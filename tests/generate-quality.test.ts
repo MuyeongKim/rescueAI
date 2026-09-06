@@ -1209,7 +1209,7 @@ describe("결정론적 생성 품질 검사", () => {
       ...deck.slides[1],
       role: "comparison",
       composition: "comparison",
-      steps: ["기준 하나", "기준 둘", "불필요한 기준"],
+      steps: ["기준 하나", "기준 둘", "추가 확인", "중단 보고", "재개 확인", "범위 밖 단계"],
       visual: {
         mode: "source-page",
         sourceRef: "[만들어낸 교범 p.99]",
@@ -1234,6 +1234,16 @@ describe("결정론적 생성 품질 검사", () => {
         }),
       ])
     );
+  });
+
+  it.each([2, 3, 5])("비교 구도로 바꾼 자료의 기준과 추가 단계 %i개를 삭제 없이 허용한다", (count) => {
+    const deck = validSlides();
+    deck.slides[1] = {
+      ...deck.slides[1], role: "comparison", composition: "comparison",
+      steps: ["정상 상태", "이상 상태", "중단 보고", "교관 확인", "재개 판단"].slice(0, count),
+    };
+    const issues = inspectGeneratedSlides(deck, "1시간").issues;
+    expect(issues.filter((issue) => issue.code === "invalid_slide_composition" && issue.path === "slides.1.steps")).toEqual([]);
   });
 
   it("유효한 원문 출처라도 visual-explanation이 아닌 화면에서는 거부한다", () => {

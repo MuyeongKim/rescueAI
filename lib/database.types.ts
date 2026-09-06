@@ -278,6 +278,8 @@ export type GenerationJobStatus =
   | "drafting"
   | "reviewing"
   | "repairing"
+  | "awaiting_review"
+  | "cancelled"
   | "completed"
   | "needs_attention"
   | "failed";
@@ -289,6 +291,9 @@ type GenerationJobsRow = {
   stage: string;
   request: Json;
   result: Json | null;
+  review_outline: Json | null;
+  review_draft: Json | null;
+  quality_issues: Json;
   checkpoint: Json;
   progress: number;
   attempt: number;
@@ -316,6 +321,9 @@ type GenerationJobsInsert = {
   stage?: string;
   request: Json;
   result?: Json | null;
+  review_outline?: Json | null;
+  review_draft?: Json | null;
+  quality_issues?: Json;
   checkpoint?: Json;
   progress?: number;
   attempt?: number;

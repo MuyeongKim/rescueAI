@@ -12,6 +12,7 @@ import {
   ImageOff,
   LayoutTemplate,
   Loader2,
+  Maximize2,
   Plus,
   Presentation,
   Trash2,
@@ -26,6 +27,8 @@ import type {
   SlideLayoutType,
 } from "@/lib/generate";
 import { generatedPptxSlideCount } from "@/lib/pptx-plan";
+import { buildSlideLayoutPlan } from "@/lib/slide-layout";
+import { SlidePlanPreview as SlidePreview } from "@/components/generate/SlidePlanPreview";
 import {
   fallbackSlideVisualMode,
   generatedSourceLabel,
@@ -72,23 +75,8 @@ import {
   type ResultChrome,
 } from "@/components/generate/parts";
 
-const LAYOUT_META: Record<SlideLayoutType, { label: string; eyebrow: string }> = {
-  objectives: { label: "교육 목표", eyebrow: "오늘 교육이 끝나면" },
-  concept: { label: "핵심 개념", eyebrow: "핵심 메시지" },
-  process: { label: "절차", eyebrow: "현장 절차" },
-  equipment: { label: "장비 점검", eyebrow: "현장 확인 체크" },
-  case: { label: "상황 사례", eyebrow: "상황을 읽고 대응합니다" },
-  safety: { label: "안전 수칙", eyebrow: "현장 확인 체크" },
-  summary: { label: "핵심 정리", eyebrow: "교육 핵심 정리" },
-};
-
 type SlideVisualKind = "source" | "diagram" | "content";
 
-const SLIDE_VISUAL_KIND_LABELS: Record<SlideVisualKind, string> = {
-  source: "원문",
-  diagram: "도형",
-  content: "내용",
-};
 const SOURCE_VISUAL_UNSELECTED_VALUE = "__source_visual_unselected__";
 
 export function slideVisualKind(slide: GeneratedSlide): SlideVisualKind {
@@ -221,207 +209,6 @@ export function resolvePreviewLayout(slide: GeneratedSlide): SlideLayoutType {
   if (/(사례|상황|시나리오|현장대응)/.test(title)) return "case";
   if (/(핵심요약|요약|정리|마무리)/.test(title)) return "summary";
   return "concept";
-}
-
-function PreviewList({
-  bullets,
-  accent,
-  checklist = false,
-}: {
-  bullets: string[];
-  accent: string;
-  checklist?: boolean;
-}) {
-  return (
-    <div className="space-y-1.5 overflow-hidden">
-      {bullets.slice(0, 4).map((bullet, index) => (
-        <div
-          key={index}
-          className="flex min-w-0 items-start gap-2 border-b border-border/50 pb-1.5 last:border-0"
-        >
-          <span
-            className={cn(
-              "flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-bold",
-              checklist ? "border bg-background" : "text-white"
-            )}
-            style={checklist ? { borderColor: accent, color: accent } : { backgroundColor: accent }}
-          >
-            {checklist ? "✓" : String(index + 1).padStart(2, "0")}
-          </span>
-          <span className="line-clamp-2 text-[10px] leading-[1.45] text-foreground/80">
-            {bullet}
-          </span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-/** 다운로드 결과의 의미 레이아웃을 축약해 보여 주는 16:9 미리보기. */
-function SlidePreview({
-  slide,
-  index,
-  accent,
-  decorative = false,
-}: {
-  slide: GeneratedSlide;
-  index: number;
-  accent: string;
-  decorative?: boolean;
-}) {
-  const layout = resolvePreviewLayout(slide);
-  const meta = LAYOUT_META[layout];
-  const bullets = slide.bullets.filter(Boolean);
-  const steps = (slide.steps ?? []).filter(Boolean);
-  const dark = layout === "summary";
-  const visualKind = slideVisualKind(slide);
-  const isSourceVisual = visualKind === "source";
-  const sourceLabel = visualSourceLabel(slide);
-  const hasSourcePreview =
-    isSourceVisual && Boolean(slide.visual?.imageData?.startsWith("data:image/"));
-
-  return (
-    <div
-      className={cn(
-        "relative aspect-video w-full overflow-hidden rounded-md border shadow-sm",
-        dark ? "border-slate-700 bg-slate-900 text-white" : "bg-background"
-      )}
-      role={decorative ? undefined : "img"}
-      aria-hidden={decorative || undefined}
-      aria-label={
-        decorative
-          ? undefined
-          : `슬라이드 ${index + 1} 미리보기: ${meta.label}, ${SLIDE_VISUAL_KIND_LABELS[visualKind]} 구성`
-      }
-    >
-      <div className="absolute inset-x-0 top-0 h-1" style={{ backgroundColor: accent }} />
-      <div className="flex h-full flex-col px-[5.5%] pb-[4%] pt-[5%]">
-        <div className="flex min-w-0 items-start gap-2 border-b border-current/10 pb-2">
-          <span
-            className="flex h-6 w-6 shrink-0 items-center justify-center rounded text-[10px] font-bold text-white"
-            style={{ backgroundColor: accent }}
-          >
-            {index + 1}
-          </span>
-          <h3 className="line-clamp-2 min-w-0 text-xs font-bold leading-tight sm:text-sm">
-            {slide.title || "제목을 입력해 주세요"}
-          </h3>
-        </div>
-
-        <div className="min-h-0 flex-1 pt-2">
-          <p
-            className="mb-2 text-[8px] font-bold uppercase tracking-[0.12em] sm:text-[9px]"
-            style={{ color: dark ? "#9fb0cb" : accent }}
-          >
-            {meta.eyebrow}
-          </p>
-
-          {isSourceVisual ? (
-            <div className="grid h-[82%] grid-cols-[1.25fr_0.75fr] gap-3">
-              <div className="relative flex min-w-0 items-center justify-center overflow-hidden rounded border bg-muted/40">
-                {hasSourcePreview && slide.visual?.imageData ? (
-                  <Image
-                    src={slide.visual.imageData}
-                    alt=""
-                    fill
-                    unoptimized
-                    sizes="320px"
-                    className="object-contain"
-                  />
-                ) : (
-                  <div className="px-2 text-center text-muted-foreground">
-                    <FileImage className="mx-auto h-6 w-6" aria-hidden="true" />
-                    <p className="mt-1 text-[8px] font-semibold">원문 페이지 연결</p>
-                    <p className="mt-0.5 line-clamp-2 text-[7px] leading-tight">
-                      {sourceLabel ?? "검증된 교육자료"}
-                    </p>
-                  </div>
-                )}
-              </div>
-              <PreviewList bullets={bullets} accent={accent} />
-            </div>
-          ) : layout === "process" && steps.length >= 2 ? (
-            <div className="flex h-[80%] flex-col justify-between">
-              <div className="flex items-start justify-between gap-1">
-                {steps.slice(0, 5).map((step, stepIndex) => (
-                  <div
-                    key={stepIndex}
-                    className="relative flex min-w-0 flex-1 flex-col items-center text-center"
-                  >
-                    {stepIndex < Math.min(steps.length, 5) - 1 && (
-                      <span
-                        className="absolute left-[62%] top-2 h-px w-[76%] opacity-45"
-                        style={{ backgroundColor: accent }}
-                      />
-                    )}
-                    <span
-                      className="relative z-10 flex h-4 w-4 items-center justify-center rounded-full text-[8px] font-bold text-white"
-                      style={{ backgroundColor: accent }}
-                    >
-                      {stepIndex + 1}
-                    </span>
-                    <span className="mt-1 line-clamp-2 text-[8px] font-semibold leading-tight">
-                      {step}
-                    </span>
-                  </div>
-                ))}
-              </div>
-              <p className="line-clamp-2 text-[9px] leading-relaxed text-foreground/65">
-                {bullets[0]}
-              </p>
-            </div>
-          ) : layout === "case" && bullets.length >= 2 ? (
-            <div className="grid h-[82%] grid-cols-[0.9fr_1.1fr] gap-3">
-              <div
-                className="flex min-w-0 items-center border-l-2 bg-muted/50 px-2"
-                style={{ borderColor: accent }}
-              >
-                <p className="line-clamp-5 text-[10px] font-bold leading-relaxed">{bullets[0]}</p>
-              </div>
-              <PreviewList bullets={bullets.slice(1)} accent={accent} />
-            </div>
-          ) : layout === "concept" && bullets.length >= 2 ? (
-            <div className="grid h-[82%] grid-cols-[0.9fr_1.1fr] gap-3">
-              <div
-                className="flex min-w-0 items-center border-l-2 pl-2"
-                style={{ borderColor: accent }}
-              >
-                <p className="line-clamp-5 text-[10px] font-bold leading-relaxed">{bullets[0]}</p>
-              </div>
-              <PreviewList bullets={bullets.slice(1)} accent={accent} />
-            </div>
-          ) : layout === "summary" ? (
-            <div className="grid grid-cols-2 gap-x-4 gap-y-2">
-              {bullets.slice(0, 4).map((bullet, bulletIndex) => (
-                <div key={bulletIndex} className="flex min-w-0 gap-2">
-                  <span className="text-[9px] font-bold" style={{ color: accent }}>
-                    {String(bulletIndex + 1).padStart(2, "0")}
-                  </span>
-                  <span className="line-clamp-3 text-[9px] leading-relaxed text-white/85">
-                    {bullet}
-                  </span>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <PreviewList
-              bullets={bullets}
-              accent={accent}
-              checklist={layout === "equipment" || layout === "safety"}
-            />
-          )}
-        </div>
-
-        <div className="flex items-center justify-between gap-2 border-t border-current/10 pt-1 text-[7px] opacity-60">
-          <span>전북특별자치도 소방본부</span>
-          <span className="rounded-full border border-current/20 px-1.5 py-0.5 font-semibold">
-            {SLIDE_VISUAL_KIND_LABELS[visualKind]}
-          </span>
-          <span>{index + 1}</span>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 function SlideEvidence({ slide }: { slide: GeneratedSlide }) {
@@ -596,7 +383,7 @@ export function normalizedCompositionPatch(
       ["첫 번째 비교 내용을 입력해 주세요.", "두 번째 비교 내용을 입력해 주세요."],
       4
     );
-    steps = fillSlideItems(steps, 2, ["비교 기준 1", "비교 기준 2"], 2);
+    steps = fillSlideItems(steps, 2, ["비교 기준 1", "비교 기준 2"], 5);
   } else if (composition === "process") {
     steps = fillSlideItems(steps, 3, ["준비", "수행", "확인"], 5);
   } else if (composition === "decision-flow") {
@@ -695,7 +482,7 @@ function SlideVisualSlot({ slide }: { slide: GeneratedSlide }) {
   const status = hasPreview
     ? "미리보기 준비"
     : isSource
-      ? "원본 연결"
+      ? "그림 확인 전"
       : mode === "native-diagram"
         ? "도형 구성"
         : "사용 안 함";
@@ -720,7 +507,7 @@ function SlideVisualSlot({ slide }: { slide: GeneratedSlide }) {
             <h3 className="text-sm font-semibold">시각자료</h3>
             <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">
               {isSource
-                ? "교육자료에서 확인된 원본 이미지를 사용합니다."
+                ? hasPreview ? "확인한 원문 그림을 표시합니다." : "연결된 페이지의 그림은 사전 확인 후 표시됩니다."
                 : mode === "native-diagram"
                   ? "내용을 PPT 기본 도형으로 안전하게 표현합니다."
                   : "이 장에는 원본 이미지나 별도 도형을 사용하지 않습니다."}
@@ -814,10 +601,17 @@ export function SlideDeckResult({
   const { accent, editing } = chrome;
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [pendingDelete, setPendingDelete] = useState<number | null>(null);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
+  const expandTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const sourcePreviewRequestRef = useRef(0);
+  const [sourcePreview, setSourcePreview] = useState<{
+    key: string; status: "loading" | "ready" | "fallback" | "error";
+    slide?: GeneratedSlide; message: string;
+  } | null>(null);
+  useEffect(() => () => { sourcePreviewRequestRef.current += 1; }, []);
   const [announcement, setAnnouncement] = useState("");
   const pendingIssueFocusRef = useRef<number | null>(null);
   const selectedSlide = deck.slides[selectedIndex];
-  const visualSummary = slideVisualSummary(deck.slides);
   const selectedVisualCandidates = selectedSlide
     ? verifiedSlideVisualCandidates(selectedSlide, deck.sources)
     : [];
@@ -852,6 +646,56 @@ export function SlideDeckResult({
   const evidenceIssueSet = new Set(evidenceRepair?.issueIndices ?? []);
   const qualityIssueSet = new Set(qualityRepair?.issueIndices ?? []);
   const mode = resolveSlideDeckMode(deck.mode);
+  const previewKey = (slide: GeneratedSlide) => JSON.stringify([slide, deck.sources]);
+  const preparedSlide = (slide: GeneratedSlide) => sourcePreview?.key === previewKey(slide) && sourcePreview.slide ? sourcePreview.slide : slide;
+  const visualSummary = slideVisualSummary(deck.slides.map(preparedSlide));
+  const layoutCounts = new Map<string, number>();
+  const layoutOccurrences = deck.slides.map((slide) => {
+    const layout = buildSlideLayoutPlan(preparedSlide(slide), mode).layout;
+    const count = layoutCounts.get(layout) ?? 0;
+    layoutCounts.set(layout, count + 1);
+    return count;
+  });
+  const expandedSlide = expandedIndex !== null ? deck.slides[expandedIndex] : undefined;
+
+  async function handlePreviewSource(index: number) {
+    const slide = deck.slides[index];
+    if (!slide || slideVisualKind(slide) !== "source") return;
+    const key = previewKey(slide);
+    const request = ++sourcePreviewRequestRef.current;
+    setSourcePreview({ key, status: "loading", message: "원문 그림을 확인하고 있습니다…" });
+    try {
+      const { prepareDeckSourceVisuals } = await import("@/lib/source-visuals");
+      const prepared = await prepareDeckSourceVisuals({ ...deck, slides: [slide] });
+      if (request !== sourcePreviewRequestRef.current) return;
+      const next = prepared.deck.slides[0];
+      setSourcePreview({
+        key, slide: next, status: prepared.resolved > 0 ? "ready" : "fallback",
+        message: prepared.resolved > 0
+          ? `원문 그림 확인 완료 · ${next.visual?.sourceRef ?? "연결된 페이지"}`
+          : prepared.fallbacks.some((fallback) => fallback.reason === "text-only-page")
+            ? "그림이 없는 텍스트 위주 페이지입니다. 다운로드에서도 아래 내용 구도로 대체합니다."
+            : "원문 그림을 가져오지 못해 현재는 아래 내용 구도로 표시합니다. 다운로드할 때 다시 확인합니다.",
+      });
+    } catch {
+      if (request !== sourcePreviewRequestRef.current) return;
+      setSourcePreview({ key, status: "error", message: "원문 그림 확인에 실패했습니다. 잠시 후 다시 확인해 주세요." });
+    }
+  }
+
+  function sourcePreviewControl(slide: GeneratedSlide, index: number) {
+    if (slideVisualKind(slide) !== "source") return null;
+    const current = sourcePreview?.key === previewKey(slide) ? sourcePreview : null;
+    return (
+      <div className="space-y-2">
+        <Button type="button" variant="outline" className="min-h-12 w-full gap-2" disabled={current?.status === "loading" || editorLocked} onClick={() => void handlePreviewSource(index)}>
+          {current?.status === "loading" ? <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <FileImage className="h-4 w-4" aria-hidden="true" />}
+          {current?.status === "loading" ? "원문 그림 확인 중…" : current ? "원문 그림 다시 확인" : "원문 그림 미리 확인"}
+        </Button>
+        <p role="status" className="text-sm leading-relaxed text-muted-foreground">{current?.message ?? "실제 원문 그림과 대체 여부를 다운로드 전에 확인합니다."}</p>
+      </div>
+    );
+  }
   const downloadSlideCount = generatedPptxSlideCount(deck.slides.length, deck.sources.length);
   const editorLocked =
     chrome.saving || Boolean(chrome.locked) || regen.loadingIndex !== null || pptxLoading;
@@ -1099,9 +943,11 @@ export function SlideDeckResult({
                           className="absolute inset-0 z-10 cursor-pointer rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:cursor-not-allowed"
                         />
                         <SlidePreview
-                          slide={slide}
+                          slide={preparedSlide(slide)}
                           index={index}
                           accent={accent}
+                          mode={mode}
+                          occurrence={layoutOccurrences[index]}
                           decorative
                         />
                         <div
@@ -1215,12 +1061,18 @@ export function SlideDeckResult({
                     <div className="grid gap-4 p-3 xl:grid-cols-[minmax(280px,0.9fr)_minmax(0,1.1fr)]">
                       <div className="min-w-0 space-y-3 xl:sticky xl:top-4 xl:self-start">
                         <SlidePreview
-                          slide={selectedSlide}
+                          slide={preparedSlide(selectedSlide)}
                           index={selectedIndex}
                           accent={accent}
+                          mode={mode}
+                          occurrence={layoutOccurrences[selectedIndex]}
                           decorative
                         />
-                        <SlideVisualSlot slide={selectedSlide} />
+                        <Button type="button" variant="outline" className="min-h-12 w-full gap-2" onClick={(event) => { expandTriggerRef.current = event.currentTarget; setExpandedIndex(selectedIndex); }}>
+                          <Maximize2 className="h-4 w-4" aria-hidden="true" /> 크게 보기
+                        </Button>
+                        {sourcePreviewControl(selectedSlide, selectedIndex)}
+                        <SlideVisualSlot slide={preparedSlide(selectedSlide)} />
                       </div>
 
                       <div className="min-w-0 space-y-4">
@@ -1359,12 +1211,12 @@ export function SlideDeckResult({
                             const minimum = minimumBulletCount(selectedSlide);
                             return (
                               <div key={bulletIndex} className="flex items-center gap-2">
-                                <Input
+                                <Textarea
                                   value={bullet}
                                   onChange={(event) =>
                                     onPatchBullet(selectedIndex, bulletIndex, event.target.value)
                                   }
-                                  className="h-12 min-w-0 flex-1 text-base"
+                                  className="min-h-24 min-w-0 flex-1 resize-y text-base leading-relaxed"
                                   aria-label={`슬라이드 ${selectedIndex + 1} 핵심 내용 ${bulletIndex + 1}`}
                                 />
                                 <Button
@@ -1398,7 +1250,7 @@ export function SlideDeckResult({
 
                         <div className="space-y-1.5">
                           <label className="text-sm font-semibold" htmlFor={`slide-steps-${selectedIndex}`}>
-                            절차 단계{" "}
+                            {selectedSlide.composition === "comparison" ? "비교 기준과 추가 단계" : "절차 단계"}{" "}
                             <span className="font-normal text-muted-foreground">(선택, 한 줄에 하나)</span>
                           </label>
                           <Textarea
@@ -1414,7 +1266,9 @@ export function SlideDeckResult({
                             placeholder={"위험 확인\n장비 점검\n대원 수행\n결과 보고"}
                           />
                           <p className="text-sm leading-relaxed text-muted-foreground">
-                            절차 화면은 3~5단계가 가장 읽기 좋습니다.
+                            {selectedSlide.composition === "comparison"
+                              ? "앞 두 줄은 왼쪽·오른쪽 비교 기준입니다. 남은 최대 3개 단계는 화면 하단에 보존됩니다."
+                              : "절차 화면은 3~5단계가 가장 읽기 좋습니다."}
                           </p>
                         </div>
 
@@ -1537,7 +1391,11 @@ export function SlideDeckResult({
                   aria-labelledby={`slide-review-title-${index}`}
                 >
                   <div className="p-3">
-                    <SlidePreview slide={slide} index={index} accent={accent} decorative />
+                    <SlidePreview slide={preparedSlide(slide)} index={index} accent={accent} mode={mode} occurrence={layoutOccurrences[index]} decorative />
+                    <Button type="button" variant="outline" className="mt-3 min-h-12 w-full gap-2" onClick={(event) => { expandTriggerRef.current = event.currentTarget; setExpandedIndex(index); }}>
+                      <Maximize2 className="h-4 w-4" aria-hidden="true" /> {index + 1}번 슬라이드 크게 보기
+                    </Button>
+                    <div className="mt-2">{sourcePreviewControl(slide, index)}</div>
                   </div>
                   <h3
                     id={`slide-review-title-${index}`}
@@ -1573,12 +1431,34 @@ export function SlideDeckResult({
               : `PPTX 다운로드 · 총 ${downloadSlideCount}장 (발표자 노트 포함)`}
           </Button>
           <p className="text-sm leading-relaxed text-muted-foreground">
-            분야 색 표준 양식으로 만들어집니다. 미리보기는 화면 구성을 간략히 보여 주며, 실제
-            PPTX는 16:9 발표 화면에 맞춰 생성됩니다. AI가 인덱싱된 교육자료를 근거로 생성한
+            분야 색 표준 양식으로 만들어집니다. 미리보기와 PPTX는 같은 내용과 화면 구도를 사용합니다.
+            PC에 설치된 글꼴에 따라 줄바꿈이 달라질 수 있습니다. AI가 인덱싱된 교육자료를 근거로 생성한
             초안이므로 시행 전 내용을 반드시 검토·보완하세요.
           </p>
         </CardContent>
       </Card>
+
+      <Dialog open={expandedIndex !== null && Boolean(expandedSlide)} onOpenChange={(open) => { if (!open) setExpandedIndex(null); }}>
+        <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-[min(96vw,1200px)]" onCloseAutoFocus={(event) => { event.preventDefault(); expandTriggerRef.current?.focus(); }}>
+          <DialogHeader>
+            <DialogTitle>슬라이드 {expandedIndex !== null ? expandedIndex + 1 : ""} 크게 보기</DialogTitle>
+            <DialogDescription>그림과 전체 내용을 확인한 뒤 다운로드하세요.</DialogDescription>
+          </DialogHeader>
+          {expandedSlide && expandedIndex !== null && (
+            <>
+              <SlidePreview slide={preparedSlide(expandedSlide)} index={expandedIndex} accent={accent} mode={mode} occurrence={layoutOccurrences[expandedIndex]} decorative />
+              {sourcePreviewControl(expandedSlide, expandedIndex)}
+              <SlideReadableContent slide={expandedSlide} accent={accent} />
+              <SlideEvidence slide={expandedSlide} />
+              <div className="flex justify-between gap-2">
+                <Button type="button" variant="outline" className="min-h-12" disabled={expandedIndex === 0} onClick={() => setExpandedIndex(expandedIndex - 1)}>이전 장</Button>
+                <Button type="button" variant="outline" className="min-h-12" onClick={() => setExpandedIndex(null)}>닫기</Button>
+                <Button type="button" variant="outline" className="min-h-12" disabled={expandedIndex === deck.slides.length - 1} onClick={() => setExpandedIndex(expandedIndex + 1)}>다음 장</Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={pendingDelete !== null}

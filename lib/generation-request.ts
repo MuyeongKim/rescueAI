@@ -36,6 +36,7 @@ export const generateRequestSchema = z
     place: optionalText(100),
     conditions: optionalText(MAX_GENERATION_CONDITIONS_CHARS),
     slideMode: z.enum(SLIDE_DECK_MODES).optional(),
+    reviewOutline: z.boolean().optional(),
     model: optionalText(100),
   })
   .strip();

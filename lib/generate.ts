@@ -1,6 +1,7 @@
 // 교육자료·훈련계획 생성 — 스키마·옵션·프롬프트의 단일 출처.
 // UI는 클릭·선택형(자유 입력 최소화): 유형 × 분야 × 대상 × 시간 조합으로 생성한다.
 import { z } from "zod";
+import { normalizeDocumentText } from "@/lib/document-text";
 import {
   SOP_APPLICATION_MARKER,
   SOP_DEGRADED_DISCLOSURE,
@@ -309,7 +310,7 @@ export const generatedSlideSchema = z.object({
     .max(5)
     .optional()
     .describe(
-      "비교는 두 기준명, 절차·시간흐름·판단흐름은 순서대로 3~5개 단계어"
+      "비교는 앞 두 항목이 기준명이고 이후 최대 3개는 추가 확인 단계, 절차·시간흐름·판단흐름은 순서대로 3~5개 단계어"
     ),
   notes: z
     .string()
@@ -744,7 +745,7 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
 - 화면에는 구체적인 핵심 문장 2~4개만 두고, 각 문장은 ${MAX_SLIDE_BULLET_CHARS}자 이내로 제한하며 한 장에는 하나의 메시지만 담으세요.
 - 발표자 노트는 4~7문장으로 충분히 작성하세요. 근거가 되는 이유·교관이 보여줄 시범·대원에게 던질 질문·
   실수하기 쉬운 지점·잘못했을 때의 교정 방법 중 해당되는 내용을 포함하여 교관이 그대로 설명할 수 있게 하세요.
-- **비교 장**은 steps에 양쪽 기준명 2개를, **절차·시간흐름·판단흐름 장**은 steps에 3~5개 단계 핵심어를
+- **비교 장**은 steps의 앞 두 항목에 양쪽 기준명을 넣고, 필요한 추가 확인 단계는 뒤에 최대 3개까지 보존하세요. **절차·시간흐름·판단흐름 장**은 steps에 3~5개 단계 핵심어를
   순서대로 넣고 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 제한하세요. 나머지 장은 steps를 생략하세요.
 - 각 장에 교육 역할 role과 화면 구도 composition을 서로 구분하여 지정하세요.
   · role: objectives, concept, procedure, equipment, comparison, timeline, decision, case, safety, evidence, summary
@@ -848,6 +849,7 @@ export type GenerationQualityIssueCode =
   | "missing_time_allocation"
   | "time_total_mismatch"
   | "slide_count"
+  | "slide_count_limit"
   | "thin_notes"
   | "slide_title_too_long"
   | "slide_bullet_too_long"
@@ -905,7 +907,8 @@ export const GENERATION_QUALITY_LABELS = {
   missing_evaluation: "평가·통과 기준",
   missing_time_allocation: "단계별 시간 배분",
   time_total_mismatch: "교육 시간 합계",
-  slide_count: "교육 시간에 맞는 슬라이드 수",
+  slide_count: "교육 시간별 권장 슬라이드 수",
+  slide_count_limit: "본문 슬라이드 허용 범위(6~20장)",
   thin_notes: "일부 발표자 노트 분량",
   slide_title_too_long: "일부 슬라이드 제목 길이",
   slide_bullet_too_long: "일부 슬라이드 핵심 문장 길이",
@@ -960,7 +963,7 @@ export const BLOCKING_GENERATION_QUALITY_CODES: ReadonlySet<GenerationQualityIss
     "missing_time_allocation",
     "time_total_mismatch",
     "thin_content",
-    "slide_count",
+    "slide_count_limit",
     "missing_source_citation",
     "missing_source_refs",
     "invalid_source_ref",
@@ -1571,6 +1574,12 @@ function bracketedMinutes(text: string): number[] {
   return values;
 }
 
+/** 문단 재생성에서는 다른 문단의 배정 시간을 침범하지 않는다. */
+export function sectionAllocatedMinutes(text: string): number | null {
+  const values = bracketedMinutes(text);
+  return values.length > 0 ? values.reduce((sum, minutes) => sum + minutes, 0) : null;
+}
+
 export function durationMinutes(duration: Duration): number {
   return duration === "1시간" ? 60 : duration === "2시간" ? 120 : 240;
 }
@@ -1774,7 +1783,7 @@ export function stripDocumentInlineSourceRefsFromText(
   allowedSourceRefs: readonly string[] = []
 ): string {
   const allowed = new Set(allowedSourceRefs.map((reference) => reference.trim()).filter(Boolean));
-  const stripped = content.replace(INLINE_SOURCE_REF, (reference) =>
+  const stripped = normalizeDocumentText(content).replace(INLINE_SOURCE_REF, (reference) =>
     isDocumentSourceLabel(reference, allowed) ? "" : reference
   );
 
@@ -1968,11 +1977,17 @@ export function inspectGeneratedSlides(
 ): GenerationQualityReport {
   const issues: GenerationQualityIssue[] = [];
   const [minimum, maximum] = slideCountRangeFor(duration);
-  if (draft.slides.length < minimum || draft.slides.length > maximum) {
+  if (draft.slides.length < 6 || draft.slides.length > 20) {
+    issues.push({
+      code: "slide_count_limit",
+      path: "slides",
+      message: `본문 슬라이드는 6~20장으로 구성해 주세요. 현재 ${draft.slides.length}장입니다.`,
+    });
+  } else if (draft.slides.length < minimum || draft.slides.length > maximum) {
     issues.push({
       code: "slide_count",
       path: "slides",
-      message: `${duration} 교육은 본문 슬라이드 ${minimum}~${maximum}장이 필요하지만 ${draft.slides.length}장입니다.`,
+      message: `${duration} 교육은 본문 ${minimum}~${maximum}장을 권장합니다. 현재 ${draft.slides.length}장이므로 실습·설명 시간에 맞는지 확인해 주세요.`,
     });
   }
 
@@ -2073,11 +2088,11 @@ export function inspectGeneratedSlides(
       });
     }
     const stepCount = slide.steps?.filter((step) => step.trim()).length ?? 0;
-    if (slide.composition === "comparison" && stepCount !== 2) {
+    if (slide.composition === "comparison" && (stepCount < 2 || stepCount > 5)) {
       issues.push({
         code: "invalid_slide_composition",
         path: `slides.${index}.steps`,
-        message: "comparison 화면은 양쪽 기준명 2개를 steps에 넣어야 합니다.",
+        message: "비교 화면은 앞 두 항목에 양쪽 기준명을 넣고, 추가 확인 단계를 포함해 총 2~5개를 유지하세요.",
       });
     }
     if (
@@ -2375,8 +2390,15 @@ export function buildSectionRegenPrompt(args: {
   sopEvidence?: SopEvidence;
   conditions?: string;
   instruction?: string;
+  relatedSections?: { heading: string; content: string }[];
 }): string {
   const outlineText = args.outline.map((h, i) => `${i + 1}. ${h}`).join("\n");
+  const allocatedMinutes = sectionAllocatedMinutes(args.currentContent);
+  const relatedText = args.relatedSections?.length
+    ? `\n[다른 섹션의 현재 내용 — 실습과 평가의 연결 유지]\n${args.relatedSections
+        .map((section) => `${section.heading}\n${section.content}`)
+        .join("\n\n")}\n`
+    : "";
   const instr = args.instruction?.trim()
     ? `\n[수정 지시] ${args.instruction.trim()}`
     : "";
@@ -2404,7 +2426,7 @@ export function buildSectionRegenPrompt(args: {
   return `전북소방본부 ${args.category} 분야 교육 문서 "${args.docTitle}"의 한 섹션만 다시 작성합니다.
 
 [문서 전체 구성]
-${outlineText}
+${outlineText}${relatedText}
 
 [다시 작성할 섹션] ${args.index + 1}번째 — "${args.currentHeading}"
 [요청 조건]${focusLine}${condition.line}
@@ -2420,6 +2442,7 @@ ${actionProcedureRule}
 - 본문 문장 뒤에 [문서명 p.3]과 같은 출처 라벨을 붙이지 마세요. 출처는 서버가 전체 문서 맨 뒤의 '근거 자료 및 출처'에 자동으로 모읍니다.
 - 대상 수준(${args.audience})·교육 시간(${args.duration})에 맞춰 한국어로 작성하세요.
 - heading은 반드시 현재 제목 "${args.currentHeading}"을 글자 그대로 유지하세요.
+${allocatedMinutes !== null ? `- 이 섹션에 이미 배정된 합계 ${allocatedMinutes}분을 유지하세요. 대괄호 시간 표기를 보존하고 다른 섹션의 시간을 가져오지 마세요.` : "- 현재 섹션에 배정 시간이 없으면 새 시간 표기를 추가하지 마세요."}
 - 이 섹션 하나만 JSON으로 반환하세요(heading, content).`;
 }
 
@@ -2481,7 +2504,7 @@ ${args.current.bullets.map((b) => `· ${b}`).join("\n")}
 - 제목은 분류명이 아니라 이 장의 결론이 드러나는 서술형으로 ${MAX_SLIDE_TITLE_CHARS}자 이내로 쓰고, 핵심 문장은 구체적으로 2~4개를 각각 ${MAX_SLIDE_BULLET_CHARS}자 이내로 작성하세요.
 - 발표자 노트는 이유·시범 포인트·질문·흔한 실수·교정 방법 중 해당 내용을 포함해 4~7문장으로 작성하세요.
 - ${slideMode.rules}
-- 비교 장이면 steps에 기준명 2개를, 절차·시간흐름·판단흐름 장이면 ${MAX_SLIDE_STEP_CHARS}자 이내의 단계어 3~5개를 넣고, 아니면 steps를 생략하세요.
+- 비교 장이면 steps의 앞 두 항목에 기준명을 넣고, 기존 추가 확인 단계는 삭제하지 말고 뒤에 최대 3개까지 유지하세요(총 2~5개). 절차·시간흐름·판단흐름 장이면 ${MAX_SLIDE_STEP_CHARS}자 이내의 단계어 3~5개를 넣고, 아니면 steps를 생략하세요.
 - 참여 실습 또는 절차 장이면 steps를 실제 대원 행동 3~5개로 구성하고, 화면·노트에 동작 후 확인과 이상 시 중단·보고·재수행을 연결하세요. 근거에 고정 순서가 없으면 기술 절차를 임의로 만들지 마세요.
 - 내용 의미에 맞는 role과 composition을 서로 구분해 지정하고, 호환용 layout도 함께 지정하세요.
 - visual은 source-page/native-diagram/none 중 하나로 지정하세요. 원문 시각자료는 참고 자료 본문에 사진·그림·표·도해 같은 시각 단서가 확인되는 경우에만 visual-explanation 화면에서 사용하고 정확한 sourceRef와 altText를 넣되 assetId·documentId·imageData는 만들지 마세요.

@@ -1,4 +1,26 @@
 import type { GeneratedDoc, GeneratedDocSource } from "@/lib/generate";
+import { normalizeDocumentText } from "@/lib/document-text";
+
+export type DocumentMetadata = {
+  topic?: string;
+  category?: string;
+  audience?: string;
+  duration?: string;
+  date?: string;
+  place?: string;
+};
+
+/** 화면·파일·복사가 같은 현재 문서 정보를 사용한다. 본문은 변경하지 않는다. */
+export function documentMetadataLines(metadata?: DocumentMetadata): string[] {
+  if (!metadata) return [];
+  const rows: Array<[string, string | undefined]> = [
+    ["훈련 주제", metadata.topic], ["분야", metadata.category],
+    ["교육 대상", metadata.audience], ["교육 시간", metadata.duration],
+    ["훈련 일자", metadata.date === undefined ? undefined : metadata.date.trim() || "미정"],
+    ["훈련 장소", metadata.place === undefined ? undefined : metadata.place.trim() || "미정"],
+  ];
+  return rows.flatMap(([label, value]) => value?.trim() ? [`${label}: ${value.trim()}`] : []);
+}
 
 // 과거 저장본처럼 허용 출처 목록이 없는 문서도 정리할 수 있도록, 페이지 번호가
 // 명시된 일반적인 인라인 인용은 별도로 인식한다. 시간·SOP 적용 표식 등 다른
@@ -45,7 +67,7 @@ export function stripInlineDocumentSources(
   text: string,
   labels: readonly string[] = []
 ): string {
-  let cleaned = text;
+  let cleaned = normalizeDocumentText(text);
   for (const label of labels) {
     const normalized = label.trim();
     if (normalized) cleaned = cleaned.split(normalized).join("");

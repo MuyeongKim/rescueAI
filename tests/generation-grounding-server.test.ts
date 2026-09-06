@@ -83,4 +83,16 @@ describe("서버 수치 검증의 실제 근거 경계", () => {
     const result = await verifyNativeDocumentSourceProvenance([source], "일반구조", native.client, true);
     expect(result).toMatchObject({ degraded: true, contextText: "" });
   });
+  it("기본 원문 청크의 실제 본문과 정확한 문서·페이지를 분리해서 보존한다", async () => {
+    const native = nativeClient("첫 번째 원문 문장", [
+      { document_id: 7, page_num: 3, content: "두 번째 청크의 원문 문장" },
+      { document_id: 7, page_num: 4, content: "요청하지 않은 페이지" },
+      { document_id: 8, page_num: 3, content: "요청하지 않은 문서" },
+    ]);
+    const result = await verifyNativeDocumentSourceProvenance([source], "일반구조", native.client, true);
+    expect(result.evidenceChunks).toEqual([
+      { source, content: "첫 번째 원문 문장" },
+      { source, content: "두 번째 청크의 원문 문장" },
+    ]);
+  });
 });

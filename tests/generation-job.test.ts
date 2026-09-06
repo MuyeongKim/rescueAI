@@ -69,11 +69,13 @@ describe("durable generation job 순수 로직", () => {
     expect(durableGenerationEstimateSeconds(type, duration)).toBe(expected);
   });
 
-  it("완료·주의 필요·실패만 terminal로 판정한다", () => {
+  it("완료·보완·실패·사용자 검토 대기·중단은 자동 폴링을 끝낸다", () => {
     const terminal = new Set<GenerationJobStatus>([
       "completed",
       "needs_attention",
       "failed",
+      "awaiting_review",
+      "cancelled",
     ]);
 
     for (const status of GENERATION_JOB_STATUSES) {

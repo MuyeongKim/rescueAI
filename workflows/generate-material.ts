@@ -15,6 +15,7 @@ import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 import { fetchCategoryContext, supplementGenerationContext, type GenerationContext } from "@/lib/generate-context";
 import {
   bindOutlineEvidence,
+  generationRetrievalQuery,
   hasOutlineEvidenceExcerpt,
   MAX_OUTLINE_EVIDENCE_SEARCHES,
   outlineEvidenceGaps,
@@ -27,6 +28,7 @@ import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
 import { generateRequestSchema, type ValidatedGenerateRequest } from "@/lib/generation-request";
 import { getChatModel } from "@/lib/llm";
 import { generationErrorInfo } from "@/lib/generation-model-error";
+import { projectGenerationOutline, projectGenerationReviewDraft, publicGenerationQualityIssues } from "@/lib/generation-job-review";
 import {
   SLIDE_COMPOSITION_TYPES,
   SLIDE_ROLE_TYPES,
@@ -137,6 +139,9 @@ type GenerationCheckpoint = {
     addedContext: boolean;
     reviewed: boolean;
   };
+  outlineApproved?: boolean;
+  selectedRepairIndices?: number[];
+  selectedRepairRunToken?: string;
 };
 
 function documentHeadings(type: "plan" | "lesson"): readonly string[] {
@@ -180,7 +185,7 @@ type WorkflowReview = {
 
 type WorkflowResult = {
   jobId: string;
-  status: "completed" | "needs_attention" | "failed";
+  status: "completed" | "needs_attention" | "failed" | "awaiting_review" | "cancelled";
 };
 
 type GenerationJobUpdate =
@@ -678,7 +683,8 @@ function resultWithQuality(
 
 function slideRepairIndices(
   report: GenerationQualityReport,
-  slides: readonly GeneratedSlide[]
+  slides: readonly GeneratedSlide[],
+  selected?: readonly number[],
 ): number[] {
   const indices = new Set<number>();
   const add = (index: number) => {
@@ -711,7 +717,7 @@ function slideRepairIndices(
     }
   }
   if (indices.size === 0 && report.issues.length > 0) add(Math.max(0, slides.length - 2));
-  return Array.from(indices).slice(0, MAX_SLIDE_REPAIRS_PER_ROUND);
+  return Array.from(indices).filter((index) => !selected || selected.includes(index)).slice(0, MAX_SLIDE_REPAIRS_PER_ROUND);
 }
 
 function issuesForSlide(
@@ -785,7 +791,7 @@ function sameJson(left: unknown, right: unknown): boolean {
 async function prepareGenerationJobStep(
   jobId: string,
   runToken: string
-): Promise<{ type: ValidatedGenerateRequest["type"]; slideCount: number }> {
+): Promise<{ type: ValidatedGenerateRequest["type"]; slideCount: number; selectedRepairIndices?: number[] }> {
   "use step";
   let row = await loadWorkerJob(jobId, runToken);
   const request = validatedRequest(row);
@@ -820,7 +826,7 @@ async function prepareGenerationJobStep(
       fetchCategoryContext(
         request.category,
         40,
-        buildFocusedTrainingQuery(request.topic, request.focus ?? ""),
+        generationRetrievalQuery(buildFocusedTrainingQuery(request.topic, request.focus ?? ""), request.conditions),
         admin
       )
     );
@@ -844,7 +850,29 @@ async function prepareGenerationJobStep(
   return {
     type: request.type,
     slideCount: request.type === "slides" ? targetSlideCount(request.duration) : 0,
+    selectedRepairIndices: existing.selectedRepairRunToken === runToken ? existing.selectedRepairIndices : undefined,
   };
+}
+
+async function pauseForOutlineReviewStep(jobId: string, runToken: string): Promise<boolean> {
+  "use step";
+  const row = await loadWorkerJob(jobId, runToken);
+  const request = validatedRequest(row);
+  const checkpoint = checkpointOf(row.checkpoint);
+  // Old jobs and explicit quick generation keep their existing behavior.
+  if (!request.reviewOutline || checkpoint.outlineApproved || checkpoint.draft?.sections.length || checkpoint.slides?.length) return false;
+  const outline = projectGenerationOutline(checkpoint, request.type);
+  if (!outline) throw new FatalError("검토할 목차를 확인하지 못했습니다.");
+  const updated = await updateActiveWorkerJobCas(row, {
+    status: "awaiting_review", stage: "목차와 시간 배분을 확인해 주세요", progress: 28,
+    review_outline: asJson(outline), review_draft: null, quality_issues: [],
+    result: null, quality_passed: false, completed_at: null,
+    run_token: crypto.randomUUID(),
+  });
+  if (updated) return true;
+  const current = await loadWorkerJobById(jobId);
+  if (current?.status === "awaiting_review") return true;
+  throw new FatalError("다른 화면에서 생성 작업이 변경되었습니다.");
 }
 
 async function generateDocumentOutlineStep(jobId: string, runToken: string): Promise<void> {
@@ -947,6 +975,7 @@ async function supplementOutlineEvidenceStep(
     const queries = outlineEvidenceSearchQueries(
       buildFocusedTrainingQuery(request.topic, request.focus ?? ""),
       outlineEvidenceGaps(outlineItems(checkpoint), context.contextText),
+      request.conditions,
     );
     row = await saveCheckpointCas(row, (current) => Boolean(current.outlineEvidence), (current) => ({
       ...current,
@@ -1153,7 +1182,7 @@ ${batchPlan
     (section) =>
       `${section.heading}: ${section.purpose} / 핵심 ${section.keyPoints.join(", ")}${
         section.minutes === null ? "" : ` / 이 섹션 시간 합계 정확히 ${section.minutes}분`
-      } / 행동 요구 ${(section.actionRequirements ?? []).join("; ") || "기존 핵심 기준 적용"} / 허용 근거 ${(section.sourceRefs ?? []).join(", ") || "기존 전체 근거"}`
+      } / 행동 요구 ${(section.actionRequirements ?? []).join("; ") || "기존 핵심 기준 적용"} / 기술 조건 ${(section.evidenceRequirements ?? []).map((item) => item.requirement).join("; ") || "기존 핵심 기준 적용"} / 허용 근거 ${(section.sourceRefs ?? []).join(", ") || "기존 전체 근거"}`
   )
   .join("\n")}
 ${outlineEvidenceGuidance(batchPlan, context.contextText)}`,
@@ -1319,7 +1348,7 @@ ${batchPlan
     (slide, index) =>
       `${start + index + 1}번 ${JSON.stringify(slide.title)}: ${slide.purpose} / 근거 ${slide.sourceRefs.join(", ")}${
         slide.sopTarget ? " / 이 장에 SOP 적용 계약을 정확히 반영" : ""
-      } / 행동 요구 ${(slide.actionRequirements ?? []).join("; ") || "기존 목적 적용"}`
+      } / 행동 요구 ${(slide.actionRequirements ?? []).join("; ") || "기존 목적 적용"} / 기술 조건 ${(slide.evidenceRequirements ?? []).map((item) => item.requirement).join("; ") || "기존 목적 적용"}`
   )
   .join("\n")}
 ${outlineEvidenceGuidance(batchPlan, context.contextText)}`,
@@ -1396,7 +1425,7 @@ async function reviewGenerationStep(
     totalIssues: report.issues.length,
     repairIndices:
       request.type === "slides"
-        ? slideRepairIndices(report, checkpoint.slides ?? [])
+        ? slideRepairIndices(report, checkpoint.slides ?? [], checkpoint.selectedRepairRunToken === runToken ? checkpoint.selectedRepairIndices : undefined)
         : documentRepairIndices(
             report,
             checkpoint.draft?.sections ?? [],
@@ -1683,6 +1712,9 @@ async function finishGenerationJobStep(
         : "저장된 초안에 추가 보완이 필요함",
       progress: 100,
       result: completed ? asJson(result) : null,
+      review_draft: completed ? null : asJson(result),
+      review_outline: null,
+      quality_issues: completed ? [] : asJson(publicGenerationQualityIssues(report.issues, blockingIssues)),
       quality_passed: completed,
       completed_at: new Date().toISOString(),
       error_message: completed
@@ -1700,7 +1732,7 @@ async function finishGenerationJobStep(
     if (
       current.status === "completed" ||
       current.status === "needs_attention" ||
-      current.status === "failed"
+      current.status === "failed" || current.status === "cancelled" || current.status === "awaiting_review"
     ) {
       return { jobId, status: current.status };
     }
@@ -1720,6 +1752,12 @@ async function failGenerationJobStep(
   message: string
 ): Promise<WorkflowResult> {
   "use step";
+  const currentBeforeFailure = await loadWorkerJobById(jobId);
+  if (currentBeforeFailure && ["completed", "needs_attention", "failed", "cancelled", "awaiting_review"].includes(currentBeforeFailure.status)) {
+    return { jobId, status: currentBeforeFailure.status as WorkflowResult["status"] };
+  }
+  if (currentBeforeFailure && currentBeforeFailure.run_token !== runToken) throw new FatalError("새 실행으로 교체된 생성 작업입니다.");
+  const reviewDraft = projectGenerationReviewDraft(currentBeforeFailure?.checkpoint);
   const admin = createGenerationWorkerClient();
   const { data, error } = await withSupabaseRequestTimeout(
     admin
@@ -1730,6 +1768,7 @@ async function failGenerationJobStep(
         progress: 100,
         quality_passed: false,
         error_message: message.slice(0, 500),
+        review_draft: reviewDraft ? asJson(reviewDraft) : null,
         completed_at: new Date().toISOString(),
         run_token: crypto.randomUUID(),
         workflow_missing_count: 0,
@@ -1754,7 +1793,7 @@ async function failGenerationJobStep(
   if (
     current?.status === "completed" ||
     current?.status === "needs_attention" ||
-    current?.status === "failed"
+    current?.status === "failed" || current?.status === "cancelled" || current?.status === "awaiting_review"
   ) {
     return { jobId, status: current.status };
   }
@@ -1768,6 +1807,7 @@ async function failGenerationJobStep(
 
 prepareGenerationJobStep.maxRetries = 6;
 generateDocumentOutlineStep.maxRetries = 6;
+pauseForOutlineReviewStep.maxRetries = 3;
 supplementOutlineEvidenceStep.maxRetries = 3;
 reviewOutlineEvidenceStep.maxRetries = 3;
 generateDocumentBatchStep.maxRetries = 6;
@@ -1792,6 +1832,7 @@ export async function generateMaterialWorkflow(
     const prepared = await prepareGenerationJobStep(jobId, runToken);
     if (prepared.type === "slides") {
       await generateSlideOutlineStep(jobId, runToken, prepared.slideCount);
+      if (await pauseForOutlineReviewStep(jobId, runToken)) return { jobId, status: "awaiting_review" };
       for (let index = 0; index < MAX_OUTLINE_EVIDENCE_SEARCHES; index += 1) {
         await supplementOutlineEvidenceStep(jobId, runToken, index);
       }
@@ -1806,6 +1847,7 @@ export async function generateMaterialWorkflow(
       }
     } else {
       await generateDocumentOutlineStep(jobId, runToken);
+      if (await pauseForOutlineReviewStep(jobId, runToken)) return { jobId, status: "awaiting_review" };
       for (let index = 0; index < MAX_OUTLINE_EVIDENCE_SEARCHES; index += 1) {
         await supplementOutlineEvidenceStep(jobId, runToken, index);
       }
@@ -1828,11 +1870,11 @@ export async function generateMaterialWorkflow(
       round += 1
     ) {
       if (prepared.type === "slides") {
-        for (const index of review.repairIndices) {
+        for (const index of review.repairIndices.filter((index) => !prepared.selectedRepairIndices || prepared.selectedRepairIndices.includes(index))) {
           await repairSlideStep(jobId, runToken, round, index);
         }
       } else {
-        for (const index of review.repairIndices) {
+        for (const index of review.repairIndices.filter((index) => !prepared.selectedRepairIndices || prepared.selectedRepairIndices.includes(index))) {
           await repairDocumentSectionStep(jobId, runToken, round, index);
         }
       }

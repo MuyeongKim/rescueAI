@@ -23,6 +23,7 @@ vi.mock("@/lib/llm", () => ({ getChatModel: mocks.getChatModel }));
 
 import { maxDuration, POST } from "@/app/api/generate/section/route";
 import { SOP_NOT_FOUND_DISCLOSURE } from "@/lib/sop-evidence";
+import { sectionAllocatedMinutes } from "@/lib/generate";
 
 function requestWith(body: unknown, signal?: AbortSignal): Request {
   return new Request("http://localhost/api/generate/section", {
@@ -464,5 +465,41 @@ describe("POST /api/generate/section 입력 경계", () => {
     expect(mocks.generateObject.mock.calls[0][0].prompt).toContain(
       "문서 맨 뒤의 '근거 자료 및 출처'"
     );
+  });
+
+  it("기존 문단 배정 시간을 보존하고 다른 섹션의 실습·평가 내용을 프롬프트에 전달한다", async () => {
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: "[공기호흡기 교범 p.3]\n장비 점검 절차를 설명한다.",
+      sources: [], bindingSources: [], degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    mocks.generateObject.mockResolvedValue({ object: { heading: "교관시범", content: "[시간: 20분]\n교관이 확인 동작을 시연한다." } });
+    const response = await POST(requestWith(validSectionBody({
+      current: { heading: "교관시범", content: "[시간: 20분]\n기존 확인 동작" },
+      relatedSections: [{ heading: "대원실습", content: "대원이 고정부를 확인한다." }, { heading: "정리·평가", content: "고정부 확인 동작을 관찰한다." }],
+    })));
+    expect(response.status).toBe(200);
+    const prompt = mocks.generateObject.mock.calls[0][0].prompt;
+    expect(prompt).toContain("이미 배정된 합계 20분을 유지");
+    expect(prompt).toContain("대원이 고정부를 확인한다.");
+    expect(prompt).toContain("고정부 확인 동작을 관찰한다.");
+    expect((await response.json()).content).toContain("[시간: 20분]");
+  });
+
+  it.each([
+    ["[시간: 20분]\n기존", "[시간: 30분]\n변경"],
+    ["[시간: 20분]\n기존", "시간 삭제"],
+    ["시간 없는 기존", "[시간: 10분]\n추가"],
+  ])("재생성이 배정 합계를 바꾸면 기존 문단에 적용할 응답을 반환하지 않는다", async (current, content) => {
+    mocks.fetchCategoryContext.mockResolvedValue({ contextText: "원문 내용", sources: [], bindingSources: [], degraded: false, sopEvidence: { status: "not_found", sourceLabels: [] } });
+    mocks.generateObject.mockResolvedValue({ object: { heading: "교관시범", content } });
+    const response = await POST(requestWith(validSectionBody({ current: { heading: "교관시범", content: current } })));
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({ code: "section_time_changed" });
+  });
+
+  it("문단 시간 합산은 인용 페이지나 기술 제한 시간을 교육 시간에 섞지 않는다", () => {
+    expect(sectionAllocatedMinutes("[도입 · 10분] [실습 · 1시간] [교범 p.30] [제한 시간 · 3분]")).toBe(70);
+    expect(sectionAllocatedMinutes("관찰 후 3분 내 확인 [교범 p.20]")).toBeNull();
   });
 });

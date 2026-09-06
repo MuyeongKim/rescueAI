@@ -762,6 +762,24 @@ export function ResultSkeleton({
   onRetry?: () => void;
 }) {
   const estimatedSeconds = job?.estimatedSeconds ?? generationEstimateSeconds(type, duration);
+  if (!verifyingDelivery && (job?.status === "awaiting_review" || job?.status === "cancelled")) {
+    return (
+      <Card className="overflow-hidden border-border/60 shadow-sm">
+        <AccentBar accent={accent} />
+        <CardHeader>
+          <h2 className="text-lg font-semibold">{job.status === "awaiting_review" ? "자료 구성을 확인해 주세요" : "생성 작업을 중단했습니다"}</h2>
+        </CardHeader>
+        <CardContent className="text-base leading-relaxed text-muted-foreground">
+          {job.status === "awaiting_review"
+            ? "아래 목차와 시간 배분을 확인하면 본문 제작을 시작합니다. 나중에 이어서 확인할 수도 있습니다."
+            : "이미 저장된 작업 단계는 남아 있습니다. 위에서 조건을 바꾸어 새 자료를 만들 수 있습니다."}
+          {job.status === "cancelled" && onRetry && (
+            <Button type="button" variant="outline" className="mt-4 min-h-12 w-full" disabled={retrying} onClick={onRetry}>중단한 작업 이어서 제작</Button>
+          )}
+        </CardContent>
+      </Card>
+    );
+  }
   const terminalProblem =
     !verifyingDelivery &&
     (job?.status === "failed" ||

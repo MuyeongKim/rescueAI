@@ -1,5 +1,7 @@
 // 생성물 ↔ 폼 상태 변환 (순수 함수, 클라이언트/서버 공용).
 // UI(components/generate/*)에서 분리해 두면 저장본 복원 규칙을 테스트로 고정할 수 있다.
+import { documentMetadataLines, prepareGeneratedDocForExport, type DocumentMetadata } from "@/lib/document-export";
+import { normalizeDocumentText } from "@/lib/document-text";
 import {
   AUDIENCES,
   DURATIONS,
@@ -100,7 +102,7 @@ function storedSections(value: unknown): GeneratedSection[] {
     )
     .map((section) => ({
       heading: (section.heading as string).trim().slice(0, 100),
-      content: (section.content as string).slice(0, 20_000),
+      content: normalizeDocumentText((section.content as string).slice(0, 20_000)),
     }))
     .filter((section) => section.heading.length > 0)
     .slice(0, 8);
@@ -310,12 +312,14 @@ export function hydrateMaterial(m?: SavedMaterial | null): HydratedMaterial {
 }
 
 /** 생성 문서를 클립보드 복사용 평문으로 편다(제목 + 섹션 + 근거 목록). */
-export function docToText(doc: GeneratedDoc): string {
+export function docToText(input: GeneratedDoc, metadata?: DocumentMetadata): string {
+  const doc = prepareGeneratedDocForExport(input);
   const body = doc.sections.map((s) => `${s.heading}\n${s.content}`).join("\n\n");
   const sources = doc.sources.length
     ? `\n\n[근거 자료]\n${doc.sources
         .map((s) => `- ${s.doc}${s.page != null ? ` p.${s.page}` : ""}`)
         .join("\n")}`
     : "";
-  return `${doc.title}\n\n${body}${sources}`;
+  const meta = documentMetadataLines(metadata);
+  return `${doc.title}\n\n${meta.length ? `${meta.join("\n")}\n\n` : ""}${body}${sources}`;
 }

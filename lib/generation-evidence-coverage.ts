@@ -76,10 +76,18 @@ export function outlineEvidenceGaps(
 export function outlineEvidenceSearchQueries(
   topic: string,
   gaps: readonly OutlineEvidenceGap[],
+  conditions?: string,
 ): string[] {
   const requirements = new Set<string>();
   const queries: string[] = [];
-  for (const gap of gaps) {
+  const conditionTerms = compact(conditions ?? "").match(/[가-힣a-zA-Z0-9]{2,}/g)?.filter((term) =>
+    !/^(훈련|교육|대원|교관|실시|확인|필요|대상|포함|일반|계획|진행)$/.test(term)) ?? [];
+  const priority = (gap: OutlineEvidenceGap) =>
+    (conditionTerms.some((term) => gap.requirement.includes(term)) ? 100 : 0) +
+    (/안전|위험|중단|금지|응급|잔압|경보|누출|누설|절단|낙하|관통|확보|추락/.test(gap.requirement) ? 10 : 0);
+  const prioritized = gaps.map((gap, index) => ({ gap, index }))
+    .sort((a, b) => priority(b.gap) - priority(a.gap) || a.index - b.index);
+  for (const { gap } of prioritized) {
     const requirement = compact(gap.requirement);
     const key = requirement.replace(/\s/g, "");
     if (!key || requirements.has(key)) continue;
@@ -89,6 +97,12 @@ export function outlineEvidenceSearchQueries(
     if (queries.length === MAX_OUTLINE_EVIDENCE_SEARCHES) break;
   }
   return queries;
+}
+
+/** Keep explicit field conditions inside the retrieval service's 100-character query limit. */
+export function generationRetrievalQuery(topic: string, conditions?: string): string {
+  const condition = compact(conditions ?? "");
+  return condition ? `${condition.slice(0, 45)} ${compact(topic).slice(0, 54)}` : compact(topic).slice(0, 100);
 }
 
 export function bindOutlineEvidence<T extends EvidenceOutlineItem>(

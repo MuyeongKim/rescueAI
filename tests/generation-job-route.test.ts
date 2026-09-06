@@ -294,7 +294,7 @@ describe("POST /api/generate/jobs/:id/retry", () => {
     expect(mocks.dispatchGenerationJob).not.toHaveBeenCalled();
   });
 
-  it.each(["failed", "needs_attention"] as const)(
+  it.each(["failed", "needs_attention", "cancelled"] as const)(
     "%s 작업은 revision CAS로 queued 전환한 뒤 저장된 작업을 실행한다",
     async (status) => {
       const current = jobRow({ status, attempt: 2, revision: 7 });
@@ -340,7 +340,7 @@ describe("POST /api/generate/jobs/:id/retry", () => {
         ["user_id", "user-1"],
         ["revision", 7],
       ]);
-      expect(worker.statuses).toEqual([["failed", "needs_attention"]]);
+      expect(worker.statuses).toEqual([["failed", "needs_attention", "cancelled"]]);
       const runToken = worker.builder.update.mock.calls[0]?.[0]?.run_token;
       expect(mocks.dispatchGenerationJob).toHaveBeenCalledWith(JOB_ID, runToken);
       expect(payload.job.status).toBe("queued");

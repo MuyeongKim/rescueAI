@@ -1,3 +1,5 @@
+import { normalizeDocumentText } from "@/lib/document-text";
+
 export type HwpxParagraphKind = "body" | "bullet" | "label" | "blank";
 
 export type HwpxParagraph = {
@@ -44,7 +46,7 @@ function splitCollapsedLine(line: string): string[] {
  * 명시적 줄바꿈은 보존하고, 한 줄에 붙은 훈련 단계·목록 표지만 안전하게 분리한다.
  */
 export function normalizeHwpxCellText(text: string): string {
-  const normalized = text.replace(/\r\n?/g, "\n").replace(/[\u2028\u2029]/g, "\n");
+  const normalized = normalizeDocumentText(text);
   const lines: string[] = [];
 
   for (const rawLine of normalized.split("\n")) {

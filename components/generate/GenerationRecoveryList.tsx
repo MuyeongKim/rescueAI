@@ -6,6 +6,7 @@ import { DeleteGenerationDraftButton } from "@/components/generate/DeleteGenerat
 
 const statusLabels: Record<string, string> = {
   queued: "접수됨", retrieving: "근거 조회 중", drafting: "제작 중", reviewing: "점검 중",
+  awaiting_review: "구성 확인 대기", cancelled: "중단됨",
   repairing: "보완 중", completed: "제작 완료", needs_attention: "추가 보완 필요", failed: "다시 시도 필요",
 };
 export function GenerationRecoveryList({ jobs, drafts, collapsible = false }: {

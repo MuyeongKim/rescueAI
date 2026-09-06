@@ -5,6 +5,7 @@ import {
   outlineEvidenceGaps,
   outlineEvidenceGuidance,
   outlineEvidenceSearchQueries,
+  generationRetrievalQuery,
   type OutlineEvidenceRequirement,
 } from "@/lib/generation-evidence-coverage";
 
@@ -50,6 +51,22 @@ describe("목차별 원문 연결 확인", () => {
     expect(queries[0]).toMatch(/^저압 경보 발생 시 대응/);
     expect(queries[1]).toMatch(/^공기 누설 확인/);
     expect(queries.every((query) => query.length <= 100)).toBe(true);
+  });
+
+  it("뒤쪽의 사용자 명시 조건과 안전 조건을 일반 설명보다 먼저 검색한다", () => {
+    const gaps = ["장비 구성품 소개", "교육자료 구성 설명", "추락 위험 시 중단 기준", "야간 조명 설치 기준"]
+      .map((requirement, itemIndex) => ({ requirement, itemIndex, requirementIndex: 0 }));
+    const queries = outlineEvidenceSearchQueries("산악 구조", gaps, "야간 훈련");
+    expect(queries[0]).toMatch(/^야간 조명/);
+    expect(queries[1]).toMatch(/^추락 위험/);
+    expect(queries).toHaveLength(2);
+  });
+
+  it("긴 주제에서도 사용자 조건이 검색어 100자 밖으로 밀리지 않는다", () => {
+    const query = generationRetrievalQuery("장비 점검 훈련 ".repeat(20), "야간 강풍 및 공기 누설 시 중단 기준");
+    expect(query).toContain("야간 강풍");
+    expect(query).toContain("장비 점검");
+    expect(query.length).toBeLessThanOrEqual(100);
   });
 
   it("새로 연결된 실제 출처를 본문에 우선 전달하고 미해결 조건은 추정하지 않도록 남긴다", () => {

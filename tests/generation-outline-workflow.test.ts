@@ -119,6 +119,31 @@ function addMissing(...requirements: string[]) {
 }
 
 describe("목차 생성 뒤 부족 근거만 보완하는 영속 workflow", () => {
+  it("사용자 검토 선택 시 목차만 공개하고 추가검색·본문 호출 없이 실행권을 폐기한다", async () => {
+    job.request = { ...request, reviewOutline: true };
+    addMissing("중단 판단 조건");
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("awaiting_review");
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+    expect(mocks.supplement).not.toHaveBeenCalled();
+    expect(job.run_token).not.toBe(runToken);
+    expect(job.result).toBeNull();
+    expect(job.review_outline).toMatchObject({ title: "공기호흡기 점검 훈련", evidenceGaps: [{ itemIndex: 1, requirement: "중단 판단 조건" }] });
+    expect(JSON.stringify(job.review_outline)).not.toContain("contextText");
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("awaiting_review");
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
+  it("승인된 목차는 재생성하지 않고 부족근거 확인 뒤 본문 단계로 진행한다", async () => {
+    job.request = { ...request, reviewOutline: true };
+    Object.assign(job.checkpoint, { outlineApproved: true });
+    Object.assign(job.checkpoint.documentOutline.sections[1], { actionRequirements: ["사용자가 지정한 중단 기준을 확인한다"] });
+    addMissing("중단 판단 조건");
+    await generateMaterialWorkflow(jobId, runToken);
+    expect(mocks.supplement).toHaveBeenCalledOnce();
+    expect(draftPrompt).toContain("중단 판단 조건");
+    expect(draftPrompt).toContain("사용자가 지정한 중단 기준을 확인한다");
+    expect(job.status).not.toBe("awaiting_review");
+  });
   it("모든 원문 연결이 있으면 검색과 연결 검토 모델 호출을 추가하지 않는다", async () => {
     await generateMaterialWorkflow(jobId, runToken);
     expect(mocks.supplement).not.toHaveBeenCalled();

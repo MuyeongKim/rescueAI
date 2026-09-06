@@ -667,11 +667,11 @@ describe("POST /api/generate/save", () => {
     expect(client.spies.insert).not.toHaveBeenCalled();
   });
 
-  it("교육 시간에 비해 슬라이드 수가 부족하면 저장을 차단한다", async () => {
+  it("본문 슬라이드가 허용 하한 6장보다 적으면 저장을 차단한다", async () => {
     const client = makeClient();
     mocks.createClient.mockResolvedValue(client);
     const body = validSlidesBody();
-    body.content.slides = body.content.slides.slice(0, 13);
+    body.content.slides = body.content.slides.slice(0, 5);
 
     const response = await POST(requestWith(body));
 
@@ -679,12 +679,22 @@ describe("POST /api/generate/save", () => {
     await expect(response.json()).resolves.toMatchObject({
       code: "generation_quality_invalid",
       issues: expect.arrayContaining([
-        expect.objectContaining({ code: "slide_count" }),
+        expect.objectContaining({ code: "slide_count_limit" }),
       ]),
     });
     expect(client.spies.insert).not.toHaveBeenCalled();
   });
 
+
+  it("1시간 자료에 완성된 본문 13장을 편집해도 장수 권고만으로 저장을 막지 않는다", async () => {
+    const client = makeClient();
+    mocks.createClient.mockResolvedValue(client);
+    const body = validSlidesBody({ duration: "1시간" });
+    body.content.slides.splice(5, 1); // 안전·평가 장은 유지하고 중간 장만 제거한다.
+    const response = await POST(requestWith(body));
+    expect(response.status).toBe(200);
+    expect(client.spies.insert).toHaveBeenCalledOnce();
+  });
   it("중복 제목 같은 검토 경고만 있으면 저장을 허용한다", async () => {
     const client = makeClient();
     mocks.createClient.mockResolvedValue(client);

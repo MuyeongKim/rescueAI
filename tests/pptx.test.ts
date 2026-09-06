@@ -150,6 +150,24 @@ describe("PPTX 발표자 노트 출처", () => {
 });
 
 describe("PPTX 실제 파일 생성", () => {
+  it("구도를 바꿔도 모든 핵심 문장과 마지막 중단·보고 단계를 PPT 본문에 보존한다", async () => {
+    const compositions = ["statement", "list", "process", "comparison", "timeline", "decision-flow", "checklist", "scenario", "visual-explanation", "summary"] as const;
+    const input = compositions.map((composition) => slide(`${composition} 보존 검사`, {
+      composition,
+      bullets: ["조건확인문장", "수행조치문장", "비상중단문장", "보고재개문장"],
+      steps: ["현장평가", "상황판단", "안전조치", "중단보고", "재진입결정"],
+      notes: "발표자 노트는 본문과 별도로 작성됩니다.",
+    }));
+    const zip = await JSZip.loadAsync(await buildPptxBytes({ title: "내용 보존", slides: input, sources: [] }, "일반구조", ""));
+    for (const [index, current] of input.entries()) {
+      const xml = await zip.file(`ppt/slides/slide${index + 2}.xml`)!.async("string");
+      for (const content of [...current.bullets, ...(current.steps ?? [])]) {
+        // 발표자 노트에만 남아 있는 경우는 통과시키지 않는다.
+        expect(xml, `${current.composition}: ${content}`).toContain(content);
+      }
+    }
+  });
+
   it("모든 의미 레이아웃과 슬라이드별 Sources 노트를 포함한 PPTX를 만든다", async () => {
     expect(MIN_BODY_FONT_SIZE).toBeGreaterThanOrEqual(16);
     const requestedOutput = process.env.PPTX_QA_OUTPUT_DIR;

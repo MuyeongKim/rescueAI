@@ -1016,6 +1016,23 @@ describe("searchExternalRag Supabase I/O 계약", () => {
     expect(result.contextText).toContain("[화학보호복 교범 p.3]");
     expect(result.contextText?.match(/100 kPa/g)).toHaveLength(1);
     expect(result.contextText).not.toContain("999 kPa");
+    expect(result.evidenceChunks).toEqual([{
+      source: { document_id: 7, doc: "화학보호복 교범", page: 3 }, content: verified.content,
+    }]);
+    expect(supabase.records.every((record) => record.eqs.some(([column, value]) => column === "is_active" && value === true))).toBe(true);
+  });
+
+  it("원문 보기용 청크는 같은 페이지도 합치지 않고 원본 연속 본문을 보존한다", async () => {
+    const metadata = { source: "화학보호복 교범.pdf", document_id: 7, page_num: 3, "Header 2": "화학보호복 교범" };
+    const first = row(700, { content: "첫 번째 청크 원문. <!-- image --> 압력 점검 방법", metadata });
+    const second = row(701, { content: "두 번째 청크 원문. 점검 후 결과를 보고", metadata });
+    const otherPage = row(702, { content: "다른 페이지 내용", metadata: { ...metadata, page_num: 4 } });
+    const supabase = createSupabaseMock(() => ({ data: [first, second, otherPage], error: null }));
+    const source = { document_id: 7, doc: "화학보호복 교범", page: 3 };
+    const result = await verifyExternalRagSourceProvenance([source], "화학사고", supabase.client as never, true);
+    expect(result.evidenceChunks).toEqual([{ source, content: first.content }, { source, content: second.content }]);
+    expect(result.contextText).not.toContain("<!-- image -->");
+    expect(result.evidenceChunks?.[0].content).toContain("<!-- image -->");
   });
 
   it.each([undefined, "", "A".repeat(80_001)])("저장 검증 본문이 없거나 상한을 넘으면 불완전 상태로 닫는다", async (content) => {

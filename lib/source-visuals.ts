@@ -16,6 +16,23 @@ const MAX_RENDER_WIDTH = 1440;
 const MAX_RENDER_HEIGHT = 1080;
 const MAX_RENDER_PIXELS = MAX_RENDER_WIDTH * MAX_RENDER_HEIGHT;
 const JPEG_QUALITY = 0.84;
+// 사전 확인과 다운로드가 같은 페이지를 사용한다. 브라우저 메모리에만 최대 8장/2분 보관하며,
+// 재사용할 때도 signedDocumentUrl로 현재 원문 접근 권한을 먼저 확인한다.
+const previewImages = new Map<string, { imageData: string; score: number; expiresAt: number; sourcePath: string }>();
+function cachedPreviewImage(key: string, sourceUrl: string) {
+  const cached = previewImages.get(key);
+  if (cached && cached.expiresAt > Date.now() && cached.sourcePath === sourceUrl.split("?")[0]) return cached;
+  previewImages.delete(key);
+  return undefined;
+}
+function rememberPreviewImage(key: string, imageData: string, score: number, sourceUrl: string) {
+  previewImages.delete(key);
+  while (previewImages.size >= MAX_SOURCE_VISUALS_PER_DECK) {
+    const oldest = previewImages.keys().next().value;
+    if (oldest) previewImages.delete(oldest); else break;
+  }
+  previewImages.set(key, { imageData, score, expiresAt: Date.now() + 120_000, sourcePath: sourceUrl.split("?")[0] });
+}
 
 type DocumentSourceResponse = {
   url?: unknown;
@@ -706,11 +723,26 @@ export async function prepareDeckSourceVisuals(
       continue;
     }
 
+    const cachedCandidates = documentCandidates.map((candidate) => ({ candidate, cached: cachedPreviewImage(candidateKey(candidate), source.url) }));
+    if (cachedCandidates.every(({ cached }) => cached)) {
+      for (const { candidate, cached } of cachedCandidates) {
+        evaluatedByPage.set(candidateKey(candidate), {
+          candidate, score: cached!.score,
+        });
+      }
+      continue;
+    }
+
     let pdf: Awaited<ReturnType<typeof pdfjs.getDocument>["promise"]> | null = null;
     try {
       pdf = await pdfjs.getDocument({ url: source.url }).promise;
       for (const candidate of documentCandidates) {
         const key = candidateKey(candidate);
+        const cached = cachedPreviewImage(key, source.url);
+        if (cached) {
+          evaluatedByPage.set(key, { candidate, score: cached.score });
+          continue;
+        }
         let page: PdfPageForVisualInspection | null = null;
         try {
           const pageNumber = exactPdfPageNumber(candidate.page, pdf.numPages);
@@ -770,7 +802,6 @@ export async function prepareDeckSourceVisuals(
   // 1차 분석 결과로 장별 후보를 고른 뒤, 실제 JPEG 렌더링은 선택된 페이지만 수행한다.
   // 따라서 후보가 24개여도 캔버스/data URL은 출력할 최대 8장만 메모리에 존재한다.
   const selectedCandidateBySlide = new Map<number, EvaluatedCandidate>();
-  const usedPages = new Set<string>();
   for (const request of plan.requests) {
     const evaluated = request.candidates
       .map((candidate, order) => ({ item: evaluatedByPage.get(candidateKey(candidate)), order }))
@@ -780,12 +811,12 @@ export async function prepareDeckSourceVisuals(
     const usable = evaluated
       .filter(({ item }) => !item.failure)
       .sort((left, right) => right.item.score - left.item.score || left.order - right.order);
-    const selected =
-      usable.find(({ item }) => !usedPages.has(candidateKey(item.candidate)))?.item ??
-      usable[0]?.item;
+    // 사용자가 고른 원문을 우선한다. 장 순서/다른 장의 선택 때문에 사전 확인한 그림이 바뀌지 않는다.
+    const selected = usable.find(({ item }) =>
+      item.candidate.documentId === request.documentId && item.candidate.page === request.page
+    )?.item ?? usable[0]?.item;
     if (selected) {
       selectedCandidateBySlide.set(request.slideIndex, selected);
-      usedPages.add(candidateKey(selected.candidate));
     } else {
       const failure =
         evaluated.find(({ item }) => item.failure === "text-only-page")?.item.failure ??
@@ -809,6 +840,11 @@ export async function prepareDeckSourceVisuals(
     ).values()
   );
   const renderedByPage = new Map<string, string>();
+  for (const candidate of selectedPages) {
+    const source = signedSources.get(candidate.documentId);
+    const cached = source ? cachedPreviewImage(candidateKey(candidate), source.url) : undefined;
+    if (cached) renderedByPage.set(candidateKey(candidate), cached.imageData);
+  }
   const selectedDocumentIds = Array.from(
     new Set(selectedPages.map((candidate) => candidate.documentId))
   );
@@ -816,9 +852,9 @@ export async function prepareDeckSourceVisuals(
   for (const documentId of selectedDocumentIds) {
     const source = signedSources.get(documentId);
     const selectedDocumentPages = selectedPages.filter(
-      (candidate) => candidate.documentId === documentId
+      (candidate) => candidate.documentId === documentId && !renderedByPage.has(candidateKey(candidate))
     );
-    if (!source) continue;
+    if (!source || selectedDocumentPages.length === 0) continue;
     let pdf: Awaited<ReturnType<typeof pdfjs.getDocument>["promise"]> | null = null;
     try {
       pdf = await pdfjs.getDocument({ url: source.url }).promise;
@@ -828,7 +864,9 @@ export async function prepareDeckSourceVisuals(
           const pageNumber = exactPdfPageNumber(candidate.page, pdf.numPages);
           if (pageNumber === null) continue;
           page = (await pdf.getPage(pageNumber)) as unknown as PdfPageForVisualInspection;
-          renderedByPage.set(candidateKey(candidate), await renderSourcePdfPage(page));
+          const imageData = await renderSourcePdfPage(page);
+          renderedByPage.set(candidateKey(candidate), imageData);
+          rememberPreviewImage(candidateKey(candidate), imageData, evaluatedByPage.get(candidateKey(candidate))?.score ?? 0, source.url);
         } catch {
           // 해당 슬라이드는 아래에서 안전한 편집 도형·내용 구도로 폴백한다.
         } finally {

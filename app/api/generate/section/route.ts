@@ -19,6 +19,7 @@ import {
   MAX_GENERATION_CONDITIONS_CHARS,
   resolveSlideDeckMode,
   regeneratedSectionSchema,
+  sectionAllocatedMinutes,
   strictGeneratedSlideSchemaFor,
   stripSectionInlineSourceRefs,
   type GeneratedDocSource,
@@ -155,6 +156,10 @@ const regenRequestSchema = z.discriminatedUnion("kind", [
       ...commonRegenShape,
       kind: z.literal("section"),
       current: sectionCurrentSchema,
+      relatedSections: z.array(z.object({
+        heading: z.string().trim().min(1).max(200),
+        content: z.string().max(2000),
+      }).strip()).max(7).optional(),
     })
     .strip(),
   z
@@ -418,6 +423,7 @@ export async function POST(req: Request) {
           index,
           currentHeading: cur.heading ?? "",
           currentContent,
+          relatedSections: body.kind === "section" ? body.relatedSections : undefined,
           topic,
           focus,
           sopEvidence,
@@ -466,6 +472,16 @@ export async function POST(req: Request) {
           { status: 422 }
         );
       }
+    }
+    // 합계가 달라지는 후보를 기존 문서에 적용하지 않는다. 재생성 실패 시 원본은 그대로 남는다.
+    const previousMinutes = sectionAllocatedMinutes(cur.content ?? "");
+    if (sectionAllocatedMinutes(object.content) !== previousMinutes) {
+      return Response.json({
+        code: "section_time_changed",
+        error: previousMinutes === null
+          ? "배정 시간이 없는 문단에 새 시간이 추가되었습니다. 기존 시간표를 유지하도록 다시 생성해 주세요."
+          : `이 문단의 배정 시간 ${previousMinutes}분이 변경되었습니다. 기존 시간을 유지하도록 다시 생성해 주세요.`,
+      }, { status: 422 });
     }
     // 부분 보완이 훈련계획·교안의 고정 구조를 깨지 않도록 제목은 기존 값을 유지한다.
     return Response.json(

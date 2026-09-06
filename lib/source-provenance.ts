@@ -5,6 +5,7 @@ export type VerifiedGeneratedSources = {
   sources: GeneratedDocSource[];
   degraded: boolean;
   contextText?: string;
+  evidenceChunks?: Array<{ source: GeneratedDocSource; content: string }>;
 };
 
 const PROVENANCE_PAIR_BATCH_SIZE = 20;
@@ -228,6 +229,10 @@ export async function verifyNativeDocumentSourceProvenance(
     }
     return {
       sources, degraded: false, contextText,
+      evidenceChunks: evidenceChunks.map((chunk) => ({
+        source: sources.find((source) => source.document_id === chunk.document_id && source.page === chunk.page_num)!,
+        content: chunk.content!.trim(),
+      })),
     };
   } catch (error) {
     console.error(

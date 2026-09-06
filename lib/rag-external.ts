@@ -160,6 +160,7 @@ export type VerifiedExternalRagSources = {
   degraded: boolean;
   /** 명시적으로 요청할 때만 제공하는, 정확히 대조된 출처의 서버 원문. */
   contextText?: string;
+  evidenceChunks?: Array<{ source: GeneratedDocSource; content: string }>;
 };
 
 const PROVENANCE_PAIR_BATCH_SIZE = 20;
@@ -312,6 +313,7 @@ export async function verifyExternalRagSourceProvenance(
       JSON.stringify([source.document_id, source.page, source.doc])
     ));
     const evidence: string[] = [];
+    const evidenceChunks: Array<{ source: GeneratedDocSource; content: string }> = [];
     const seenRows = new Set<string>();
     let evidenceChars = 0;
     for (const row of rows) {
@@ -330,8 +332,13 @@ export async function verifyExternalRagSourceProvenance(
         return { sources, degraded: true, contextText: "" };
       }
       evidence.push(text);
+      evidenceChunks.push({
+        source: sources.find((source) => JSON.stringify([source.document_id, source.page, source.doc]) === identity)!,
+        // 원문의 연속 구간을 인용하도록 제목 보완 전의 본문을 보존한다.
+        content: row.content.trim(),
+      });
     }
-    return { sources, degraded: false, contextText: evidence.join("\n\n---\n\n") };
+    return { sources, degraded: false, contextText: evidence.join("\n\n---\n\n"), evidenceChunks };
   } catch (error) {
     console.error(
       "[rag-external] 저장 출처 검증 요청 실패:",

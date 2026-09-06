@@ -62,6 +62,11 @@ import {
   type RegenState,
   type ResultChrome,
 } from "@/components/generate/parts";
+import { GenerationJobReview } from "@/components/generate/GenerationJobReview";
+import { GenerationDraftReviewEditor } from "@/components/generate/GenerationDraftReviewEditor";
+import type { GenerationOutlineEdit } from "@/lib/generation-job-review";
+import { RegenerationComparison } from "@/components/generate/RegenerationComparison";
+import type { DocumentSectionEvidenceState } from "@/lib/document-evidence";
 import { DocResult } from "@/components/generate/DocResult";
 import { NotebookLmResult } from "@/components/generate/NotebookLmResult";
 import { SlideDeckResult } from "@/components/generate/SlideDeckResult";
@@ -81,6 +86,8 @@ import {
 } from "@/lib/generate-focus";
 import type { SopEvidence } from "@/lib/sop-evidence";
 import {
+  GENERATION_JOB_STATUSES,
+  isTerminalGenerationJobStatus,
   isGenerationJobDispatchConfirmed,
   type PublicGenerationJob,
 } from "@/lib/generation-job";
@@ -344,12 +351,7 @@ function resultContextFromRequest(
 }
 
 function isRunningGenerationJob(job: PublicGenerationJob | null): boolean {
-  return Boolean(
-    job &&
-      job.status !== "completed" &&
-      job.status !== "needs_attention" &&
-      job.status !== "failed"
-  );
+  return Boolean(job && !isTerminalGenerationJobStatus(job.status));
 }
 
 function isCompletedQualityJob(
@@ -360,16 +362,7 @@ function isCompletedQualityJob(
   );
 }
 
-const GENERATION_JOB_STATUS_SET = new Set([
-  "queued",
-  "retrieving",
-  "drafting",
-  "reviewing",
-  "repairing",
-  "completed",
-  "needs_attention",
-  "failed",
-]);
+const GENERATION_JOB_STATUS_SET: ReadonlySet<string> = new Set(GENERATION_JOB_STATUSES);
 
 function generationJobFromPayload(
   payload: unknown,
@@ -464,6 +457,31 @@ const SLIDE_MODE_OPTIONS: ReadonlyArray<{
     description: "교관 설명을 전제로 핵심 문장만 표시",
   },
 ];
+
+type RegenerationPreview = {
+  before: string;
+  after: string;
+  signature: string;
+  doc: GeneratedDoc | null;
+  deck: GeneratedSlideDeck | null;
+  quality: GenerationQuality;
+};
+
+type RegenerationUndo = {
+  signature: string;
+  doc: GeneratedDoc | null;
+  deck: GeneratedSlideDeck | null;
+  quality: GenerationQuality | null;
+};
+
+function resultEditSignature(doc: GeneratedDoc | null, deck: GeneratedSlideDeck | null, context: ResultGenerationContext | null): string {
+  return JSON.stringify({ doc, deck: deck ? stripSlideDeckRuntimeData(deck) : null, context });
+}
+
+function regenerationText(value: GeneratedSection | GeneratedSlide): string {
+  return "content" in value ? `${value.heading}\n\n${value.content}`
+    : [value.title, value.bullets.join("\n"), value.steps?.join(" → "), value.notes].filter(Boolean).join("\n\n");
+}
 
 function mergedSourceLabels(
   current: readonly string[] | undefined,
@@ -862,6 +880,9 @@ export function GenerateForm({
   const pendingJobLookupStartedAtRef = useRef(Date.now());
   const jobRetryingRef = useRef(false);
   const [jobRetrying, setJobRetrying] = useState(false);
+  const [reviewOutline, setReviewOutline] = useState(resumedRequest?.reviewOutline ?? true);
+  const [reviewDraftOpen, setReviewDraftOpen] = useState(false);
+  const [reviewEditorJobId, setReviewEditorJobId] = useState<string | null>(null);
   const [doc, setDoc] = useState<GeneratedDoc | null>(hydrated.doc);
   const [deck, setDeck] = useState<GeneratedSlideDeck | null>(hydrated.deck);
   const [nlmPrompt, setNlmPrompt] = useState<string | null>(hydrated.nlm);
@@ -870,6 +891,10 @@ export function GenerateForm({
   const [editing, setEditing] = useState(
     !!initialMaterial && initialMaterial.kind !== "notebooklm"
   );
+  const [regenerationPreview, setRegenerationPreview] = useState<RegenerationPreview | null>(null);
+  const [regenerationUndo, setRegenerationUndo] = useState<RegenerationUndo | null>(null);
+  const [sectionEvidenceCache, setSectionEvidenceCache] = useState<{ signature: string; states: Record<number, DocumentSectionEvidenceState> }>({ signature: "", states: {} });
+  const sectionEvidenceSignatureRef = useRef("");
   const [regenIdx, setRegenIdx] = useState<number | null>(null); // 재생성 패널이 열린 항목
   const [regenLoading, setRegenLoading] = useState<number | null>(null);
   const [regenText, setRegenText] = useState(""); // 직접 입력 지시
@@ -977,6 +1002,7 @@ export function GenerateForm({
 
   const genReq = {
     type,
+    reviewOutline: durableGenerationEnabled ? reviewOutline : undefined,
     category,
     audience,
     duration,
@@ -1662,6 +1688,7 @@ export function GenerateForm({
 
   /** 핵심 품질 오류가 남은 초안은 공식 파일·공유 저장본으로 내보내지 않는다. */
   function ensureQualityForOutput(): boolean {
+    if (regenerationPreview) return false;
     if (resultKind === "notebooklm") return true;
     if (
       resultKind === "slides" &&
@@ -2179,7 +2206,67 @@ export function GenerateForm({
     }
   }
 
-  // AI 부분 재생성 — 섹션/슬라이드 1개만 다시 생성해 해당 부분만 교체한다.
+  async function loadSectionEvidence(index: number) {
+    if (!doc || !resultContext || !doc.sections[index]) return;
+    const signature = sectionEvidenceSignatureRef.current;
+    if (sectionEvidenceCache.signature === signature && sectionEvidenceCache.states[index]?.status === "loading") return;
+    const update = (state: DocumentSectionEvidenceState) => {
+      if (sectionEvidenceSignatureRef.current !== signature) return;
+      setSectionEvidenceCache((previous) => ({ signature,
+        states: { ...(previous.signature === signature ? previous.states : {}), [index]: state },
+      }));
+    };
+    update({ status: "loading" });
+    try {
+      const response = await fetch("/api/generate/section-evidence", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify({ category: resultContext.category, section: doc.sections[index], sources: doc.sources }),
+      });
+      const payload = await response.json();
+      if (!response.ok) throw new Error(payload.error ?? "원문을 확인하지 못했습니다.");
+      update({ status: "ready", items: payload.items ?? [] });
+    } catch (error) {
+      update({ status: "error", error: error instanceof Error ? error.message : "원문 확인이 지연되었습니다. 다시 시도해 주세요." });
+    }
+  }
+
+  function applyRegenerationPreview() {
+    if (!regenerationPreview) return;
+    if (regenerationPreview.signature !== resultEditSignature(doc, deck, resultContext)) {
+      setRegenerationPreview(null);
+      toast.warning("원본이 변경되어 이전 수정안을 적용하지 않았습니다.");
+      return;
+    }
+    setRegenerationUndo({
+      signature: resultEditSignature(regenerationPreview.doc, regenerationPreview.deck, resultContext),
+      doc, deck, quality,
+    });
+    setDoc(regenerationPreview.doc);
+    deckRef.current = regenerationPreview.deck;
+    setDeck(regenerationPreview.deck);
+    setQuality(regenerationPreview.quality);
+    setSaved(false);
+    setLocalQualityRevision((revision) => revision + 1);
+    resultRevisionRef.current += 1;
+    setRegenerationPreview(null);
+    toast.success("수정안을 적용했습니다. 다른 편집 전에는 되돌릴 수 있습니다.");
+  }
+
+  function undoRegeneration() {
+    if (!regenerationUndo || resultMutationLocked || regenerationUndo.signature !== resultEditSignature(doc, deck, resultContext)) return;
+    setDoc(regenerationUndo.doc);
+    deckRef.current = regenerationUndo.deck;
+    setDeck(regenerationUndo.deck);
+    setQuality(regenerationUndo.quality);
+    setSaved(false);
+    resultRevisionRef.current += 1;
+    setLocalQualityRevision((revision) => revision + 1);
+    setRegenerationUndo(null);
+    toast.success("재생성 적용 전 내용으로 되돌렸습니다.");
+  }
+
+  // AI 부분 재생성 — 전체 문서를 검사한 수정안을 비교 후 적용한다.
   async function handleRegen(
     kind: "section" | "slide",
     index: number,
@@ -2231,6 +2318,10 @@ export function GenerateForm({
           outline,
           index,
           current,
+          ...(kind === "section" ? { relatedSections: doc?.sections.filter((_, position) => position !== index).map((section) => ({
+            heading: section.heading,
+            content: section.content.length > 2000 ? `${section.content.slice(0, 1400)}\n…\n${section.content.slice(-590)}` : section.content,
+          })) } : {}),
           sopTarget: shouldForceLegacySopSlideRecovery(kind, deck) || undefined,
           instruction,
         }),
@@ -2266,51 +2357,37 @@ export function GenerateForm({
         sopEvidence?: unknown;
       };
       const verifiedSopEvidence = normalizedSopEvidence(sopEvidence);
-      if (kind === "section") {
-        patchSection(index, regenerated as GeneratedSection, true);
-        setDoc((previous) =>
-          previous
-            ? {
-              ...previous,
-              sourceLabels: mergedSourceLabels(previous.sourceLabels, sourceLabels),
-              sources: mergeGeneratedSources(previous.sources, sources),
-              sopEvidence: verifiedSopEvidence ?? previous.sopEvidence,
-            }
-          : previous
-        );
-      } else {
-        patchSlide(index, regenerated as GeneratedSlide, true);
-        setDeck((previous) =>
-          previous
-            ? {
-              ...previous,
-              sourceLabels: mergedSourceLabels(previous.sourceLabels, sourceLabels),
-              sources: mergeGeneratedSources(previous.sources, sources),
-              sopEvidence: verifiedSopEvidence ?? previous.sopEvidence,
-            }
-          : previous
-        );
+      let nextDoc = doc;
+      let nextDeck = deck;
+      if (kind === "section" && doc) {
+        nextDoc = {
+          ...doc,
+          sections: doc.sections.map((section, position) => position === index ? { ...section, ...regenerated } as GeneratedSection : section),
+          sourceLabels: mergedSourceLabels(doc.sourceLabels, sourceLabels),
+          sources: mergeGeneratedSources(doc.sources, sources),
+          sopEvidence: verifiedSopEvidence ?? doc.sopEvidence,
+        };
+      } else if (kind === "slide" && deck) {
+        nextDeck = {
+          ...deck,
+          slides: deck.slides.map((slide, position) => position === index ? { ...slide, ...regenerated } as GeneratedSlide : slide),
+          sourceLabels: mergedSourceLabels(deck.sourceLabels, sourceLabels),
+          sources: mergeGeneratedSources(deck.sources, sources),
+          sopEvidence: verifiedSopEvidence ?? deck.sopEvidence,
+        };
       }
-      if (retrievalDegraded || modelFallbackUsed) {
-        setQuality((previous) => ({
-          checked: true,
-          repaired: previous?.repaired ?? false,
-          warnings: Array.from(
-            new Set([
-              ...(retrievalDegraded ? [RETRIEVAL_DEGRADED_WARNING] : []),
-              ...(modelFallbackUsed ? [MODEL_FALLBACK_WARNING] : []),
-              ...(previous?.warnings ?? []),
-            ])
-          ).slice(0, 5),
-        }));
-      }
-      toast.success("다시 생성했습니다", {
-        description: retrievalDegraded
-          ? "자료 검색 일부 기능이 제한되어 회수 근거를 한 번 더 확인해 주세요."
-          : modelFallbackUsed
-            ? "정밀 모델이 일시 제한되어 빠른 모델로 생성했습니다. 결과를 한 번 더 확인해 주세요."
-            : undefined,
+      const candidate = kind === "section" ? nextDoc : nextDeck;
+      if (!candidate || (resultKind !== "plan" && resultKind !== "lesson" && resultKind !== "slides")) return;
+      const checked = localQuality(resultKind, candidate, context.duration, quality);
+      if (retrievalDegraded) checked.warnings.push(RETRIEVAL_DEGRADED_WARNING);
+      if (modelFallbackUsed) checked.warnings.push(MODEL_FALLBACK_WARNING);
+      setRegenerationPreview({
+        before: regenerationText(current),
+        after: regenerationText(kind === "section" ? nextDoc!.sections[index] : nextDeck!.slides[index]),
+        signature: resultEditSignature(doc, deck, context),
+        doc: nextDoc, deck: nextDeck, quality: checked,
       });
+      toast.success("수정안을 만들었습니다. 변경 전후를 비교해 주세요.");
       setRegenIdx(null);
       setRegenText("");
     } catch (error) {
@@ -2325,6 +2402,9 @@ export function GenerateForm({
   }
 
   function clearPreviousResult() {
+    setRegenerationPreview(null);
+    setRegenerationUndo(null);
+    setSectionEvidenceCache({ signature: "", states: {} });
     regenRequestRef.current?.abort();
     regenRequestRef.current = null;
     evidenceRepairRequestRef.current?.controller.abort();
@@ -2617,7 +2697,7 @@ export function GenerateForm({
     }
   }
 
-  async function retryDurableGeneration() {
+  async function retryDurableGeneration(repairIndices?: number[], reviewDraft?: Record<string, unknown>, reviewRevision?: number) {
     if (!activeJob || jobRetryingRef.current || isRunningGenerationJob(activeJob)) return;
     const retryJobId = activeJob.id;
     jobRetryingRef.current = true;
@@ -2630,7 +2710,8 @@ export function GenerateForm({
     try {
       const response = await fetch(
         `/api/generate/jobs/${encodeURIComponent(activeJob.id)}/retry`,
-        { method: "POST", signal: requestController.signal }
+        { method: "POST", signal: requestController.signal, headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ revision: reviewRevision ?? activeJob.revision, repairIndices, reviewDraft }) }
       );
       const payload = await response.json().catch(() => null);
       if (!response.ok) {
@@ -2651,6 +2732,7 @@ export function GenerateForm({
       if (!job) throw new Error("재시도 응답 형식이 올바르지 않습니다.");
       appliedJobRevisionRef.current = "";
       setActiveJob(job);
+      setReviewDraftOpen(false);
       setPendingJobLookupActive(false);
       setPendingLookupJobId(undefined);
       setJobConnectionRetry(null);
@@ -2679,6 +2761,51 @@ export function GenerateForm({
       window.clearTimeout(requestTimeout);
       jobRetryingRef.current = false;
       setJobRetrying(false);
+    }
+  }
+
+  async function updateGenerationJob(action: "review" | "cancel", outline?: GenerationOutlineEdit, reviewRevision?: number) {
+    if (!activeJob || jobRetryingRef.current) return;
+    if (action === "cancel" && !window.confirm("이 생성 작업을 중단할까요? 이미 저장된 단계는 남으며, 새 조건으로 다시 시작할 수 있습니다.")) return;
+    const jobId = activeJob.id;
+    jobRetryingRef.current = true;
+    setJobRetrying(true);
+    let deliveryUncertain = true;
+    try {
+      const response = await fetch(`/api/generate/jobs/${encodeURIComponent(jobId)}/${action}`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(85_000),
+        body: JSON.stringify({ revision: reviewRevision ?? activeJob.revision, ...(outline ? { outline } : {}) }),
+      });
+      const payload = await response.json().catch(() => null);
+      if (!response.ok) {
+        deliveryUncertain = response.status === 409 || response.status >= 500;
+        throw new Error(payload?.error ?? "작업 상태를 다시 확인해 주세요.");
+      }
+      const next = generationJobFromPayload(payload, jobId);
+      if (!next) throw new Error("작업 응답을 확인하지 못했습니다.");
+      setActiveJob(next);
+      setLoading(false);
+      setPendingJobLookupActive(false);
+      setPendingLookupJobId(undefined);
+      setJobConnectionRetry(null);
+      appliedJobRevisionRef.current = "";
+      if (action === "cancel") {
+        pendingJobCreateRef.current = null;
+        setReviewDraftOpen(false);
+        toast.success("생성 작업을 중단했습니다. 저장된 단계는 보존됩니다.");
+      } else toast.success("확인한 구성으로 자료 제작을 시작했습니다.");
+    } catch (error) {
+      if (deliveryUncertain) {
+        pendingJobLookupStartedAtRef.current = Date.now();
+        setPendingLookupJobId(jobId);
+        setPendingJobLookupActive(true);
+        setJobConnectionRetry(null);
+      }
+      toast.error(action === "cancel" ? "중단 상태를 확인하지 못했습니다" : "구성을 적용하지 못했습니다", {
+        description: error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요.",
+      });
+    } finally {
+      jobRetryingRef.current = false; setJobRetrying(false);
     }
   }
 
@@ -3388,7 +3515,7 @@ export function GenerateForm({
       if (!(await verifyExportEvidence(resultKind, exportDoc, exportContext))) return;
       // docx는 무거워서 다운로드 시점에만 로드
       const { buildDocxBlob } = await import("@/lib/docx");
-      downloadBlob(await buildDocxBlob(exportDoc), `${sanitizeFilename(exportDoc.title)}.docx`);
+      downloadBlob(await buildDocxBlob(exportDoc, exportContext), `${sanitizeFilename(exportDoc.title)}.docx`);
     } catch {
       toast.error("문서 파일 생성에 실패했습니다");
     } finally {
@@ -3458,6 +3585,7 @@ export function GenerateForm({
   const evidenceRepairing = evidenceRepair.status === "repairing";
   const qualityRepairing = qualityRepair.status === "repairing";
   const resultMutationLocked =
+    Boolean(regenerationPreview) ||
     saving ||
     regenLoading !== null ||
     evidenceRepairing ||
@@ -3492,6 +3620,7 @@ export function GenerateForm({
     },
     saving,
     locked:
+      Boolean(regenerationPreview) ||
       regenLoading !== null ||
       evidenceRepairing ||
       qualityRepairing ||
@@ -3515,6 +3644,8 @@ export function GenerateForm({
     onClose: () => setRegenIdx(null),
     onApply: (index, instruction) => handleRegen(kind, index, instruction),
   });
+
+  sectionEvidenceSignatureRef.current = JSON.stringify({ doc, category: resultContext?.category });
 
   return (
     <div className="space-y-5">
@@ -3970,6 +4101,12 @@ export function GenerateForm({
             )}
           </section>
 
+          {durableGenerationEnabled && type !== "notebooklm" && (
+            <label className="flex min-h-12 cursor-pointer items-start gap-3 rounded-xl border p-3">
+              <input type="checkbox" checked={reviewOutline} onChange={(event) => setReviewOutline(event.target.checked)} disabled={loading || jobRunning || jobRetrying} className="mt-1 h-5 w-5 accent-primary" />
+              <span><span className="block text-base font-medium">전체 생성 전에 구성 확인</span><span className="text-sm text-muted-foreground">목차·시간 배분·훈련 중점을 확인한 뒤 진행합니다. 해제하면 기본 구성으로 바로 제작합니다.</span></span>
+            </label>
+          )}
           {/* 생성 바 — 요약 칩 + 분야 색 CTA */}
           <div className="space-y-2">
             <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
@@ -4043,8 +4180,9 @@ export function GenerateForm({
       </Card>
 
       {((loading && type !== "notebooklm") || showDurableJobStatus) && (
+        <div className="space-y-3">
         <ResultSkeleton
-          key={activeJob?.id ?? "synchronous-generation"}
+          key={`status:${activeJob?.id ?? "synchronous-generation"}`}
           accent={
             activeJob ? categoryStyle(activeJob.request.category).hex : accent
           }
@@ -4056,11 +4194,25 @@ export function GenerateForm({
           verifyingDelivery={pendingJobLookupActive}
           retrying={jobRetrying}
           onRetry={
-            activeJob?.status === "failed" || activeJob?.status === "needs_attention"
+            activeJob?.status === "failed" || activeJob?.status === "needs_attention" || activeJob?.status === "cancelled"
               ? () => void retryDurableGeneration()
               : undefined
           }
         />
+        {activeJob && (
+          <GenerationJobReview key={`review:${activeJob.id}`} job={activeJob} busy={jobRetrying}
+            onApprove={(outline, revision) => void updateGenerationJob("review", outline, revision)}
+            onRepair={(indices) => void retryDurableGeneration(indices)}
+            onOpenDraft={() => { setReviewEditorJobId(activeJob.id); setReviewDraftOpen(true); }} />
+        )}
+        {activeJob && (jobRunning || activeJob.status === "awaiting_review") && (
+          <Button type="button" variant="outline" className="min-h-12 w-full" disabled={jobRetrying} onClick={() => void updateGenerationJob("cancel")}>생성 작업 중단</Button>
+        )}
+        </div>
+      )}
+      {activeJob && reviewEditorJobId === activeJob.id && (
+        <GenerationDraftReviewEditor key={activeJob.id} job={activeJob} open={reviewDraftOpen}
+          busy={jobRetrying} onOpenChange={setReviewDraftOpen} onSubmit={(draft, revision) => void retryDurableGeneration(undefined, draft, revision)} />
       )}
 
       {draftSnapshot && durableGenerationEnabled && (
@@ -4151,6 +4303,15 @@ export function GenerateForm({
         />
       )}
 
+      {regenerationUndo && regenerationUndo.signature === resultEditSignature(doc, deck, resultContext) && (
+        <Button type="button" variant="outline" className="min-h-12 w-full" disabled={resultMutationLocked} onClick={undoRegeneration}>마지막 재생성 적용 되돌리기</Button>
+      )}
+      {regenerationPreview && (
+        <RegenerationComparison before={regenerationPreview.before} after={regenerationPreview.after}
+          issues={[...(regenerationPreview.quality.errors ?? []), ...regenerationPreview.quality.warnings]}
+          onApply={applyRegenerationPreview} onCancel={() => setRegenerationPreview(null)} />
+      )}
+
       {/* 2-c. 생성 문서 결과 */}
       {doc && (
         <DocResult
@@ -4170,6 +4331,9 @@ export function GenerateForm({
           onDownloadDocx={handleDocx}
           onCopy={handleCopy}
           exporting={docExporting}
+          documentMetadata={resultContext ?? undefined}
+          sectionEvidence={sectionEvidenceCache.signature === sectionEvidenceSignatureRef.current ? sectionEvidenceCache.states : {}}
+          onLoadSectionEvidence={loadSectionEvidence}
           planDetails={resultKind === "plan" && resultContext ? { date: resultContext.date, place: resultContext.place } : undefined}
           onPlanDetailsChange={(patch) => {
             if (resultMutationLocked) return;

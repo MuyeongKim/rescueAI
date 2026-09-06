@@ -73,6 +73,8 @@ type Checkpoint = {
   };
   groundingReview?: { signature: string; evidenceSignature: string; partSignatures: string[]; report: { ok: boolean; issues: GenerationQualityIssue[] } };
   completedRepairs?: string[];
+  selectedRepairIndices?: number[];
+  selectedRepairRunToken?: string;
 };
 type Job = {
   id: string; run_token: string; workflow_run_id: string; started_at: string;
@@ -172,6 +174,8 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
     expect(outcome.status).toBe("needs_attention");
     expect(job.quality_passed).toBe(false);
     expect(job.result).toBeNull();
+    expect(job.review_draft).toMatchObject({ title: job.checkpoint.draft.title });
+    expect(job.quality_issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: "unsupported_technical_value", blocking: true, suggestion: expect.any(String) })]));
     expect(mocks.generateObject).toHaveBeenCalledTimes(2);
     expect(updates.some(update => update.quality_passed === true)).toBe(false);
   });
@@ -194,6 +198,24 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
       `document:${runToken}:1:0`, `document:${runToken}:1:2`,
     ]);
     expect(mocks.reviewGenerationGrounding).toHaveBeenCalledTimes(2);
+  });
+
+  it("선택 보완은 선택 부분만 고치되 선택하지 않은 오류도 최종 완료를 막는다", async () => {
+    job.checkpoint.draft.sections[0].content += " 첫째미확인주장";
+    job.checkpoint.draft.sections[2].content += " 둘째미확인주장";
+    job.checkpoint.selectedRepairIndices = [2];
+    job.checkpoint.selectedRepairRunToken = runToken;
+    mocks.reviewGenerationGrounding.mockImplementation(async ({ draft }: { draft: GeneratedDoc }) => ({ ok: false, issues: draft.sections.flatMap((section, index) => section.content.includes("미확인주장") ? [semanticIssue(index)] : []) }));
+    mocks.generateObject.mockImplementation(async ({ schema }) => {
+      const current = job.checkpoint.draft.sections.find((section) => section.heading === schema.shape.heading.value)!;
+      return { object: { ...current, content: current.content.replace(/ (첫째|둘째)미확인주장/g, "") } };
+    });
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("needs_attention");
+    expect(mocks.generateObject).toHaveBeenCalledOnce();
+    expect(job.checkpoint.draft.sections[0].content).toContain("첫째미확인주장");
+    expect(job.checkpoint.draft.sections[2].content).not.toContain("둘째미확인주장");
+    expect(job.result).toBeNull();
+    expect(job.quality_issues).toEqual(expect.arrayContaining([expect.objectContaining({ path: "sections.0.content", blocking: true })]));
   });
 
   it("보완안이 실제 의미 오류를 해결하지 않으면 새 서명 검토 후에도 통과시키지 않는다", async () => {
@@ -248,5 +270,19 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
     expect(job.quality_passed).toBe(false);
     expect(job.result).toBeNull();
     expect(updates.some(update => update.quality_passed === true)).toBe(false);
+  });
+
+  it("최종 저장 직전 사용자가 중단하면 오래된 완료 쓰기가 취소 상태를 되살리지 않는다", async () => {
+    beforeUpdate = (patch) => {
+      if (patch.status !== "completed") return;
+      beforeUpdate = undefined;
+      job.status = "cancelled";
+      job.run_token = "cancelled-run-token";
+      job.revision += 1;
+    };
+    expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("cancelled");
+    expect(job.quality_passed).toBe(false);
+    expect(job.result).toBeNull();
+    expect(updates.some((update) => update.status === "failed" || update.status === "completed")).toBe(false);
   });
 });

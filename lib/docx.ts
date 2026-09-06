@@ -6,13 +6,21 @@ import {
   Packer,
   Paragraph,
   TextRun,
+  Table,
+  TableCell,
+  TableRow,
+  WidthType,
+  TableLayoutType,
 } from "docx";
 import type { GeneratedDoc } from "@/lib/generate";
 import {
   DOCUMENT_SOURCE_SECTION_TITLE,
   documentSourceLines,
   prepareGeneratedDocForExport,
+  documentMetadataLines,
+  type DocumentMetadata,
 } from "@/lib/document-export";
+import { documentSectionBlocks } from "@/lib/document-structure";
 
 // 기본 테마 글꼴에 한글 글리프가 없는 LibreOffice 환경에서도 본문이 사라지지 않도록
 // 동아시아 글꼴을 명시한다. Word는 해당 글꼴이 없을 때 설치된 한글 글꼴로 대체한다.
@@ -23,9 +31,9 @@ const DOCX_FONT = {
   cs: "Nanum Gothic",
 } as const;
 
-export async function buildDocxBlob(doc: GeneratedDoc): Promise<Blob> {
+export async function buildDocxBlob(doc: GeneratedDoc, metadata?: DocumentMetadata): Promise<Blob> {
   const exportDoc = prepareGeneratedDocForExport(doc);
-  const children: Paragraph[] = [
+  const children: Array<Paragraph | Table> = [
     new Paragraph({
       heading: HeadingLevel.TITLE,
       alignment: AlignmentType.CENTER,
@@ -44,22 +52,45 @@ export async function buildDocxBlob(doc: GeneratedDoc): Promise<Blob> {
       spacing: { after: 400 },
     }),
   ];
+  for (const line of documentMetadataLines(metadata)) {
+    children.push(new Paragraph({ children: [new TextRun({ text: line, size: 22, font: DOCX_FONT })], spacing: { after: 80 } }));
+  }
 
   for (const section of exportDoc.sections) {
     children.push(
       new Paragraph({
         heading: HeadingLevel.HEADING_1,
+        keepNext: true,
         children: [new TextRun({ text: section.heading, font: DOCX_FONT })],
         spacing: { before: 300, after: 120 },
       })
     );
-    for (const line of section.content.split("\n")) {
-      children.push(
-        new Paragraph({
+    for (const block of documentSectionBlocks(section)) {
+      if (block.type === "table") {
+        const widths = block.headers.length === 3 ? [1735, 1157, 6746] : [1735, 3084, 1928, 2891];
+        children.push(new Table({
+          width: { size: 100, type: WidthType.PERCENTAGE },
+          layout: TableLayoutType.FIXED,
+          columnWidths: widths,
+          rows: [block.headers, ...block.rows].map((row, index) => new TableRow({
+            tableHeader: index === 0,
+            children: row.map((cell, cellIndex) => new TableCell({
+              width: { size: widths[cellIndex], type: WidthType.DXA },
+              shading: index === 0 ? { fill: "EDEFF2" } : undefined,
+              children: cell.split("\n").map((line) => new Paragraph({
+                children: [new TextRun({ text: line, size: 21, bold: index === 0, font: DOCX_FONT })],
+                spacing: { after: 60 },
+              })),
+            })),
+          })),
+        }));
+        children.push(new Paragraph({ text: "", spacing: { after: 100 } }));
+      } else for (const line of block.text.split("\n")) {
+        children.push(new Paragraph({
           children: [new TextRun({ text: line, size: 22, font: DOCX_FONT })],
           spacing: { after: 80 },
-        })
-      );
+        }));
+      }
     }
   }
 
@@ -90,6 +121,9 @@ export async function buildDocxBlob(doc: GeneratedDoc): Promise<Blob> {
     }
   }
 
-  const file = new Document({ sections: [{ children }] });
+  const file = new Document({ sections: [{
+    properties: { page: { size: { width: 11906, height: 16838 }, margin: { top: 1134, bottom: 1134, left: 1134, right: 1134 } } },
+    children,
+  }] });
   return Packer.toBlob(file);
 }

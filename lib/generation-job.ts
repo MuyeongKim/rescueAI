@@ -1,4 +1,5 @@
 import type { ValidatedGenerateRequest } from "@/lib/generation-request";
+import type { GenerationOutlineReview, GenerationPublicQualityIssue } from "@/lib/generation-job-review";
 
 export const GENERATION_JOB_STATUSES = [
   "queued",
@@ -6,6 +7,8 @@ export const GENERATION_JOB_STATUSES = [
   "drafting",
   "reviewing",
   "repairing",
+  "awaiting_review",
+  "cancelled",
   "completed",
   "needs_attention",
   "failed",
@@ -27,6 +30,9 @@ export type PublicGenerationJob = {
   qualityPassed: boolean;
   request: ValidatedGenerateRequest;
   result: GenerationJobResult | null;
+  outlineReview?: GenerationOutlineReview;
+  reviewDraft?: GenerationJobResult;
+  qualityIssues?: GenerationPublicQualityIssue[];
   errorMessage: string | null;
   workflowRunId: string | null;
   revision: number;
@@ -37,7 +43,7 @@ export type PublicGenerationJob = {
 };
 
 export function isTerminalGenerationJobStatus(status: GenerationJobStatus): boolean {
-  return status === "completed" || status === "needs_attention" || status === "failed";
+  return status === "completed" || status === "needs_attention" || status === "failed" || status === "awaiting_review" || status === "cancelled";
 }
 
 /** queued를 벗어났거나 run ID가 저장된 뒤에만 브라우저와 독립된 실행으로 안내한다. */

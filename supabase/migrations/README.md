@@ -72,6 +72,15 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 | `20260905124809_rank_rag_keyword_candidates.sql` | 활성·분야 범위에서 관련성 정렬 후 후보 수를 제한하는 키워드 검색 RPC |
 | `20260905140458_align_generated_document_endnote_evidence.sql` | 문서 말미 출처와 DB 핵심 품질·SOP 검사 정렬, 기존 원본 검증과 슬라이드 같은 장 출처 보호 유지 |
 
+| `20260906010516_generation_job_review_controls.sql` | 목차 검토·취소 상태와 소유자 전용 검토 초안·품질 문제 공개 projection |
+| `20260906010707_align_edited_slide_count.sql` | 편집 PPT 6~20장 허용, 시간별 권장 장수와 공식 저장 제한 분리 |
+
+2026-09-06 자료제작 개선은 위 두 마이그레이션을 앱 배포 전에 순서대로 적용합니다.
+기존 작업·생성물은 수정하지 않으며 checkpoint와 run_token의 비공개, 소유자 조회 RLS,
+서비스 역할의 작업 변경, 미통과 결과의 result 차단을 유지합니다. PGlite에서는 반복 적용,
+역할별 조회·쓰기·함수 실행 차단, 취소 뒤 오래된 worker 갱신 차단, 편집 PPT 장수 경계와
+같은 장 SOP 출처·비활성 원본·개정 번호 보호를 검증합니다.
+
 2026-09-05 튜터·자료제작 개선을 배포하기 전에는 위 두 후속 마이그레이션을 순서대로 적용합니다.
 기존 메시지는 장애 여부를 소급 판정하지 않고 `retrieval_degraded=false`로 초기화됩니다.
 초안은 공식 생성물과 별도이며, `snapshot`은 미완성 편집을 허용합니다. 공식 저장·공유의 품질 검사는

@@ -9,6 +9,7 @@ const helperBoundary = originalSharing.indexOf("create or replace function publi
 const commonSop = migration("20260829160624_allow_common_sop_generation_evidence.sql");
 const quality = migration("20260829163049_protect_generated_material_quality_and_revision.sql");
 const endnotes = migration("20260905140458_align_generated_document_endnote_evidence.sql");
+const editedSlideCount = migration("20260906010707_align_edited_slide_count.sql");
 const generalSource = { document_id: 1, doc: "산악 교육자료", page: 1 };
 const sopSource = { document_id: 2, doc: "로프 확보 SOP 123", page: 7 };
 const generalLabel = "[산악 교육자료 p.1]";
@@ -45,10 +46,10 @@ function document(kind: "plan" | "lesson") {
   };
 }
 
-function slides() {
+function slides(count = 10) {
   return {
     ...evidence(),
-    slides: Array.from({ length: 10 }, (_, index) => ({
+    slides: Array.from({ length: count }, (_, index) => ({
       title: `로프 확보 교육 ${index + 1}`,
       bullets: [
         "대원은 현장 위험과 보호구를 점검하며 이상 징후가 있으면 중단하고 보고한다.",
@@ -109,6 +110,28 @@ describe("문서 말미 출처 DB 계약", () => {
 
       await db.exec(endnotes);
       await db.exec(endnotes); // 반복 적용에도 함수·권한·트리거 계약이 유지되어야 한다.
+      expect((await inspect("slides", slides(13))).core, "기존 DB는 1시간 13장을 거절").toBe(false);
+      await db.exec(editedSlideCount);
+      await db.exec(editedSlideCount);
+      for (const count of [6, 13, 20]) {
+        expect(await inspect("slides", slides(count)), `1시간 편집본 ${count}장`).toEqual({ core: true, share: true });
+        expect((await insert("slides", slides(count))).rows[0].revision).toBe(1);
+      }
+      for (const count of [5, 21]) {
+        expect((await inspect("slides", slides(count))).core, `${count}장 범위 밖`).toBe(false);
+        await expect(insert("slides", slides(count))).rejects.toThrow(/generated_material_core_quality_invalid/);
+      }
+      for (const stepCount of [2, 3, 5]) {
+        const comparison = {
+          ...slides(13),
+          slides: slides(13).slides.map((slide, index) => index === 1 ? {
+            ...slide, composition: "comparison",
+            steps: ["정상 상태", "이상 상태", "중단 보고", "교관 확인", "재개 판단"].slice(0, stepCount),
+          } : slide),
+        };
+        expect(await inspect("slides", comparison), `편집 비교 기준·단계 ${stepCount}개 DB 저장 계약`).toEqual({ core: true, share: true });
+        expect((await insert("slides", comparison)).rows[0].revision).toBe(1);
+      }
       for (const kind of ["plan", "lesson"] as const) {
         const content = document(kind);
         expect(content.sections.every(section => !section.content.includes(sopLabel) && !section.content.includes(generalLabel))).toBe(true);
@@ -160,9 +183,15 @@ describe("문서 말미 출처 DB 계약", () => {
       wrongSlide.slides[0].sourceRefs = [generalLabel];
       wrongSlide.slides[1].sourceRefs = [sopLabel];
       expect(await inspect("slides", wrongSlide), "다른 장의 SOP 출처로 대신할 수 없음").toEqual({ core: false, share: false });
+      const editedWrongSlide = slides(13);
+      editedWrongSlide.slides[0].sourceRefs = [generalLabel];
+      editedWrongSlide.slides[1].sourceRefs = [sopLabel];
+      expect(await inspect("slides", editedWrongSlide), "13장 편집본에서도 동일 장 SOP 보호 유지").toEqual({ core: false, share: false });
+      await expect(insert("slides", editedWrongSlide)).rejects.toThrow(/generated_material_core_quality_invalid/);
 
       await db.exec("update public.rag_rescue set is_active = false where id = 'sop'");
       expect(await inspect("plan", document("plan")), "활성 SOP 조건 재검사").toEqual({ core: false, share: false });
+      expect(await inspect("slides", slides(13)), "13장 편집본도 비활성 SOP를 거절").toEqual({ core: false, share: false });
       await db.exec("update public.rag_rescue set is_active = true where id = 'sop'");
       // 라벨·출처는 그대로 두고 본문만 바꿔 실제 주제 판정 함수가 거절하는지 분리한다.
       await db.exec("update public.rag_rescue set content = '다른 기구의 보관' where id = 'sop'");
