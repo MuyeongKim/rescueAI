@@ -1,5 +1,6 @@
 import { generateObject } from "ai";
 import { z } from "zod";
+import { slideDiagramSchema } from "@/lib/slide-diagram";
 
 import { requireApiUser } from "@/lib/auth";
 import { DEMO } from "@/lib/demo";
@@ -83,6 +84,7 @@ const repairableSlideSchema = z
     layout: z.enum(SLIDE_LAYOUT_TYPES).optional(),
     role: z.enum(SLIDE_ROLE_TYPES).optional(),
     composition: z.enum(SLIDE_COMPOSITION_TYPES).optional(),
+    diagram: slideDiagramSchema.optional(),
     visual: visualSchema.optional(),
     // 허용 개수 초과도 이 API가 고쳐야 할 invalid 상태이므로 신규 출력 상한(4)보다 넓게 받는다.
     sourceRefs: z.array(z.string().trim().max(300)).max(20).optional(),
@@ -203,6 +205,9 @@ function repairBatchPrompt(args: {
       index,
       title: slide.title,
       bullets: slide.bullets,
+      steps: slide.steps,
+      composition: slide.composition,
+      diagram: slide.diagram,
       // 과도한 사용자 입력이 프롬프트를 잠식하지 않도록 근거 판별에 충분한 범위만 전달한다.
       notes: slide.notes.slice(0, 2_000),
       currentSourceRefs: slide.sourceRefs ?? [],

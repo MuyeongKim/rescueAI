@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ generateObject: vi.fn() }));
 vi.mock("ai", () => ({ generateObject: mocks.generateObject }));
 vi.mock("@/lib/llm", () => ({ getChatModel: () => ({}) }));
@@ -8,6 +8,7 @@ const args = {
   evidenceText: "장비 A의 압력은 30 MPa입니다.", request: { topic: "장비 B 점검", conditions: "실내 훈련장만 사용" },
 };
 beforeEach(() => vi.clearAllMocks());
+afterEach(() => vi.restoreAllMocks());
 
 describe("의미 검토 응답 신뢰 경계", () => {
   it("원문과 장비 조건이 다른 인용을 구조화된 오류로 전달한다", async () => {
@@ -35,5 +36,14 @@ describe("의미 검토 응답 신뢰 경계", () => {
     mocks.generateObject.mockClear();
     await expect(reviewGenerationGrounding({ ...args, evidenceText: "가".repeat(160_001) })).rejects.toThrow("분량");
     expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
+  it("저장 검토는 짧은 제한 시간을 쓰고 workflow 기본 65초는 유지한다", async () => {
+    const timeout = vi.spyOn(AbortSignal, "timeout");
+    mocks.generateObject.mockResolvedValue({ object: { issues: [] } });
+    await reviewGenerationGrounding({ ...args, timeoutMs: 35_000 });
+    await reviewGenerationGrounding(args);
+    expect(timeout.mock.calls.map(([ms]) => ms)).toEqual([35_000, 65_000]);
+    expect(mocks.generateObject.mock.calls.every(([call]) => call.maxRetries === 0)).toBe(true);
   });
 });

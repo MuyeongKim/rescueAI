@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { inspectSlideDiagram, slideDiagramSchema } from "@/lib/slide-diagram";
 
 import {
   MAX_GENERATION_CONDITIONS_CHARS,
@@ -174,6 +175,7 @@ const slideSchema = z
     layout: z.enum(SLIDE_LAYOUT_TYPES).optional(),
     role: z.enum(SLIDE_ROLE_TYPES).optional(),
     composition: z.enum(SLIDE_COMPOSITION_TYPES).optional(),
+    diagram: slideDiagramSchema.optional(),
     visual: visualSchema.optional(),
     sourceRefs: z.array(requiredText(300)).max(4).optional(),
   })
@@ -242,6 +244,11 @@ export function normalizeGeneratedMaterialContent(
   }
   const normalized = result.data as NormalizedGeneratedMaterialContent;
   if (kind !== "slides") return { ok: true, content: normalized };
+  const slides = normalized.slides as GeneratedSlide[];
+  const invalidDiagramIndex = slides.findIndex((slide) => !inspectSlideDiagram(slide).valid);
+  if (invalidDiagramIndex !== -1) {
+    return { ok: false, error: `${invalidDiagramIndex + 1}번 슬라이드의 도식 연결을 확인해 주세요.` };
+  }
 
   // 브라우저가 보낸 documentId/page를 신뢰하지 않는다. 정규화된 sources의 정확한
   // sourceRef와 일치할 때만 다시 결합하고, 제출 메타데이터가 충돌하면 안전한 도형으로 내린다.

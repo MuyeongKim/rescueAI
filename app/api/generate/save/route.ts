@@ -25,6 +25,8 @@ import {
 } from "@/lib/source-provenance";
 
 const KINDS: GenType[] = ["plan", "lesson", "slides", "notebooklm"];
+// 도식의 조건·행동 관계를 현재 원문과 재검토할 시간을 확보한다.
+export const maxDuration = 120;
 const PREFLIGHT_QUALITY_CODES = new Set([
   "missing_section",
   "missing_safety",
@@ -627,11 +629,12 @@ export async function PATCH(req: Request) {
   if (body instanceof Response) return body;
 
   const patch: { shared: boolean; author_name?: string } = { shared: body.shared };
+  let verifiedRevision: number | undefined;
   if (body.shared) {
     // RLS가 본인 행만 돌려준다. 클라이언트가 보낸 content가 아니라 저장된 원본을 검증한다.
     const { data: stored, error: storedError } = await supabase
       .from("generated_materials")
-      .select("id, kind, category, audience, duration, topic, title, content")
+      .select("id, revision, kind, category, audience, duration, topic, title, content")
       .eq("id", body.id)
       .eq("user_id", auth.user.id)
       .maybeSingle();
@@ -642,6 +645,10 @@ export async function PATCH(req: Request) {
     if (!stored) {
       return Response.json({ error: "자료를 찾을 수 없습니다." }, { status: 404 });
     }
+    if (!Number.isSafeInteger(stored.revision) || stored.revision < 1) {
+      return Response.json({ error: "공유할 자료의 최신 개정 번호를 확인하지 못했습니다." }, { status: 503 });
+    }
+    verifiedRevision = stored.revision;
 
     const rawVisualSignature = sourceVisualSignature(
       (stored as { content?: unknown }).content
@@ -714,11 +721,15 @@ export async function PATCH(req: Request) {
     patch.author_name = prof?.full_name ?? auth.user.email?.split("@")[0] ?? "구조대원";
   }
 
-  const { data, error } = await supabase
+  let shareUpdate = supabase
     .from("generated_materials")
     .update(patch)
     .eq("id", body.id)
-    .select("id");
+    .eq("user_id", auth.user.id);
+  // 검토를 기다리는 동안 다른 화면이 저장한 새 내용을 대신 공개하지 않는다.
+  // 공유 해제는 원문 검토나 개정 번호와 무관하게 본인 자료에서 즉시 허용한다.
+  if (verifiedRevision !== undefined) shareUpdate = shareUpdate.eq("revision", verifiedRevision);
+  const { data, error } = await shareUpdate.select("id");
   if (error) {
     console.error("[generate/save] 공유 토글 실패:", error.message);
     if (isShareContractDatabaseError(error)) {
@@ -734,6 +745,10 @@ export async function PATCH(req: Request) {
     return Response.json({ error: "공유 설정에 실패했습니다." }, { status: 500 });
   }
   if (!data || data.length === 0) {
+    if (verifiedRevision !== undefined) return Response.json({
+      code: "material_revision_conflict",
+      error: "근거를 검토하는 동안 자료가 변경되어 공유하지 않았습니다. 최신 목록을 불러온 뒤 다시 확인해 주세요.",
+    }, { status: 409 });
     return Response.json({ error: "자료를 찾을 수 없습니다." }, { status: 404 });
   }
   return Response.json({ ok: true, shared: body.shared });

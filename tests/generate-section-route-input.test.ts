@@ -383,6 +383,47 @@ describe("POST /api/generate/section 입력 경계", () => {
     );
   });
 
+  it("부분 재생성은 기존 단계·도식 관계를 모델에 전달하고 새 도식 연결을 응답에 보존한다", async () => {
+    mocks.fetchCategoryContext.mockResolvedValue({
+      contextText: "[공기호흡기 교범 p.3]\n착용 전 점검하고 이상 시 중단한 뒤 보고합니다.",
+      sources: [], bindingSources: [], degraded: false,
+      sopEvidence: { status: "not_found", sourceLabels: [] },
+    });
+    const current = {
+      ...regeneratedSlide("점검에서 이상이 있으면 중단 후 보고합니다."),
+      composition: "decision-flow", role: "decision", layout: "process",
+      steps: ["점검 이상 유무", "이상 발견", "이상 없음"],
+      bullets: ["착용을 중단하고 교관에게 보고합니다", "동료 확인 후 착용을 진행합니다"],
+      diagram: { kind: "decision", conditionStepIndex: 0, branches: [
+        { labelStepIndex: 1, bulletIndices: [0] },
+        { labelStepIndex: 2, bulletIndices: [1] },
+      ] },
+    };
+    const generated = {
+      ...current,
+      steps: ["동료와 사전 확인", "이상 시 중단", "결과 보고"],
+      composition: "process", role: "procedure",
+      diagram: { kind: "process", nodes: [
+        { stepIndex: 0, bulletIndices: [1] },
+        { stepIndex: 1, bulletIndices: [0] },
+        { stepIndex: 2, bulletIndices: [] },
+      ] },
+    };
+    mocks.generateObject.mockResolvedValueOnce({ object: generated });
+
+    const response = await POST(requestWith(validSlideBody({ current })));
+    const payload = await response.json();
+    const generationArgs = mocks.generateObject.mock.calls[0][0];
+
+    expect(response.status).toBe(200);
+    expect(generationArgs.prompt).toContain("점검 이상 유무");
+    expect(generationArgs.prompt).toContain('"conditionStepIndex": 0');
+    expect(generationArgs.prompt).toContain('"labelStepIndex": 1');
+    expect(generationArgs.schema.parse(generated).diagram).toEqual(generated.diagram);
+    expect(payload.diagram).toEqual(generated.diagram);
+    expect(payload.steps).toEqual(generated.steps);
+  });
+
   it("강제 SOP 복구가 두 번의 생성 뒤에도 계약을 만족하지 못하면 evidence를 붙이지 않는다", async () => {
     mocks.fetchCategoryContext.mockResolvedValue({
       contextText: "[공기호흡기 교범 p.3]\n보호장비 상태를 확인합니다.",

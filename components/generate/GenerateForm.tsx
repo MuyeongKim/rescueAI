@@ -95,6 +95,7 @@ import type { ValidatedGenerateRequest } from "@/lib/generation-request";
 import { autoAssignDeckSourceVisuals } from "@/lib/source-visuals";
 import { restoreGenerationDraft, type GenerationDraft, type GenerationDraftSnapshot } from "@/lib/generation-draft";
 import { useGenerationDraft } from "@/components/generate/useGenerationDraft";
+import { slideDiagramText } from "@/lib/slide-diagram";
 
 const TOPIC_SUGGESTIONS: Record<string, readonly string[]> = {
   화재: ["공기호흡기 점검과 착용", "고립소방관 구조 절차", "화재현장 인명검색 안전수칙"],
@@ -480,7 +481,7 @@ function resultEditSignature(doc: GeneratedDoc | null, deck: GeneratedSlideDeck 
 
 function regenerationText(value: GeneratedSection | GeneratedSlide): string {
   return "content" in value ? `${value.heading}\n\n${value.content}`
-    : [value.title, value.bullets.join("\n"), value.steps?.join(" → "), value.notes].filter(Boolean).join("\n\n");
+    : [value.title, value.bullets.join("\n"), value.steps?.join("\n"), slideDiagramText(value), value.notes].filter(Boolean).join("\n\n");
 }
 
 function mergedSourceLabels(
@@ -1530,7 +1531,14 @@ export function GenerateForm({
         ? {
             ...previous,
             slides: previous.slides.map((slide, index) =>
-              index === i ? { ...slide, ...patch } : slide
+              index === i ? {
+                ...slide,
+                ...patch,
+                diagram: Object.prototype.hasOwnProperty.call(patch, "diagram")
+                  ? patch.diagram
+                  : patch.bullets || patch.steps || (patch.composition && patch.composition !== slide.composition)
+                    ? undefined : slide.diagram,
+              } : slide
             ),
           }
         : previous
@@ -1556,6 +1564,7 @@ export function GenerateForm({
               slideIndex === slideI
                 ? {
                     ...slide,
+                    diagram: undefined,
                     bullets: slide.bullets.map((bullet, bulletIndex) =>
                       bulletIndex === bulletI ? value : bullet
                     ),
@@ -2370,7 +2379,7 @@ export function GenerateForm({
       } else if (kind === "slide" && deck) {
         nextDeck = {
           ...deck,
-          slides: deck.slides.map((slide, position) => position === index ? { ...slide, ...regenerated } as GeneratedSlide : slide),
+          slides: deck.slides.map((slide, position) => position === index ? { ...slide, ...regenerated, diagram: regenerated.diagram } as GeneratedSlide : slide),
           sourceLabels: mergedSourceLabels(deck.sourceLabels, sourceLabels),
           sources: mergeGeneratedSources(deck.sources, sources),
           sopEvidence: verifiedSopEvidence ?? deck.sopEvidence,
@@ -3387,7 +3396,7 @@ export function GenerateForm({
     try {
       const response = await fetch("/api/generate/verify", {
         method: "POST", headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(60_000),
+        signal: AbortSignal.timeout(110_000),
         body: JSON.stringify({ kind, title: value.title, category: context.category,
           audience: context.audience, duration: context.duration, topic: context.topic,
           content: { ...content, focus: context.focus, conditions: context.conditions, date: context.date, place: context.place } }),
@@ -3460,9 +3469,11 @@ export function GenerateForm({
         visualToastId = undefined;
       }
       await downloadPptx(prepared.deck, exportContext.category, subtitle);
-    } catch {
+    } catch (error) {
       if (visualToastId !== undefined) toast.dismiss(visualToastId);
-      toast.error("PPTX 파일 생성에 실패했습니다");
+      toast.error("PPTX 파일 생성에 실패했습니다", {
+        description: error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요.",
+      });
     } finally {
       exportBusyRef.current = false;
       setPptxLoading(false);

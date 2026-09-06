@@ -1,7 +1,7 @@
 "use client";
 
 // 슬라이드(PPTX) 결과 카드 — 16:9 미리보기 · 항목 편집 · 항목별 AI 재생성 · PPTX 다운로드.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Image from "next/image";
 import {
   ArrowDown,
@@ -27,7 +27,10 @@ import type {
   SlideLayoutType,
 } from "@/lib/generate";
 import { generatedPptxSlideCount } from "@/lib/pptx-plan";
-import { buildSlideLayoutPlan } from "@/lib/slide-layout";
+import { buildSlideLayoutPlan, inspectSlideDeckLayout, type SlideTextMeasurer } from "@/lib/slide-layout";
+import { validSlideDiagram } from "@/lib/slide-diagram";
+import { editableDiagramKind, SlideDiagramEditor, SlideDiagramReadable } from "@/components/generate/SlideDiagramEditor";
+import { SlideLayoutIssues, slideIssueLocation } from "@/components/generate/SlideLayoutIssues";
 import { SlidePlanPreview as SlidePreview } from "@/components/generate/SlidePlanPreview";
 import {
   fallbackSlideVisualMode,
@@ -83,6 +86,7 @@ export function slideVisualKind(slide: GeneratedSlide): SlideVisualKind {
   if (slide.visual?.mode === "source-page" || slide.visual?.mode === "source-crop") {
     return "source";
   }
+  if (editableDiagramKind(slide.composition)) return validSlideDiagram(slide) ? "diagram" : "content";
   if (
     slide.visual?.mode === "native-diagram" ||
     slide.composition === "process" ||
@@ -241,13 +245,14 @@ function SlideEvidence({ slide }: { slide: GeneratedSlide }) {
 
 /** 썸네일은 구성 확인용이고, 실제 문장 검토는 모바일에서도 16px 이상으로 모두 보여 준다. */
 function SlideReadableContent({ slide, accent }: { slide: GeneratedSlide; accent: string }) {
+  if (validSlideDiagram(slide)) return <div className="border-t px-3 py-3"><SlideDiagramReadable slide={slide} /></div>;
   const steps = (slide.steps ?? []).filter(Boolean);
   return (
     <div className="space-y-3 border-t px-3 py-3">
       {steps.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5" aria-label="절차 단계">
           {steps.map((step, index) => (
-            <span key={index} className="flex items-center gap-1.5 text-sm font-medium">
+            <span key={index} className="flex items-center gap-1.5 text-base font-medium">
               <span
                 className="flex h-6 w-6 items-center justify-center rounded-full text-xs font-bold text-white"
                 style={{ backgroundColor: accent }}
@@ -255,18 +260,13 @@ function SlideReadableContent({ slide, accent }: { slide: GeneratedSlide; accent
                 {index + 1}
               </span>
               {step}
-              {index < steps.length - 1 && (
-                <span className="text-muted-foreground" aria-hidden="true">
-                  →
-                </span>
-              )}
             </span>
           ))}
         </div>
       )}
       <div>
         <p className="mb-1.5 text-xs font-semibold text-muted-foreground">핵심 내용</p>
-        <ul className="list-disc space-y-1.5 pl-5 text-base leading-relaxed text-foreground/85 md:text-sm">
+        <ul className="list-disc space-y-1.5 pl-5 text-base leading-relaxed text-foreground/85">
           {slide.bullets.map((bullet, index) => (
             <li key={index}>{bullet}</li>
           ))}
@@ -336,10 +336,9 @@ function legacyLayoutForComposition(
 function fillSlideItems(
   current: readonly string[] | undefined,
   minimum: number,
-  fallbacks: readonly string[],
-  maximum: number
+  fallbacks: readonly string[]
 ): string[] {
-  const items = (current ?? []).map((item) => item.trim()).filter(Boolean).slice(0, maximum);
+  const items = [...(current ?? [])];
   while (items.length < minimum) {
     items.push(fallbacks[items.length] ?? `항목 ${items.length + 1}`);
   }
@@ -360,6 +359,7 @@ export function normalizedCompositionPatch(
     return {
       composition,
       layout: "concept",
+      ...(slide.composition !== composition ? { diagram: undefined } : {}),
       visual: {
         mode: "source-page",
         documentId: sourceCandidate.documentId,
@@ -373,29 +373,27 @@ export function normalizedCompositionPatch(
   }
 
   const layout = legacyLayoutForComposition(composition, slide.layout);
-  let bullets = fillSlideItems(slide.bullets, 1, ["핵심 내용을 입력해 주세요."], 4);
-  let steps = (slide.steps ?? []).map((step) => step.trim()).filter(Boolean).slice(0, 5);
+  let bullets = fillSlideItems(slide.bullets, 1, ["핵심 내용을 입력해 주세요."]);
+  let steps = [...(slide.steps ?? [])];
 
   if (composition === "comparison") {
     bullets = fillSlideItems(
       bullets,
       2,
-      ["첫 번째 비교 내용을 입력해 주세요.", "두 번째 비교 내용을 입력해 주세요."],
-      4
+      ["첫 번째 비교 내용을 입력해 주세요.", "두 번째 비교 내용을 입력해 주세요."]
     );
-    steps = fillSlideItems(steps, 2, ["비교 기준 1", "비교 기준 2"], 5);
+    steps = fillSlideItems(steps, 2, ["비교 기준 1", "비교 기준 2"]);
   } else if (composition === "process") {
-    steps = fillSlideItems(steps, 3, ["준비", "수행", "확인"], 5);
+    steps = fillSlideItems(steps, 3, ["준비", "수행", "확인"]);
   } else if (composition === "decision-flow") {
     bullets = fillSlideItems(
       bullets,
       2,
-      ["판단 조건을 입력해 주세요.", "조건별 조치를 입력해 주세요."],
-      4
+      ["판단 조건을 입력해 주세요.", "조건별 조치를 입력해 주세요."]
     );
-    steps = fillSlideItems(steps, 3, ["판단 조건", "조건 충족", "조건 불충족"], 5);
+    steps = fillSlideItems(steps, 3, ["판단 조건", "조건 충족", "조건 불충족"]);
   } else if (composition === "timeline") {
-    steps = fillSlideItems(steps, 3, ["초기", "진행", "완료"], 5);
+    steps = fillSlideItems(steps, 3, ["초기", "진행", "완료"]);
   }
 
   const patch: Partial<GeneratedSlide> = {
@@ -403,6 +401,8 @@ export function normalizedCompositionPatch(
     layout,
     bullets,
     steps: steps.length > 0 ? steps : undefined,
+    ...(slide.composition !== composition || JSON.stringify(slide.steps ?? []) !== JSON.stringify(steps) || JSON.stringify(slide.bullets) !== JSON.stringify(bullets)
+      ? { diagram: undefined } : {}),
   };
   const isSourceVisual =
     slide.visual?.mode === "source-page" || slide.visual?.mode === "source-crop";
@@ -478,12 +478,14 @@ function SlideVisualSlot({ slide }: { slide: GeneratedSlide }) {
   const hasPreview = isSource && Boolean(visual?.imageData?.startsWith("data:image/"));
   const sourceLabel = visualSourceLabel(slide);
   const composition = slide.composition ? COMPOSITION_LABELS[slide.composition] : null;
+  const needsDiagram = Boolean(editableDiagramKind(slide.composition)) && !validSlideDiagram(slide);
 
   const status = hasPreview
     ? "미리보기 준비"
     : isSource
       ? "그림 확인 전"
-      : mode === "native-diagram"
+      : needsDiagram ? "연결 확인 전"
+        : mode === "native-diagram"
         ? "도형 구성"
         : "사용 안 함";
 
@@ -508,7 +510,8 @@ function SlideVisualSlot({ slide }: { slide: GeneratedSlide }) {
             <p className="mt-0.5 text-sm leading-relaxed text-muted-foreground">
               {isSource
                 ? hasPreview ? "확인한 원문 그림을 표시합니다." : "연결된 페이지의 그림은 사전 확인 후 표시됩니다."
-                : mode === "native-diagram"
+                : needsDiagram ? "도식 연결을 확인하기 전에는 입력한 내용을 일반 배치로 보여 줍니다."
+                  : mode === "native-diagram"
                   ? "내용을 PPT 기본 도형으로 안전하게 표현합니다."
                   : "이 장에는 원본 이미지나 별도 도형을 사용하지 않습니다."}
             </p>
@@ -567,7 +570,6 @@ export function SlideDeckResult({
   regen,
   onTitleChange,
   onPatchSlide,
-  onPatchBullet,
   onAddSlide,
   onDuplicateSlide,
   onMoveSlide,
@@ -610,7 +612,16 @@ export function SlideDeckResult({
   } | null>(null);
   useEffect(() => () => { sourcePreviewRequestRef.current += 1; }, []);
   const [announcement, setAnnouncement] = useState("");
-  const pendingIssueFocusRef = useRef<number | null>(null);
+  const pendingIssueFocusRef = useRef<{ index: number | null; fieldId?: string } | null>(null);
+  const [textMeasurer, setTextMeasurer] = useState<SlideTextMeasurer | undefined>();
+  const [fontCheckFailed, setFontCheckFailed] = useState(false);
+  useEffect(() => {
+    let active = true;
+    void import("@/lib/slide-text-browser").then(({ prepareSlideTextMeasurer }) => prepareSlideTextMeasurer())
+      .then((measureText) => { if (active) setTextMeasurer(() => measureText); })
+      .catch(() => { if (active) setFontCheckFailed(true); });
+    return () => { active = false; };
+  }, []);
   const selectedSlide = deck.slides[selectedIndex];
   const selectedVisualCandidates = selectedSlide
     ? verifiedSlideVisualCandidates(selectedSlide, deck.sources)
@@ -648,6 +659,14 @@ export function SlideDeckResult({
   const mode = resolveSlideDeckMode(deck.mode);
   const previewKey = (slide: GeneratedSlide) => JSON.stringify([slide, deck.sources]);
   const preparedSlide = (slide: GeneratedSlide) => sourcePreview?.key === previewKey(slide) && sourcePreview.slide ? sourcePreview.slide : slide;
+  const layoutReport = useMemo(() => inspectSlideDeckLayout({
+    ...deck,
+    slides: deck.slides.map((slide) => sourcePreview?.key === JSON.stringify([slide, deck.sources]) && sourcePreview.slide ? sourcePreview.slide : slide),
+  }, textMeasurer ? { measureText: textMeasurer } : undefined), [deck, sourcePreview, textMeasurer]);
+  const layoutIssueSet = new Set(layoutReport.issues.flatMap((issue) => {
+    const location = slideIssueLocation(issue.path);
+    return location.slideIndex === null ? [] : [location.slideIndex];
+  }));
   const visualSummary = slideVisualSummary(deck.slides.map(preparedSlide));
   const layoutCounts = new Map<string, number>();
   const layoutOccurrences = deck.slides.map((slide) => {
@@ -696,7 +715,7 @@ export function SlideDeckResult({
       </div>
     );
   }
-  const downloadSlideCount = generatedPptxSlideCount(deck.slides.length, deck.sources.length);
+  const downloadSlideCount = generatedPptxSlideCount(deck.slides.length, deck.sources);
   const editorLocked =
     chrome.saving || Boolean(chrome.locked) || regen.loadingIndex !== null || pptxLoading;
   const outputBlocked = Boolean(chrome.outputBlocked);
@@ -716,16 +735,25 @@ export function SlideDeckResult({
 
   useEffect(() => {
     const target = pendingIssueFocusRef.current;
-    if (!editing || target === null || selectedIndex !== target) return;
+    if (!editing || target === null || (target.index !== null && selectedIndex !== target.index)) return;
     pendingIssueFocusRef.current = null;
     requestAnimationFrame(() => {
-      document.getElementById("selected-slide-heading")?.focus();
+      focusIssueField(target.fieldId);
     });
   }, [editing, selectedIndex]);
 
+  function focusIssueField(fieldId?: string) {
+    const target = document.getElementById(fieldId ?? "selected-slide-heading");
+    const details = target?.querySelector("details");
+    if (details) details.open = true;
+    target?.scrollIntoView({ block: "center" });
+    if (details) details.querySelector("summary")?.focus();
+    else target?.focus();
+  }
+
   function handleSelectIssueSlide(index: number) {
     if (index < 0 || index >= deck.slides.length || editorLocked) return;
-    pendingIssueFocusRef.current = index;
+    pendingIssueFocusRef.current = { index };
     setSelectedIndex(index);
     regen.onClose();
     setAnnouncement(`품질 확인이 필요한 슬라이드 ${index + 1}을 선택했습니다.`);
@@ -736,6 +764,24 @@ export function SlideDeckResult({
     requestAnimationFrame(() => {
       pendingIssueFocusRef.current = null;
       document.getElementById("selected-slide-heading")?.focus();
+    });
+  }
+
+  function handleSelectLayoutIssue(path: string) {
+    if (editorLocked) return;
+    const location = slideIssueLocation(path);
+    if (location.slideIndex !== null && (location.slideIndex < 0 || location.slideIndex >= deck.slides.length)) return;
+    pendingIssueFocusRef.current = { index: location.slideIndex, fieldId: location.fieldId };
+    if (location.slideIndex !== null) setSelectedIndex(location.slideIndex);
+    regen.onClose();
+    setAnnouncement(`${location.label} 수정 위치를 선택했습니다.`);
+    if (!editing) {
+      chrome.onToggleEdit();
+      return;
+    }
+    requestAnimationFrame(() => {
+      pendingIssueFocusRef.current = null;
+      focusIssueField(location.fieldId);
     });
   }
 
@@ -775,6 +821,7 @@ export function SlideDeckResult({
     if (!selectedSlide || editorLocked || selectedSlide.bullets.length >= 4) return;
     onPatchSlide(selectedIndex, {
       bullets: [...selectedSlide.bullets, "핵심 내용을 입력해 주세요."],
+      diagram: undefined,
     });
     setAnnouncement(`슬라이드 ${selectedIndex + 1}에 핵심 문장을 추가했습니다.`);
   }
@@ -789,6 +836,7 @@ export function SlideDeckResult({
     }
     onPatchSlide(selectedIndex, {
       bullets: selectedSlide.bullets.filter((_, index) => index !== bulletIndex),
+      diagram: undefined,
     });
     setAnnouncement(
       `슬라이드 ${selectedIndex + 1}의 핵심 문장 ${bulletIndex + 1}을 삭제했습니다.`
@@ -840,6 +888,7 @@ export function SlideDeckResult({
           <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
             {editing ? (
               <Input
+                id="slide-deck-title"
                 value={deck.title}
                 onChange={(e) => onTitleChange(e.target.value)}
                 disabled={editorLocked}
@@ -896,6 +945,8 @@ export function SlideDeckResult({
                 : undefined
             }
           />
+          <SlideLayoutIssues issues={layoutReport.issues} disabled={editorLocked} onSelect={handleSelectLayoutIssue} />
+          {fontCheckFailed && <p role="status" className="text-sm leading-relaxed text-muted-foreground">글꼴을 확인하지 못해 기본 기준으로 넘침을 점검합니다. 다운로드할 때 글꼴을 다시 확인합니다.</p>}
 
           {editing ? (
             <fieldset
@@ -933,7 +984,7 @@ export function SlideDeckResult({
                         <button
                           type="button"
                           aria-current={active ? "page" : undefined}
-                          aria-label={`슬라이드 ${index + 1}: ${slide.title || "제목 없음"}${qualityIssueSet.has(index) ? ", 품질 확인 필요" : evidenceIssueSet.has(index) ? ", 근거 확인 필요" : ""}`}
+                          aria-label={`슬라이드 ${index + 1}: ${slide.title || "제목 없음"}${layoutIssueSet.has(index) ? ", 글자·도식 확인 필요" : qualityIssueSet.has(index) ? ", 품질 확인 필요" : evidenceIssueSet.has(index) ? ", 근거 확인 필요" : ""}`}
                           disabled={editorLocked}
                           onClick={() => {
                             setSelectedIndex(index);
@@ -958,9 +1009,9 @@ export function SlideDeckResult({
                             {String(index + 1).padStart(2, "0")}
                           </span>
                           <span className="truncate">{slide.title || "제목 없음"}</span>
-                          {(qualityIssueSet.has(index) || evidenceIssueSet.has(index)) && (
+                          {(layoutIssueSet.has(index) || qualityIssueSet.has(index) || evidenceIssueSet.has(index)) && (
                             <span className="ml-auto shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-red-800 dark:bg-red-950/50 dark:text-red-100">
-                              {qualityIssueSet.has(index) ? "품질 확인" : "근거 확인"}
+                              {layoutIssueSet.has(index) ? "표현 확인" : qualityIssueSet.has(index) ? "품질 확인" : "근거 확인"}
                             </span>
                           )}
                         </div>
@@ -1212,10 +1263,12 @@ export function SlideDeckResult({
                             return (
                               <div key={bulletIndex} className="flex items-center gap-2">
                                 <Textarea
+                                  id={`slide-bullet-${selectedIndex}-${bulletIndex}`}
                                   value={bullet}
-                                  onChange={(event) =>
-                                    onPatchBullet(selectedIndex, bulletIndex, event.target.value)
-                                  }
+                                  onChange={(event) => onPatchSlide(selectedIndex, {
+                                    bullets: selectedSlide.bullets.map((current, index) => index === bulletIndex ? event.target.value : current),
+                                    diagram: undefined,
+                                  })}
                                   className="min-h-24 min-w-0 flex-1 resize-y text-base leading-relaxed"
                                   aria-label={`슬라이드 ${selectedIndex + 1} 핵심 내용 ${bulletIndex + 1}`}
                                 />
@@ -1237,7 +1290,7 @@ export function SlideDeckResult({
                           <Button
                             type="button"
                             variant="outline"
-                            className="min-h-11 gap-1.5"
+                            className="min-h-12 gap-1.5 text-base"
                             disabled={selectedSlide.bullets.length >= 4}
                             onClick={handleAddBullet}
                           >
@@ -1259,7 +1312,8 @@ export function SlideDeckResult({
                             onChange={(event) => {
                               const value = event.target.value;
                               onPatchSlide(selectedIndex, {
-                                steps: value === "" ? undefined : value.split("\n").slice(0, 5),
+                                steps: value === "" ? undefined : value.split("\n"),
+                                diagram: undefined,
                               });
                             }}
                             className="min-h-[112px] text-base"
@@ -1267,10 +1321,21 @@ export function SlideDeckResult({
                           />
                           <p className="text-sm leading-relaxed text-muted-foreground">
                             {selectedSlide.composition === "comparison"
-                              ? "앞 두 줄은 왼쪽·오른쪽 비교 기준입니다. 남은 최대 3개 단계는 화면 하단에 보존됩니다."
-                              : "절차 화면은 3~5단계가 가장 읽기 좋습니다."}
+                              ? "비교 대상과 항목 이름을 입력한 뒤 아래 도식 연결에서 대응하는 설명을 선택하세요."
+                              : selectedSlide.composition === "decision-flow" ? "조건 1개와 서로 다른 갈림길 이름 2개를 입력한 뒤 아래에서 행동을 연결하세요."
+                                : "절차 화면은 3~5단계가 가장 읽기 좋습니다."}
                           </p>
+                          {(selectedSlide.steps?.length ?? 0) > 5 && <p role="alert" className="text-base leading-relaxed text-destructive">입력한 {selectedSlide.steps!.length}개 단계를 모두 보존했습니다. 이 장에는 최대 5개까지 사용할 수 있으므로 정리하거나 다른 장으로 나눠 주세요.</p>}
                         </div>
+
+                        {editableDiagramKind(selectedSlide.composition) && <div id={`slide-diagram-${selectedIndex}`} tabIndex={-1} className="space-y-2 rounded-md focus:outline-none focus:ring-2 focus:ring-ring">
+                          <p className="text-sm leading-relaxed text-muted-foreground">본문·단계를 수정하면 기존 도식 연결이 해제됩니다. 내용 확인 후 아래에서 다시 연결해 주세요.</p>
+                          <SlideDiagramEditor key={`${selectedIndex}:${selectedSlide.composition}`} slide={selectedSlide} index={selectedIndex} disabled={editorLocked}
+                            onChange={(diagram) => {
+                              onPatchSlide(selectedIndex, { diagram });
+                              setAnnouncement(diagram ? `슬라이드 ${selectedIndex + 1} 도식 연결을 적용했습니다.` : `슬라이드 ${selectedIndex + 1}의 도식 연결을 해제했습니다. 본문과 단계는 유지됩니다.`);
+                            }} />
+                        </div>}
 
                         <div className="space-y-1.5">
                           <label className="text-sm font-semibold" htmlFor={`slide-notes-${selectedIndex}`}>
@@ -1417,9 +1482,9 @@ export function SlideDeckResult({
             type="button"
             className="h-12 w-full gap-2 text-base"
             onClick={onDownloadPptx}
-            disabled={pptxLoading || editorLocked || outputBlocked}
+            disabled={pptxLoading || editorLocked || outputBlocked || !layoutReport.ok}
             aria-busy={pptxLoading}
-            aria-describedby={outputBlocked ? "generation-quality-summary" : undefined}
+            aria-describedby={[outputBlocked ? "generation-quality-summary" : "", !layoutReport.ok ? "slide-layout-check" : ""].filter(Boolean).join(" ") || undefined}
           >
             {pptxLoading ? (
               <Loader2 className="h-4 w-4 animate-spin motion-reduce:animate-none" aria-hidden="true" />

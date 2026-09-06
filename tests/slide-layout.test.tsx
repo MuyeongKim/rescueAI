@@ -1,7 +1,7 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { buildSlideLayoutPlan } from "@/lib/slide-layout";
+import { buildSlideLayoutPlan, inspectSlideDeckLayout } from "@/lib/slide-layout";
 import { SlidePlanPreview } from "@/components/generate/SlidePlanPreview";
 import { normalizedCompositionPatch } from "@/components/generate/SlideDeckResult";
 import type { GeneratedSlide } from "@/lib/generate";
@@ -18,7 +18,8 @@ describe("공통 PPT 화면 구성", () => {
     const patch = normalizedCompositionPatch({ ...base, composition: "process" }, "comparison");
     expect(patch.steps).toEqual(base.steps);
     const plan = buildSlideLayoutPlan({ ...base, ...patch });
-    expect(plan.layout).toBe("comparison");
+    expect(plan.layout).toBe("content");
+    expect(plan.issues).toContainEqual(expect.objectContaining({ code: "slide_diagram_unmapped", severity: "warning" }));
     for (const step of base.steps!) expect(plan.texts.some((item) => item.text === step)).toBe(true);
   });
   it.each(["timeline", "decision-flow", "comparison", "list", "summary"] as const)("%s의 모든 문장·단계와 도형을 같은 계획으로 미리 보여 준다", (composition) => {
@@ -35,6 +36,32 @@ describe("공통 PPT 화면 구성", () => {
       expect(item.y + item.h).toBeLessThan(6.96);
       expect(item.x + item.w).toBeLessThan(13.33);
     }
-    if (composition === "decision-flow") expect(html).toContain("<polygon");
+    if (composition === "decision-flow") expect(html).not.toContain("<polygon");
+  });
+
+  it("단계와 설명의 실제 인덱스를 연결하고 임의로 대응시키지 않는다", () => {
+    const slide: GeneratedSlide = { ...base, composition: "process", diagram: { kind: "process", nodes: [
+      { stepIndex: 0, bulletIndices: [2] }, { stepIndex: 1, bulletIndices: [] },
+      { stepIndex: 2, bulletIndices: [0] }, { stepIndex: 3, bulletIndices: [3] }, { stepIndex: 4, bulletIndices: [1] },
+    ] } };
+    const plan = buildSlideLayoutPlan(slide);
+    expect(plan.issues).toEqual([]);
+    expect(plan.variant).toBe("process-columns");
+    const step = plan.texts.find((item) => item.id === "step-0")!;
+    const body = plan.texts.find((item) => item.id === "bullet-2")!;
+    expect(Math.abs(body.x - step.x)).toBeLessThan(0.02);
+    expect(body.y).toBeGreaterThan(step.y);
+    for (const content of [...slide.bullets, ...slide.steps!]) expect(plan.texts.filter((item) => item.text === content)).toHaveLength(1);
+  });
+
+  it("내용이 넓은 본문에도 맞지 않으면 전문을 유지하고 정확한 항목을 오류로 안내한다", () => {
+    const content = "중단 조건과 보고 절차를 확인합니다. ".repeat(100);
+    const slide = { title: "긴 본문", bullets: [content], notes: "교관 설명" };
+    const plan = buildSlideLayoutPlan(slide);
+    expect(plan.texts.find((item) => item.id === "bullet-0")?.text).toBe(content.trim());
+    const report = inspectSlideDeckLayout({ title: "검증", slides: [slide], sources: [] });
+    expect(report.ok).toBe(false);
+    expect(report.issues).toContainEqual(expect.objectContaining({ severity: "error", path: "slides.0.bullets.0" }));
+    expect(plan.texts.every((item) => item.fontSize >= 16)).toBe(true);
   });
 });

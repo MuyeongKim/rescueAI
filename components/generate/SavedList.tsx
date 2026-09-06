@@ -260,7 +260,7 @@ export function SavedList({
           response = await fetch("/api/generate/verify", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            signal: AbortSignal.timeout(60_000),
+            signal: AbortSignal.timeout(110_000),
             body: JSON.stringify({
               kind: it.kind, title: it.title, category: it.category,
               topic: it.topic, audience: it.audience ?? undefined,

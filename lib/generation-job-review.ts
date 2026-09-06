@@ -40,7 +40,9 @@ export type GenerationPublicQualityIssue = z.infer<typeof generationPublicQualit
 const reviewDraftEditSchema = z.object({
   title: z.string().trim().min(4).max(100),
   sections: z.array(z.object({ heading: z.string().max(100), content: z.string().min(1).max(20_000) }).strip()).min(1).max(7).optional(),
-  slides: z.array(z.object({ title: z.string().trim().min(1).max(120), bullets: z.array(z.string().min(1).max(500)).min(1).max(8), notes: z.string().max(16_000) }).strip()).min(1).max(20).optional(),
+  slides: z.array(z.object({ title: z.string().trim().min(1).max(120), bullets: z.array(z.string().min(1).max(500)).min(1).max(8), notes: z.string().max(16_000),
+    steps: z.array(z.string().max(100)).max(5).optional(), clearDiagram: z.boolean().optional(),
+  }).strip()).min(1).max(20).optional(),
 }).strip();
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -58,7 +60,13 @@ export function applyGenerationReviewDraftEdit(checkpoint: Json, type: Validated
     const outline = record(saved.outline);
     if (!outline || !Array.isArray(slides) || !edit.slides || edit.slides.length !== slides.length || edit.sections) throw new Error("저장된 슬라이드 수와 순서를 유지해 주세요.");
     return JSON.parse(JSON.stringify({ ...saved, outline: { ...outline, title: edit.title },
-      slides: slides.map((slide, index) => ({ ...record(slide), ...edit.slides![index] })), groundingReview: undefined,
+      slides: slides.map((slide, index) => {
+        const previous = record(slide);
+        const { clearDiagram, ...text } = edit.slides![index];
+        const changed = JSON.stringify(previous?.bullets) !== JSON.stringify(text.bullets) ||
+          (text.steps !== undefined && JSON.stringify(previous?.steps) !== JSON.stringify(text.steps));
+        return { ...previous, ...text, diagram: changed || clearDiagram ? undefined : previous?.diagram };
+      }), groundingReview: undefined,
     })) as Json;
   }
   const draft = record(saved.draft);
@@ -167,7 +175,7 @@ export function projectGenerationReviewDraft(checkpoint: unknown): Record<string
   // Slides are generated against a strict schema before checkpointing; keep only material fields.
   const slides = Array.isArray(saved?.slides) ? saved.slides.map((value) => {
     const slide = record(value) ?? {};
-    return Object.fromEntries(["title", "bullets", "notes", "role", "composition", "layout", "visual", "sourceRefs", "steps"].filter((key) => key in slide).map((key) => [key, slide[key]]));
+    return Object.fromEntries(["title", "bullets", "notes", "role", "composition", "layout", "visual", "sourceRefs", "steps", "diagram"].filter((key) => key in slide).map((key) => [key, slide[key]]));
   }) : undefined;
   if (!sections?.length && !slides?.length) return undefined;
   return {

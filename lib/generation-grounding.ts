@@ -4,6 +4,7 @@ import type {
   GenerationQualityIssue,
   GenerationQualityReport,
 } from "@/lib/generate";
+import { slideDiagramText } from "@/lib/slide-diagram";
 
 export type GroundingRequest = {
   topic?: string;
@@ -46,7 +47,7 @@ export function generationTextParts(draft: GeneratedDoc | GeneratedSlideDeck) {
     ? draft.slides.map((slide, index) => ({
       path: `slides.${index}.notes`,
       text: [slide.title, ...slide.bullets, ...(slide.steps ?? []), slide.notes,
-        slide.visual?.caption, slide.visual?.altText].filter(Boolean).join("\n"),
+        slide.visual?.caption, slide.visual?.altText, slideDiagramText(slide)].filter(Boolean).join("\n"),
     }))
     : draft.sections.map((section, index) => ({
       path: `sections.${index}.content`, text: `${section.heading}\n${section.content}`,

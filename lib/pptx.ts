@@ -10,13 +10,15 @@ import {
   type GeneratedSlideDeck,
 } from "@/lib/generate";
 import { categoryStyle } from "@/lib/category";
-import { PPTX_SOURCES_PER_APPENDIX_SLIDE } from "@/lib/pptx-plan";
-import { buildSlideLayoutPlan, SLIDE_TITLE_BOX as BODY_TITLE_BOX, slideTitleFontSize as headerTitleFontSize, slideAccentTextColor, type RenderLayout, type SlideColor } from "@/lib/slide-layout";
+import { planPptxSourceAppendix, PPTX_SOURCE_FONT_SIZE, PPTX_SOURCE_TEXT_WIDTH } from "@/lib/pptx-plan";
+import { buildSlideLayoutPlan, SLIDE_TITLE_BOX as BODY_TITLE_BOX, SLIDE_COVER_TITLE_BOX, coverTitlePlan,
+  inspectSlideDeckLayout, SlideLayoutError, SLIDE_FONT_FAMILY, SLIDE_LINE_HEIGHT,
+  slideAccentTextColor, type RenderLayout, type SlideColor, type SlideLayoutOptions, type SlideLayoutPlan } from "@/lib/slide-layout";
 export { resolveSlideLayout } from "@/lib/slide-layout";
 export type { RenderLayout } from "@/lib/slide-layout";
 import { sanitizeFilename } from "@/lib/utils";
 
-const FONT = "Noto Sans KR"; // 미설치 환경은 PPT 프로그램의 대체 글꼴을 사용한다.
+const FONT = SLIDE_FONT_FAMILY; // 웹은 같은 글꼴을 준비한 뒤 글폭을 확인하고 출력한다.
 const INK = "1A2B4A"; // 본문 제목 잉크(딥 네이비)
 const BODY = "2B3648"; // 본문 텍스트
 const NAVY = "12233F"; // 표지·요약 배경
@@ -105,8 +107,14 @@ async function normalizePptxPackage(rawBytes: Uint8Array): Promise<Uint8Array> {
 export async function buildPptxBytes(
   deck: GeneratedSlideDeck,
   category: string,
-  subtitle: string
+  subtitle: string,
+  options: SlideLayoutOptions = {},
 ): Promise<Uint8Array> {
+  const layoutOptions = options.measureText || typeof document === "undefined" ? options : {
+    measureText: await (await import("@/lib/slide-text-browser")).prepareSlideTextMeasurer(),
+  };
+  const layoutReport = inspectSlideDeckLayout(deck, layoutOptions);
+  if (!layoutReport.ok) throw new SlideLayoutError(layoutReport.issues);
   const accent = hexOf(category);
   const deckMode = resolveSlideDeckMode(deck.mode);
   const deckModeLabel = deckMode === "detailed" ? "상세형 교육자료" : "발표형 교육자료";
@@ -117,6 +125,7 @@ export async function buildPptxBytes(
   pres.subject = `${category} 분야 ${deckModeLabel}`;
   pres.title = deck.title;
   pres.company = "전북특별자치도 소방본부";
+  pres.theme = { headFontFace: FONT, bodyFontFace: FONT };
 
   const noLine = { type: "none" as const };
   type PptxSlide = ReturnType<typeof pres.addSlide>;
@@ -187,20 +196,10 @@ export async function buildPptxBytes(
             color: dark ? "FFFFFF" : INK,
             bold: true,
             align: "left",
-            valign: "middle",
+            valign: "top",
             margin: 0,
           },
           text: "",
-        },
-      },
-      {
-        rect: {
-          x: MARGIN_X,
-          y: 1.36,
-          w: CONTENT_WIDTH,
-          h: 0.02,
-          fill: { color: dark ? WHITE_HAIR : HAIR },
-          line: noLine,
         },
       },
     ];
@@ -226,18 +225,6 @@ export async function buildPptxBytes(
     }
     objects.push(...footerMasterObjects(dark));
 
-    if (options.mirror) {
-      objects.unshift({
-        rect: {
-          x: 13.08,
-          y: 0,
-          w: 0.25,
-          h: SLIDE_HEIGHT,
-          fill: { color: accent, transparency: 76 },
-          line: noLine,
-        },
-      });
-    }
     return objects;
   }
 
@@ -250,7 +237,7 @@ export async function buildPptxBytes(
       title,
       background: {
         color:
-          options.background ?? (options.dark ? NAVY : options.mirror ? "F8FAFD" : "FFFFFF"),
+          options.background ?? (options.dark ? NAVY : "FFFFFF"),
       },
       objects: bodyMasterObjects(sectionLabel, options),
     });
@@ -275,12 +262,9 @@ export async function buildPptxBytes(
           options: {
             name: "coverTitle",
             type: "title",
-            x: 0.9,
-            y: 2.72,
-            w: 11.55,
-            h: 1.82,
+            ...SLIDE_COVER_TITLE_BOX,
             fontFace: FONT,
-            fontSize: 52,
+            fontSize: 44,
             color: "FFFFFF",
             bold: true,
             valign: "top",
@@ -326,9 +310,7 @@ export async function buildPptxBytes(
   defineBodyMaster(MASTER.comparison, "두 기준을 나란히 비교합니다");
   defineBodyMaster(MASTER.timeline, "시간 흐름에 따라 확인합니다");
   defineBodyMaster(MASTER.decision, "조건에 따라 다음 행동을 결정합니다");
-  defineBodyMaster(MASTER.visual, "원문 시각자료와 함께 확인합니다", {
-    background: "FBFCFE",
-  });
+  defineBodyMaster(MASTER.visual, "원문 시각자료와 함께 확인합니다");
   defineBodyMaster(MASTER.summary, "교육 핵심 정리", { dark: true });
   defineBodyMaster(MASTER.content, "핵심 메시지");
   defineBodyMaster(MASTER.contentMirror, "핵심 메시지", { mirror: true });
@@ -349,64 +331,22 @@ export async function buildPptxBytes(
     });
   }
 
-  function addHeader(
-    slide: PptxSlide,
-    title: string,
-    page: number,
-    total: number,
-    dark = false
-  ): void {
-    slide.addShape("roundRect", {
-      x: MARGIN_X,
-      y: 0.47,
-      w: 0.64,
-      h: 0.64,
-      rectRadius: 0.1,
-      fill: { color: accent },
-      line: noLine,
+  function addHeader(slide: PptxSlide, plan: SlideLayoutPlan, page: number, total: number): void {
+    // PptxGenJS 4는 placeholder 기본값을 text 옵션 위에 덮어쓴다. 측정된 크기는 run에 명시한다.
+    slide.addText([{ text: plan.title.lines.join("\n"), options: { fontSize: plan.title.fontSize } }], {
+      placeholder: "slideTitle", ...BODY_TITLE_BOX,
+      fontFace: FONT, fontSize: plan.title.fontSize,
+      color: plan.dark ? "FFFFFF" : INK, bold: true,
+      align: "left", valign: "top", margin: 0,
+      wrap: false, lineSpacing: plan.title.fontSize * SLIDE_LINE_HEIGHT,
     });
-    slide.addText(String(page), {
-      x: MARGIN_X,
-      y: 0.47,
-      w: 0.64,
-      h: 0.64,
-      fontFace: FONT,
-      fontSize: 20,
-      color: "FFFFFF",
-      bold: true,
-      align: "center",
-      valign: "middle",
-      margin: 0,
-    });
-    slide.addText(
-      [
-        {
-          text: title,
-          options: {
-            fontFace: FONT,
-            fontSize: headerTitleFontSize(title),
-            color: dark ? "FFFFFF" : INK,
-            bold: true,
-          },
-        },
-      ],
-      {
-        placeholder: "slideTitle",
-        ...BODY_TITLE_BOX,
-        align: "left",
-        valign: "middle",
-        margin: 0,
-        wrap: true,
-      }
-    );
-    addFooter(slide, page, total, dark);
+    addFooter(slide, page, total, plan.dark);
   }
 
-  function renderSlideBody(slide: PptxSlide, s: GeneratedSlide, occurrence: number): void {
-    const plan = buildSlideLayoutPlan(s, deckMode, occurrence);
+  function renderSlideBody(slide: PptxSlide, s: GeneratedSlide, plan: SlideLayoutPlan): void {
     const colors: Record<SlideColor, string> = {
       ink: INK, body: BODY, accent, muted: GRAY, tint: TINT,
-      white: "FFFFFF", line: HAIR,
+      white: "FFFFFF", line: HAIR, navy: NAVY,
     };
     for (const shape of plan.shapes) {
       slide.addShape(shape.kind, {
@@ -429,19 +369,19 @@ export async function buildPptxBytes(
         });
       } else {
         slide.addShape("roundRect", { ...box, fill: { color: TINT }, line: { color: accent, width: 1.2, dashType: "dash" } });
-        slide.addText(s.visual?.altText?.trim() || "원문 그림을 확인해 주세요", {
+        slide.addText("원문 그림 확인 전", {
           ...box, fontFace: FONT, fontSize: 20, color: GRAY,
           align: "center", valign: "middle", margin: 0.2,
         });
       }
     }
     for (const item of plan.texts) {
-      slide.addText(item.text, {
+      slide.addText(item.lines.join("\n"), {
         x: item.x, y: item.y, w: item.w, h: item.h,
         fontFace: FONT, fontSize: item.fontSize,
         color: item.color === "accent" ? slideAccentTextColor(`#${accent}`, plan.dark).slice(1) : colors[item.color],
         bold: item.bold, align: item.align ?? "left", valign: "top",
-        margin: 0, breakLine: false, wrap: true, lineSpacingMultiple: 1.12,
+        margin: 0, breakLine: false, wrap: false, lineSpacing: item.fontSize * SLIDE_LINE_HEIGHT,
         objectName: item.id,
       });
     }
@@ -476,7 +416,7 @@ export async function buildPptxBytes(
   const cover = pres.addSlide({ masterName: MASTER.cover });
   cover.addText(`전북특별자치도 소방본부  ·  ${category} 분야  ·  ${deckModeLabel}`, {
     x: 0.92,
-    y: 2.12,
+    y: 1.75,
     w: 11.45,
     h: 0.42,
     fontFace: FONT,
@@ -486,18 +426,18 @@ export async function buildPptxBytes(
     charSpacing: 2,
     margin: 0,
   });
-  cover.addText(deck.title, {
+  const coverTitle = coverTitlePlan(deck.title, layoutOptions);
+  cover.addText([{ text: coverTitle.lines.join("\n"), options: { fontSize: coverTitle.fontSize } }], {
     placeholder: "coverTitle",
-    x: 0.9,
-    y: 2.72,
-    w: 11.55,
-    h: 1.82,
+    ...SLIDE_COVER_TITLE_BOX,
     fontFace: FONT,
-    fontSize: 52,
+    fontSize: coverTitle.fontSize,
     color: "FFFFFF",
     bold: true,
     valign: "top",
-    lineSpacingMultiple: 1.02,
+    lineSpacing: coverTitle.fontSize * SLIDE_LINE_HEIGHT,
+    align: "left",
+    wrap: false,
     margin: 0,
   });
   cover.addText(subtitle, {
@@ -532,14 +472,14 @@ export async function buildPptxBytes(
   // ───────── 본문 ─────────
   deck.slides.forEach((rawSlide, index) => {
     const s = rawSlide;
-    const layout = buildSlideLayoutPlan(s, deckMode).layout;
+    const layout = buildSlideLayoutPlan(s, deckMode, 0, layoutOptions).layout;
     const occurrence = layoutOccurrences.get(layout) ?? 0;
     layoutOccurrences.set(layout, occurrence + 1);
     const slide = pres.addSlide({ masterName: masterNameFor(layout, occurrence) });
-    const dark = layout === "summary";
-    addHeader(slide, s.title, index + 1, total, dark);
+    const plan = buildSlideLayoutPlan(s, deckMode, occurrence, layoutOptions);
+    addHeader(slide, plan, index + 1, total);
 
-    renderSlideBody(slide, s, occurrence);
+    renderSlideBody(slide, s, plan);
 
     slide.addNotes(
       buildSpeakerNotes(
@@ -551,14 +491,10 @@ export async function buildPptxBytes(
   });
 
   // ───────── 근거 자료 ─────────
-  const sourceChunks: GeneratedDocSource[][] = [];
-  for (let index = 0; index < deck.sources.length; index += PPTX_SOURCES_PER_APPENDIX_SLIDE) {
-    sourceChunks.push(deck.sources.slice(index, index + PPTX_SOURCES_PER_APPENDIX_SLIDE));
-  }
-
-  sourceChunks.forEach((sources, chunkIndex) => {
+  const sourcePages = planPptxSourceAppendix(deck.sources);
+  sourcePages.forEach((rows, chunkIndex) => {
     const last = pres.addSlide({ masterName: MASTER.sources });
-    const title = sourceChunks.length > 1 ? `근거 자료 ${chunkIndex + 1}` : "근거 자료";
+    const title = sourcePages.length > 1 ? `근거 자료 ${chunkIndex + 1}` : "근거 자료";
     last.addText(title, {
       placeholder: "slideTitle",
       ...BODY_TITLE_BOX,
@@ -571,10 +507,11 @@ export async function buildPptxBytes(
       wrap: false,
     });
 
-    sources.forEach((source, index) => {
-      const y = 1.72 + index * 0.72;
+    rows.forEach((row, index) => {
+      const source = deck.sources[row.sourceIndex];
+      const y = row.y;
       last.addText(
-        String(chunkIndex * PPTX_SOURCES_PER_APPENDIX_SLIDE + index + 1).padStart(2, "0"),
+        String(row.sourceIndex + 1).padStart(2, "0") + (row.continuation ? "·" : ""),
         {
           x: 0.82,
           y,
@@ -587,18 +524,18 @@ export async function buildPptxBytes(
           margin: 0,
         }
       );
-      last.addText(source.doc, {
-        x: 1.54,
-        y: y - 0.05,
-        w: 9.08,
-        h: 0.48,
+      last.addText(row.lines.join("\n"), {
+        x: 1.45,
+        y,
+        w: PPTX_SOURCE_TEXT_WIDTH,
+        h: row.h - 0.1,
         fontFace: FONT,
-        fontSize: 18,
+        fontSize: PPTX_SOURCE_FONT_SIZE,
         color: BODY,
-        bold: index === 0,
+        valign: "top",
         margin: 0,
         wrap: false,
-        fit: "shrink",
+        lineSpacing: PPTX_SOURCE_FONT_SIZE * SLIDE_LINE_HEIGHT,
       });
       last.addText(source.page != null ? `p.${source.page}` : "페이지 정보 없음", {
         x: 10.82,
@@ -611,10 +548,10 @@ export async function buildPptxBytes(
         align: "right",
         margin: 0,
       });
-      if (index < sources.length - 1) {
+      if (index < rows.length - 1) {
         last.addShape("rect", {
           x: 1.54,
-          y: y + 0.52,
+          y: y + row.h - 0.04,
           w: 10.94,
           h: 0.012,
           fill: { color: HAIR },
@@ -633,6 +570,7 @@ export async function buildPptxBytes(
       color: GRAY,
       margin: 0,
     });
+    const sources = [...new Set(rows.map((row) => row.sourceIndex))].map((index) => deck.sources[index]);
     last.addNotes(buildSpeakerNotes("발표에 사용한 근거 자료를 확인합니다.", undefined, sources));
   });
 

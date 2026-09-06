@@ -1,14 +1,18 @@
-import type { GeneratedSlide, SlideDeckMode } from "@/lib/generate";
+import type { GeneratedSlide, GeneratedSlideDeck, SlideDeckMode } from "@/lib/generate";
+import { validSlideDiagram, type SlideDiagram } from "@/lib/slide-diagram";
+import { fitSlideText, type SlideTextMeasurer, type SlideTextBox } from "@/lib/slide-text";
+export { SLIDE_FONT_FAMILY, SLIDE_LINE_HEIGHT } from "@/lib/slide-text";
+export type { SlideTextMeasurer } from "@/lib/slide-text";
 
 /** 웹 미리보기와 PPTX가 함께 쓰는 화면 구성. 좌표는 인치, 글꼴 크기는 pt. */
 export type RenderLayout =
   | "objectives" | "process" | "checklist" | "scenario" | "comparison"
   | "timeline" | "decision-flow" | "visual-explanation" | "summary" | "content";
-export type SlideColor = "ink" | "body" | "accent" | "muted" | "tint" | "white" | "line";
-type Box = { x: number; y: number; w: number; h: number };
+export type SlideColor = "ink" | "body" | "accent" | "muted" | "tint" | "white" | "line" | "navy";
+type Box = SlideTextBox;
 export type SlidePlanText = Box & {
   id: string; text: string; fontSize: number; color: SlideColor;
-  bold?: boolean; align?: "left" | "center" | "right";
+  lines: string[]; bold?: boolean; align?: "left" | "center" | "right";
 };
 export type SlidePlanShape = Box & {
   kind: "rect" | "roundRect" | "ellipse" | "diamond" | "line";
@@ -16,13 +20,20 @@ export type SlidePlanShape = Box & {
 };
 export type SlideLayoutPlan = {
   layout: RenderLayout; texts: SlidePlanText[]; shapes: SlidePlanShape[];
-  image?: Box; dark: boolean;
+  image?: Box; dark: boolean; title: SlidePlanText; issues: SlideLayoutIssue[];
+  variant: string;
 };
-export const SLIDE_TITLE_BOX = { x: 1.54, y: 0.22, w: 11.07, h: 1.02 } as const;
+export type SlideLayoutIssue = {
+  code: "slide_layout_overflow" | "slide_layout_fallback" | "slide_diagram_unmapped";
+  severity: "error" | "warning"; path: string; message: string;
+};
+export type SlideLayoutOptions = { measureText?: SlideTextMeasurer };
+export const SLIDE_TITLE_BOX = { x: 0.8, y: 0.4, w: 11.73, h: 1.12 } as const;
+export const SLIDE_COVER_TITLE_BOX = { x: 0.9, y: 2.25, w: 11.55, h: 2.25 } as const;
 export function slideTitleFontSize(title: string): number {
   const width = Array.from(title.trim()).reduce((total, character) =>
     total + (/\s/.test(character) ? 0.45 : /^[\x00-\xff]$/.test(character) ? 0.62 : 1), 0);
-  return width <= 21 ? 35 : width <= 25 ? 32 : 29;
+  return width <= 21 ? 36 : width <= 25 ? 32 : 28;
 }
 
 /** 분야 색은 도형에 유지하고, 작은 강조 글씨에는 읽을 수 있는 같은 계열 색을 사용한다. */
@@ -87,122 +98,227 @@ export function resolveSlideLayout(slide: GeneratedSlide): RenderLayout {
   return "content";
 }
 
-/** 모든 문장·단계를 화면에 남긴다. 구도를 바꿔도 잔여 단계가 사라지지 않는다. */
-export function buildSlideLayoutPlan(slide: GeneratedSlide, mode: SlideDeckMode = "presenter", occurrence = 0): SlideLayoutPlan {
-  const bullets = slide.bullets.map((value) => value.trim()).filter(Boolean);
-  const steps = (slide.steps ?? []).map((value) => value.trim()).filter(Boolean);
-  let layout = resolveSlideLayout(slide);
-  if (layout === "process" && steps.length < 2) layout = "content";
-  if ((layout === "comparison" || layout === "scenario") && bullets.length < 2) layout = "content";
-  if (layout === "timeline" && steps.length < 3) layout = steps.length >= 2 ? "process" : "content";
-  if (layout === "decision-flow" && (steps.length < 3 || bullets.length < 2)) layout = bullets.length >= 2 ? "scenario" : "content";
-  const plan: SlideLayoutPlan = { layout, texts: [], shapes: [], dark: layout === "summary" };
-  const body = plan.dark ? "white" : "body";
-  const font = (value: number) => Math.max(16, value - (mode === "detailed" ? 2 : 0));
-  const text = (id: string, value: string, box: Box, size = 20, options: Partial<SlidePlanText> = {}) => {
+/** 표지와 부록도 같은 글폭·최소 크기 규칙을 사용한다. */
+export function coverTitlePlan(title: string, options: SlideLayoutOptions = {}) {
+  return fitSlideText(title, SLIDE_COVER_TITLE_BOX, [44, 38, 32, 28], true, options.measureText);
+}
+
+function itemPath(id: string): string {
+  if (id.startsWith("bullet-")) return `bullets.${id.slice(7)}`;
+  if (id.startsWith("step-")) return `steps.${id.slice(5)}`;
+  if (id === "title") return "title";
+  return "visual.caption";
+}
+
+/** 인덱스는 정규화로 다시 매기지 않는다. diagram이 가리키는 원문과 같은 항목을 유지한다. */
+export function buildSlideLayoutPlan(slide: GeneratedSlide, mode: SlideDeckMode = "presenter", occurrence = 0,
+  options: SlideLayoutOptions = {}): SlideLayoutPlan {
+  const bullets = slide.bullets.map((value) => value.trim());
+  const steps = (slide.steps ?? []).map((value) => value.trim());
+  const requested = resolveSlideLayout(slide);
+  const diagram = validSlideDiagram(slide);
+  const measure = options.measureText;
+  const titleFit = fitSlideText(slide.title, SLIDE_TITLE_BOX, [36, 32, 28], true, measure);
+  const title: SlidePlanText = { id: "title", text: slide.title, ...SLIDE_TITLE_BOX,
+    fontSize: titleFit.fontSize, lines: titleFit.lines, bold: true, color: requested === "summary" ? "white" : "ink" };
+  const headerIssues: SlideLayoutIssue[] = titleFit.fits ? [] : [{ code: "slide_layout_overflow", severity: "error", path: "title",
+    message: "슬라이드 제목이 화면을 넘습니다. 결론을 유지해 제목을 짧게 나누어 주세요." }];
+  const makePlan = (layout: RenderLayout, variant: string): SlideLayoutPlan => ({
+    layout, variant, texts: [], shapes: [], title, issues: [...headerIssues], dark: requested === "summary",
+  });
+  const overflow = (plan: SlideLayoutPlan, id: string) => plan.issues.push({
+    code: "slide_layout_overflow", severity: "error", path: itemPath(id),
+    message: id.startsWith("step-") ? "단계 문구가 배정된 공간을 넘습니다. 문구를 나누거나 다른 장으로 옮겨 주세요."
+      : "문장이 배정된 공간을 넘습니다. 내용을 다른 장으로 나누거나 핵심 문장을 다듬어 주세요.",
+  });
+  const add = (plan: SlideLayoutPlan, id: string, value: string, box: Box, sizes: number[],
+    settings: { bold?: boolean; color?: SlideColor; align?: "left" | "center" | "right" } = {}) => {
     if (!value) return;
-    let fontSize = font(size);
-    const widths = value.split("\n").map((line) => Array.from(line).reduce((width, character) =>
-      width + (/\s/.test(character) ? 0.45 : /^[\x00-\xff]$/.test(character) ? 0.62 : 1), 0));
-    // 자동 축소는 PowerPoint마다 결과가 다르므로 같은 크기를 두 출력에 전달한다.
-    // 한글 긴 문장도 16pt 아래로 줄이지 않으며, 레이아웃은 이 최소 크기의 공간을 확보한다.
-    while (fontSize > 16) {
-      const lineWidth = Math.max(1, Math.floor(box.w * 72 / fontSize));
-      const lines = widths.reduce((count, width) => count + Math.max(1, Math.ceil(width / lineWidth)), 0);
-      if (lines * fontSize * 1.12 <= box.h * 72) break;
-      fontSize -= 1;
+    const fit = fitSlideText(value, box, sizes, settings.bold, measure);
+    plan.texts.push({ id, text: value, ...box, fontSize: fit.fontSize, lines: fit.lines,
+      color: plan.dark ? "white" : "body", ...settings });
+    if (!fit.fits) overflow(plan, id);
+  };
+  const shape = (plan: SlideLayoutPlan, kind: SlidePlanShape["kind"], box: Box,
+    style: Pick<SlidePlanShape, "fill" | "stroke" | "arrow"> = {}) => plan.shapes.push({ kind, ...box, ...style });
+  const bullet = (plan: SlideLayoutPlan, index: number, box: Box, sizes = [22, 20, 18], bold = false) =>
+    add(plan, `bullet-${index}`, bullets[index] ?? "", box, sizes, { bold });
+  const step = (plan: SlideLayoutPlan, index: number, box: Box, sizes = [24, 22, 20], align: "left" | "center" = "left", color: SlideColor = "accent") =>
+    add(plan, `step-${index}`, steps[index] ?? "", box, sizes, { bold: true, align, color });
+  const describe = (plan: SlideLayoutPlan, indices: number[], box: Box, sizes = [22, 20, 18]) => {
+    const gap = indices.length > 1 ? 0.12 : 0;
+    const h = (box.h - Math.max(0, indices.length - 1) * gap) / Math.max(1, indices.length);
+    indices.forEach((index, position) => bullet(plan, index, { ...box, y: box.y + position * (h + gap), h }, sizes));
+  };
+  const bodyErrors = (plan: SlideLayoutPlan) => plan.issues.some((issue) => issue.severity === "error" && issue.path !== "title");
+
+  const generic = (): SlideLayoutPlan => {
+    const plan = makePlan(requested === "summary" ? "summary" : "content", "full-width");
+    const entries = [
+      ...bullets.flatMap((text, index) => text ? [{ text, id: `bullet-${index}`, bold: false }] : []),
+      ...steps.flatMap((text, index) => text ? [{ text, id: `step-${index}`, bold: true }] : []),
+    ];
+    const top = 2.12, height = 4.58, gap = 0.1;
+    let size = mode === "detailed" ? 22 : 24;
+    let fits = entries.map((entry) => fitSlideText(entry.text, { x: 1.25, y: 0, w: 11.14, h: 100 }, [size], entry.bold, measure));
+    for (const candidate of [size, 20, 18, 16]) {
+      size = candidate;
+      fits = entries.map((entry) => fitSlideText(entry.text, { x: 1.25, y: 0, w: 11.14, h: 100 }, [size], entry.bold, measure));
+      if (fits.reduce((sum, fit) => sum + fit.requiredHeight, 0) + Math.max(0, entries.length - 1) * gap <= height) break;
     }
-    plan.texts.push({ id, text: value, ...box, fontSize, color: body, ...options });
-  };
-  const shape = (kind: SlidePlanShape["kind"], box: Box, options: Partial<SlidePlanShape> = {}) => plan.shapes.push({ kind, ...box, ...options });
-  const bullet = (index: number, box: Box, size = 20) => text(`bullet-${index}`, bullets[index], box, size);
-  const step = (index: number, box: Box, size = 18) => text(`step-${index}`, steps[index], box, size, { bold: true, color: "accent", align: "center" });
-  const numberedRows = (indices: number[], x: number, y: number, w: number, h: number) => {
-    const row = h / Math.max(1, indices.length);
-    indices.forEach((index, position) => {
-      text(`number-${index}`, String(index + 1).padStart(2, "0"), { x, y: y + row * position, w: 0.45, h: 0.36 }, 18, { color: "accent", bold: true });
-      bullet(index, { x: x + 0.6, y: y + row * position, w: w - 0.6, h: row - 0.1 }, 20);
+    const total = fits.reduce((sum, fit) => sum + fit.requiredHeight, 0) + Math.max(0, entries.length - 1) * gap;
+    let y = top;
+    entries.forEach((entry, index) => {
+      const h = total <= height ? fits[index].requiredHeight + (height - total) / Math.max(1, entries.length) : (height - (entries.length - 1) * gap) / Math.max(1, entries.length);
+      if (entry.bold) step(plan, Number(entry.id.slice(5)), { x: 1.25, y, w: 11.14, h }, [size]);
+      else bullet(plan, Number(entry.id.slice(7)), { x: 1.25, y, w: 11.14, h }, [size]);
+      add(plan, `marker-${index}`, String(index + 1).padStart(2, "0"), { x: 0.8, y: y + 0.02, w: 0.36, h: 0.33 }, [16], { bold: true, color: "accent" });
+      y += h + gap;
     });
+    return plan;
   };
-  const allIndices = bullets.map((_, index) => index);
-  const usedSteps = new Set<number>();
 
-  if (layout === "process" || layout === "timeline") {
-    const width = 11.3 / Math.max(1, steps.length);
-    steps.forEach((_, index) => {
-      const center = 1 + width * (index + 0.5);
-      if (index < steps.length - 1) shape("line", { x: center, y: 2.5, w: width, h: 0 }, { stroke: "accent", arrow: layout === "process" });
-      shape("ellipse", { x: center - 0.25, y: 2.25, w: 0.5, h: 0.5 }, { fill: "accent" });
-      text(`step-number-${index}`, String(index + 1), { x: center - 0.25, y: 2.34, w: 0.5, h: 0.3 }, 16, { color: "white", bold: true, align: "center" });
-      step(index, { x: center - width / 2 + 0.06, y: 2.92, w: width - 0.12, h: 0.68 });
-      usedSteps.add(index);
+  const process = (data: Extract<SlideDiagram, { kind: "process" }>, vertical: boolean) => {
+    const plan = makePlan(requested === "timeline" ? "timeline" : "process", vertical ? "process-rows" : "process-columns");
+    const count = data.nodes.length;
+    if (vertical) {
+      const row = 4.6 / count;
+      data.nodes.forEach((node, index) => {
+        const y = 2.1 + row * index;
+        if (index < count - 1) shape(plan, "line", { x: 1.03, y: y + 0.45, w: 0, h: row - 0.38 }, { stroke: "line", arrow: true });
+        shape(plan, "ellipse", { x: 0.8, y, w: 0.46, h: 0.46 }, { fill: "navy" });
+        add(plan, `number-${index}`, String(index + 1), { x: 0.8, y: y + 0.06, w: 0.46, h: 0.34 }, [16], { bold: true, color: "white", align: "center" });
+        step(plan, node.stepIndex, { x: 1.48, y, w: 2.5, h: row - 0.1 }, [24, 22, 20, 18]);
+        describe(plan, node.bulletIndices, { x: 4.22, y, w: 8.15, h: row - 0.12 }, [22, 20, 18, 16]);
+      });
+    } else {
+      const w = 11.6 / count;
+      data.nodes.forEach((node, index) => {
+        const x = 0.86 + index * w, center = x + w / 2;
+        if (index < count - 1) shape(plan, "line", { x: center + 0.28, y: 2.55, w: w - 0.56, h: 0 }, { stroke: "line", arrow: true });
+        shape(plan, "ellipse", { x: center - 0.28, y: 2.27, w: 0.56, h: 0.56 }, { fill: index === 1 ? "accent" : "navy" });
+        add(plan, `number-${index}`, String(index + 1).padStart(2, "0"), { x: center - 0.28, y: 2.37, w: 0.56, h: 0.36 }, [18], { bold: true, color: "white", align: "center" });
+        step(plan, node.stepIndex, { x: x + 0.12, y: 3.2, w: w - 0.24, h: 0.86 }, [30, 26, 22], "center", "ink");
+        describe(plan, node.bulletIndices, { x: x + 0.13, y: 4.25, w: w - 0.26, h: 2.32 }, [22, 20, 18]);
+      });
+    }
+    return plan;
+  };
+
+  const comparison = (data: Extract<SlideDiagram, { kind: "comparison" }>) => {
+    const plan = makePlan("comparison", "comparison-table");
+    const xs = [0.9, 6.94], w = 5.48;
+    data.columnStepIndices.forEach((index, column) => {
+      step(plan, index, { x: xs[column], y: 2.08, w, h: 0.77 }, [30, 26, 22]);
+      shape(plan, "line", { x: xs[column], y: 2.94, w, h: 0 }, { stroke: "accent" });
     });
-    const rows = Math.ceil(bullets.length / 2);
-    bullets.forEach((_, index) => {
-      const x = 0.94 + (index % 2) * 5.95;
-      const y = 3.92 + Math.floor(index / 2) * (2.5 / Math.max(1, rows));
-      shape("roundRect", { x, y, w: 5.5, h: 2.5 / Math.max(1, rows) - 0.07 }, { fill: "tint" });
-      bullet(index, { x: x + 0.18, y: y + 0.06, w: 5.14, h: 2.5 / Math.max(1, rows) - 0.15 }, 19);
+    const rowHeight = 3.52 / data.rows.length;
+    data.rows.forEach((row, position) => {
+      const y = 3.12 + rowHeight * position;
+      const headingH = row.labelStepIndex === undefined ? 0 : 0.49;
+      if (row.labelStepIndex !== undefined) step(plan, row.labelStepIndex, { x: 0.9, y, w: 11.52, h: 0.42 }, [18, 16]);
+      row.cells.forEach((indices, column) => describe(plan, indices, { x: xs[column], y: y + headingH, w, h: rowHeight - headingH - 0.14 }, [24, 22, 20, 18, 16]));
     });
-  } else if (layout === "decision-flow") {
-    bullet(0, { x: 0.94, y: 2.02, w: 11.4, h: 0.62 }, 19);
-    shape("diamond", { x: 5.44, y: 2.67, w: 2.42, h: 0.94 }, { fill: "tint", stroke: "accent" });
-    step(0, { x: 5.74, y: 2.94, w: 1.82, h: 0.48 }, 16);
-    usedSteps.add(0);
-    shape("line", { x: 6.65, y: 3.61, w: 0, h: 0.13 }, { stroke: "accent" });
-    shape("line", { x: 3.69, y: 3.74, w: 5.95, h: 0 }, { stroke: "accent" });
-    [1, 2].forEach((index) => {
-      const x = index === 1 ? 0.94 : 6.89;
-      shape("line", { x: x + 2.75, y: 3.74, w: 0, h: 0.11 }, { stroke: "accent", arrow: true });
-      shape("roundRect", { x, y: 3.85, w: 5.5, h: 1.66 }, { fill: "tint", stroke: "accent" });
-      step(index, { x: x + 0.2, y: 4, w: 5.1, h: 0.36 });
-      if (bullets[index]) bullet(index, { x: x + 0.2, y: 4.45, w: 5.1, h: 1.01 }, 18);
-      usedSteps.add(index);
-    });
-    // 판단 장의 네 번째 문장은 공통 중단·보고 조건일 수 있으므로 별도 화면 행에 보존한다.
-    bullets.slice(3).forEach((_, index) => bullet(index + 3, { x: 0.94, y: 5.67 + index * 0.63, w: 11.4, h: 0.61 }, 18));
-  } else if (layout === "comparison") {
-    const split = Math.ceil(bullets.length / 2);
-    [allIndices.slice(0, split), allIndices.slice(split)].forEach((indices, index) => {
-      const x = index === 0 ? 0.94 : 6.89;
-      shape("roundRect", { x, y: 2.12, w: 5.5, h: 4.14 }, { fill: "tint", stroke: "line" });
-      if (steps[index]) { step(index, { x: x + 0.2, y: 2.32, w: 5.1, h: 0.56 }, 22); usedSteps.add(index); }
-      numberedRows(indices, x + 0.2, 3.15, 5.1, 3);
-    });
-  } else if (layout === "visual-explanation") {
-    plan.image = { x: 0.94, y: 2.16, w: 5.7, h: 3.5 };
+    return plan;
+  };
+
+  const decision = (data: Extract<SlideDiagram, { kind: "decision" }>, rows: boolean) => {
+    const plan = makePlan("decision-flow", rows ? "decision-rows" : "decision-branches");
+    const box = rows ? { x: 0.9, y: 2.06, w: 11.5, h: 0.79 } : { x: 2.87, y: 2.08, w: 7.59, h: 1.03 };
+    shape(plan, "rect", box, { fill: "navy" });
+    step(plan, data.conditionStepIndex, { x: box.x + 0.18, y: box.y + 0.13, w: box.w - 0.36, h: box.h - 0.18 }, [28, 24, 20], "center", "white");
+    if (rows) {
+      data.branches.forEach((branch, index) => {
+        const y = 3.23 + index * 1.69;
+        step(plan, branch.labelStepIndex, { x: 0.9, y, w: 3.05, h: 1.44 }, [28, 24, 20]);
+        describe(plan, branch.bulletIndices, { x: 4.2, y, w: 8.2, h: 1.44 }, [22, 20, 18, 16]);
+        if (index === 0) shape(plan, "line", { x: 0.9, y: y + 1.58, w: 11.5, h: 0 }, { stroke: "line" });
+      });
+    } else {
+      shape(plan, "line", { x: 6.66, y: 3.11, w: 0, h: 0.36 }, { stroke: "ink" });
+      shape(plan, "line", { x: 3.57, y: 3.47, w: 6.18, h: 0 }, { stroke: "ink" });
+      data.branches.forEach((branch, index) => {
+        const x = index === 0 ? 0.9 : 6.94;
+        shape(plan, "line", { x: index === 0 ? 3.57 : 9.75, y: 3.47, w: 0, h: 0.43 }, { stroke: "accent", arrow: true });
+        step(plan, branch.labelStepIndex, { x, y: 4.08, w: 5.48, h: 0.85 }, [30, 26, 22], "center");
+        describe(plan, branch.bulletIndices, { x, y: 5.15, w: 5.48, h: 1.42 }, [22, 20, 18]);
+      });
+    }
+    return plan;
+  };
+
+  let candidate: SlideLayoutPlan;
+  if (diagram?.kind === "process") {
+    candidate = process(diagram, false);
+    const denseColumns = candidate.texts.some((item) => item.id.startsWith("bullet-") && (item.lines.length > 5 || item.fontSize < 20));
+    if (bodyErrors(candidate) || denseColumns) {
+      const rows = process(diagram, true);
+      if (bodyErrors(candidate) || !bodyErrors(rows)) candidate = rows;
+    }
+  } else if (diagram?.kind === "comparison") candidate = comparison(diagram);
+  else if (diagram?.kind === "decision") {
+    candidate = decision(diagram, false);
+    if (bodyErrors(candidate)) candidate = decision(diagram, true);
+  } else if (["process", "timeline", "comparison", "decision-flow"].includes(requested)) {
+    candidate = generic();
+    candidate.issues.push({ code: "slide_diagram_unmapped", severity: "warning", path: "diagram",
+      message: "단계와 설명의 연결이 확인되지 않아 전체 내용을 본문으로 표시합니다. 도식 연결을 확인하면 절차·비교·판단 구도를 사용할 수 있습니다." });
+    return candidate;
+  } else if (requested === "visual-explanation") {
+    candidate = makePlan(requested, "source-explanation");
     const caption = slide.visual?.caption?.trim() || slide.visual?.sourceRef?.trim() || "원문 출처는 발표자 노트에서 확인";
-    text("image-caption", caption, { x: 0.94, y: 5.78, w: 5.7, h: 0.6 }, 16, { color: "muted" });
-    const rowHeight = 4.27 / Math.max(1, bullets.length);
-    bullets.forEach((_, index) => {
-      const y = 2.08 + index * rowHeight;
-      text(`number-${index}`, String(index + 1).padStart(2, "0"), { x: 7.03, y, w: 0.4, h: 0.36 }, 16, { color: "accent", bold: true });
-      bullet(index, { x: 7.56, y, w: 4.75, h: rowHeight - 0.04 }, bullets.length >= 4 ? 16 : 20);
-    });
-  } else if (layout === "summary") {
-    bullets.forEach((_, index) => {
-      const x = 0.94 + (index % 2) * 5.95;
-      const y = 2.18 + Math.floor(index / 2) * 2.02;
-      text(`number-${index}`, String(index + 1).padStart(2, "0"), { x, y, w: 0.5, h: 0.35 }, 18, { color: "accent", bold: true });
-      bullet(index, { x: x + 0.64, y, w: 4.9, h: 1.75 }, 23);
-    });
-  } else if (layout === "objectives" || layout === "checklist") {
-    numberedRows(allIndices, 0.94, 2.15, 11.4, 4.3);
-  } else if (bullets.length > 1) {
-    const mirrored = layout === "content" && occurrence % 2 === 1;
-    const x = mirrored ? 7.03 : 0.94;
-    shape("rect", { x, y: 2.15, w: 5.25, h: 4.15 }, { fill: "tint" });
-    bullet(0, { x: x + 0.28, y: 2.5, w: 4.69, h: 3.3 }, 26);
-    numberedRows(allIndices.slice(1), mirrored ? 0.94 : 6.92, 2.32, 5.38, 4.0);
+    const visualHeight = steps.length ? 3.64 : 4.5;
+    const captionFit = fitSlideText(caption, { x: 0.9, y: 0, w: 5.58, h: 100 }, [16], false, measure);
+    const captionHeight = Math.max(0.45, captionFit.requiredHeight + 0.05);
+    const imageHeight = Math.max(1.15, visualHeight - captionHeight - 0.14);
+    candidate.image = { x: 0.9, y: 2.13, w: 5.58, h: imageHeight };
+    add(candidate, "image-caption", caption, { x: 0.9, y: 2.13 + imageHeight + 0.14, w: 5.58, h: visualHeight - imageHeight - 0.14 }, [16], { color: "muted" });
+    describe(candidate, bullets.map((_, index) => index), { x: 7.02, y: 2.13, w: 5.37, h: steps.length ? 3.64 : 4.5 }, [22, 20, 18, 16]);
+    const w = 11.48 / Math.max(1, steps.length);
+    steps.forEach((_, index) => step(candidate, index, { x: 0.9 + w * index, y: 5.98, w: w - 0.08, h: 0.71 }, [18, 16], "center"));
+    // 원문 그림을 빼고 본문으로 대체하지 않는다. 남은 넘침은 명시적으로 안내한다.
+    return candidate;
+  } else if (steps.length === 0 && bullets.length <= 3 && (slide.composition === "statement" || requested === "summary")) {
+    candidate = makePlan(requested, "focus");
+    const firstW = bullets.length === 1 ? 11.5 : 7.45;
+    bullet(candidate, 0, { x: 0.9, y: 2.2, w: firstW, h: 4.25 }, mode === "detailed" ? [36, 32, 28] : [42, 36, 30], true);
+    if (bullets.length > 1) {
+      shape(candidate, "line", { x: 8.65, y: 2.17, w: 0, h: 4.3 }, { stroke: "line" });
+      describe(candidate, bullets.map((_, index) => index).slice(1), { x: 9, y: 2.2, w: 3.35, h: 4.28 }, [24, 22, 20]);
+    }
   } else {
-    if (bullets.length) bullet(0, { x: 1.15, y: 2.5, w: 11, h: 3.7 }, 30);
+    candidate = generic();
+    // 평범한 본문에도 기존 의미 역할은 남긴다. 임의의 인과·좌우 관계를 만들지 않는다.
+    candidate.layout = requested === "summary" ? "summary" : requested;
+    candidate.variant = occurrence % 2 ? "full-width-alternate" : "full-width";
+    return candidate;
   }
+  if (!bodyErrors(candidate)) return candidate;
+  const fallback = generic();
+  fallback.issues.push({ code: "slide_layout_fallback", severity: "warning", path: "diagram",
+    message: "문장 분량에 맞춰 전체 너비의 본문으로 배치했습니다. 단계와 근거 문장은 모두 유지됩니다." });
+  return fallback;
+}
 
-  const remaining = steps.map((_, index) => index).filter((index) => !usedSteps.has(index));
-  if (remaining.length) {
-    // 구도를 바꿔도 남은 단계를 노트로 숨기지 않고 본문 하단에 보존한다.
-    const width = 11.4 / remaining.length;
-    remaining.forEach((index, position) => step(index, { x: 0.94 + position * width, y: 6.24, w: width - 0.05, h: 0.62 }, 16));
+export function inspectSlideDeckLayout(deck: GeneratedSlideDeck, options: SlideLayoutOptions = {}): { ok: boolean; issues: SlideLayoutIssue[] } {
+  const issues: SlideLayoutIssue[] = [];
+  if (!coverTitlePlan(deck.title, options).fits) issues.push({ code: "slide_layout_overflow", severity: "error", path: "title", message: "발표 제목이 표지 공간을 넘습니다. 제목을 짧게 다듬어 주세요." });
+  const occurrences = new Map<RenderLayout, number>();
+  deck.slides.forEach((slide, index) => {
+    const layout = resolveSlideLayout(slide);
+    const occurrence = occurrences.get(layout) ?? 0;
+    occurrences.set(layout, occurrence + 1);
+    const plan = buildSlideLayoutPlan(slide, deck.mode ?? "presenter", occurrence, options);
+    issues.push(...plan.issues.map((issue) => ({ ...issue, path: `slides.${index}.${issue.path}` })));
+  });
+  return { ok: !issues.some((issue) => issue.severity === "error"), issues };
+}
+
+export class SlideLayoutError extends Error {
+  readonly issues: SlideLayoutIssue[];
+  constructor(issues: SlideLayoutIssue[]) {
+    super("PPT 화면을 넘는 내용이 있습니다. 표시된 장을 나누거나 문장을 다듬은 뒤 다운로드해 주세요.");
+    this.name = "SlideLayoutError";
+    this.issues = issues;
   }
-  return plan;
 }

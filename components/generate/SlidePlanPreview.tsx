@@ -1,27 +1,34 @@
 "use client";
 
 import type { GeneratedSlide, SlideDeckMode } from "@/lib/generate";
-import { useId } from "react";
-import { buildSlideLayoutPlan, SLIDE_LAYOUT_LABELS, SLIDE_TITLE_BOX, slideTitleFontSize, slideAccentTextColor, type SlideColor } from "@/lib/slide-layout";
+import { useEffect, useId, useState } from "react";
+import { buildSlideLayoutPlan, SLIDE_LAYOUT_LABELS, SLIDE_TITLE_BOX, SLIDE_FONT_FAMILY, SLIDE_LINE_HEIGHT, slideAccentTextColor, type SlideColor, type SlideTextMeasurer } from "@/lib/slide-layout";
+import { prepareSlideTextMeasurer } from "@/lib/slide-text-browser";
 import { cn } from "@/lib/utils";
 
 const PX = 96;
 const WIDTH = 13.33 * PX;
 const HEIGHT = 7.5 * PX;
 
-/** PPTX와 같은 문장·도형·좌표를 사용한다. 파일의 실제 글꼴 환경에 따라 줄바꿈은 달라질 수 있다. */
+/** 웹에서 준비한 같은 글꼴의 글폭으로 PPTX와 같은 문장·도형·줄바꿈을 사용한다. */
 export function SlidePlanPreview({
   slide, index, accent, decorative = false, mode = "presenter", occurrence = 0,
 }: {
   slide: GeneratedSlide; index: number; accent: string; decorative?: boolean;
   mode?: SlideDeckMode; occurrence?: number;
 }) {
-  const plan = buildSlideLayoutPlan(slide, mode, occurrence);
+  const [measureText, setMeasureText] = useState<SlideTextMeasurer>();
+  useEffect(() => {
+    let cancelled = false;
+    void prepareSlideTextMeasurer().then((measure) => { if (!cancelled) setMeasureText(() => measure); }).catch(() => { /* 결과 화면의 글꼴 오류 안내와 다운로드 가드에서 처리한다. */ });
+    return () => { cancelled = true; };
+  }, []);
+  const plan = buildSlideLayoutPlan(slide, mode, occurrence, { measureText });
   const meta = SLIDE_LAYOUT_LABELS[plan.layout];
   const arrowId = `slide-arrow-${useId().replace(/:/g, "")}`;
   const colors: Record<SlideColor, string> = {
     ink: "#1a2b4a", body: "#2b3648", accent, muted: "#6b7280",
-    tint: "#f4f6f9", white: "#ffffff", line: "#e5e7eb",
+    tint: "#f4f6f9", white: "#ffffff", line: "#e5e7eb", navy: "#12233f",
   };
   const imageData = slide.visual?.imageData;
   const hasImage = typeof imageData === "string" && /^data:image\/(?:png|jpe?g|gif);base64,/i.test(imageData);
@@ -33,15 +40,14 @@ export function SlidePlanPreview({
       aria-hidden={decorative || undefined}
       aria-label={decorative ? undefined : `슬라이드 ${index + 1} 미리보기: ${meta.label}`}
       data-slide-layout={plan.layout}
+      data-layout-variant={plan.variant}
+      style={{ fontFamily: SLIDE_FONT_FAMILY }}
     >
       <defs><marker id={arrowId} markerWidth="6" markerHeight="6" refX="5" refY="3" orient="auto"><path d="M0 0 L6 3 L0 6 Z" fill={accent} /></marker></defs>
       <rect width={WIDTH} height={HEIGHT} fill={plan.dark ? "#12233f" : "#ffffff"} />
-      <rect x={0.72 * PX} y={0.47 * PX} width={0.64 * PX} height={0.64 * PX} rx={8} fill={accent} />
-      <text x={1.04 * PX} y={0.89 * PX} fontSize={26} textAnchor="middle" fill="white" fontWeight="bold">{index + 1}</text>
       <foreignObject x={SLIDE_TITLE_BOX.x * PX} y={SLIDE_TITLE_BOX.y * PX} width={SLIDE_TITLE_BOX.w * PX} height={SLIDE_TITLE_BOX.h * PX}>
-        <div style={{ height: "100%", display: "flex", alignItems: "center", fontSize: slideTitleFontSize(slide.title) * PX / 72, lineHeight: 1.14, fontWeight: 700, color: plan.dark ? "white" : colors.ink, overflowWrap: "anywhere" }}>{slide.title || "제목을 입력해 주세요"}</div>
+        <div style={{ fontFamily: SLIDE_FONT_FAMILY, fontSize: plan.title.fontSize * PX / 72, lineHeight: SLIDE_LINE_HEIGHT, fontWeight: 700, color: plan.dark ? "white" : colors.ink, whiteSpace: "pre" }}>{plan.title.lines.join("\n") || "제목을 입력해 주세요"}</div>
       </foreignObject>
-      <line x1={0.72 * PX} y1={1.36 * PX} x2={12.61 * PX} y2={1.36 * PX} stroke={plan.dark ? "#31415e" : colors.line} />
       <text x={0.9 * PX} y={1.89 * PX} fontSize={21} fill={plan.dark ? "#9fb0cb" : slideAccentTextColor(accent)} fontWeight="bold">{meta.eyebrow}</text>
       {plan.shapes.map((shape, position) => {
         const x = shape.x * PX, y = shape.y * PX, w = shape.w * PX, h = shape.h * PX;
@@ -62,7 +68,7 @@ export function SlidePlanPreview({
       ))}
       {plan.texts.map((item) => (
         <foreignObject key={item.id} data-slide-text={item.id} x={item.x * PX} y={item.y * PX} width={item.w * PX} height={item.h * PX}>
-          <div style={{ fontSize: item.fontSize * PX / 72, lineHeight: 1.12, color: item.color === "accent" ? slideAccentTextColor(accent, plan.dark) : colors[item.color], fontWeight: item.bold ? 700 : 400, textAlign: item.align ?? "left", overflowWrap: "anywhere", whiteSpace: "pre-wrap" }}>{item.text}</div>
+          <div style={{ fontFamily: SLIDE_FONT_FAMILY, fontSize: item.fontSize * PX / 72, lineHeight: SLIDE_LINE_HEIGHT, color: item.color === "accent" ? slideAccentTextColor(accent, plan.dark) : colors[item.color], fontWeight: item.bold ? 700 : 400, textAlign: item.align ?? "left", whiteSpace: "pre" }}>{item.lines.join("\n")}</div>
         </foreignObject>
       ))}
       <line x1={0.72 * PX} y1={6.96 * PX} x2={12.61 * PX} y2={6.96 * PX} stroke={plan.dark ? "#31415e" : colors.line} />

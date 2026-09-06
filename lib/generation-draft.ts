@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { slideDiagramSchema } from "@/lib/slide-diagram";
 import {
   AUDIENCES, DURATIONS, SLIDE_COMPOSITION_TYPES, SLIDE_DECK_MODES,
   SLIDE_LAYOUT_TYPES, SLIDE_ROLE_TYPES, SLIDE_VISUAL_FITS, SLIDE_VISUAL_MODES,
@@ -27,9 +28,11 @@ const docSchema = z.object({
 });
 const slideSchema = z.object({
   title: text(200), bullets: z.array(text(500)).max(4), notes: text(30_000),
-  steps: z.array(text(100)).max(5).optional(), sourceRefs: labels.optional(),
+  // 공식 자료는 최대 5개다. 편집 중 초과 입력도 복구할 수 있도록 임시보관 범위는 넓힌다.
+  steps: z.array(text(500)).max(50).optional(), sourceRefs: labels.optional(),
   layout: z.enum(SLIDE_LAYOUT_TYPES).optional(), role: z.enum(SLIDE_ROLE_TYPES).optional(),
   composition: z.enum(SLIDE_COMPOSITION_TYPES).optional(),
+  diagram: slideDiagramSchema.optional(),
   visual: z.object({
     mode: z.enum(SLIDE_VISUAL_MODES), assetId: text(200).optional(),
     documentId: z.number().int().safe().positive().optional(), page: z.number().int().safe().positive().optional(),

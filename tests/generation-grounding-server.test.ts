@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ external: vi.fn(), evidence: vi.fn() }));
+const mocks = vi.hoisted(() => ({ external: vi.fn(), evidence: vi.fn(), review: vi.fn() }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/rag-external", () => ({ ragTableEnabled: mocks.external }));
 vi.mock("@/lib/supabase/generation-rag", () => ({ createGenerationRagReader: () => ({ verifySourceEvidence: mocks.evidence }) }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/lib/generation-grounding-review", () => ({ reviewGenerationGrounding: mocks.review }));
 import { checkStoredMaterialGrounding } from "@/lib/generation-grounding-server";
 import { verifyNativeDocumentSourceProvenance } from "@/lib/source-provenance";
 
@@ -34,6 +35,87 @@ function nativeClient(content: string | undefined, extra: Array<Record<string, u
 beforeEach(() => {
   vi.clearAllMocks(); mocks.external.mockReturnValue(true);
   mocks.evidence.mockResolvedValue({ sources: [source], degraded: false, contextText: "장비 사용압력 30 MPa" });
+  mocks.review.mockResolvedValue({ ok: true, issues: [] });
+});
+
+const decision = {
+  title: "이상 시 중단합니다", bullets: ["진행을 중단하고 보고합니다", "동료 확인 후 진행합니다"],
+  steps: ["이상 여부", "이상 있음", "이상 없음"], notes: "점검 결과에 따라 행동을 선택합니다.",
+  composition: "decision-flow" as const,
+  diagram: { kind: "decision" as const, conditionStepIndex: 0, branches: [
+    { labelStepIndex: 1, bulletIndices: [0] }, { labelStepIndex: 2, bulletIndices: [1] },
+  ] },
+};
+const legacy = { ...decision, diagram: undefined, composition: "list" as const };
+const slideArgs = { ...args, kind: "slides" as const, content: { slides: [legacy, decision, legacy, decision], sources: [source] } };
+
+describe("저장·공유·내보내기의 명시적 도식 근거 검토", () => {
+  it("기술 수치가 없어도 도식이 있는 장만 실제 원문과 빠른 모델로 검토한다", async () => {
+    expect(await checkStoredMaterialGrounding(slideArgs)).toEqual({ ok: true });
+    expect(mocks.evidence).toHaveBeenCalledOnce();
+    expect(mocks.review).toHaveBeenCalledWith(expect.objectContaining({
+      draft: expect.objectContaining({ slides: [decision, decision] }),
+      evidenceText: "장비 사용압력 30 MPa", modelKey: "gemini-flash", timeoutMs: 35_000,
+    }));
+  });
+
+  it("뒤바뀐 분기 관계의 검토 오류는 원래 덱의 장 번호로 복원한다", async () => {
+    const swapped = { ...decision, diagram: { ...decision.diagram, branches: [
+      { labelStepIndex: 1, bulletIndices: [1] }, { labelStepIndex: 2, bulletIndices: [0] },
+    ] } };
+    mocks.review.mockResolvedValue({ ok: false, issues: [{
+      code: "unsupported_evidence_claim", path: "slides.1.notes", partIndex: 1,
+      excerpt: "이상 있음 → 동료 확인 후 진행합니다", message: "이상이 있을 때 진행한다는 연결은 원문과 충돌합니다.",
+    }] });
+
+    const result = await checkStoredMaterialGrounding({ ...slideArgs,
+      content: { ...slideArgs.content, slides: [legacy, decision, legacy, swapped] } });
+
+    expect(result).toMatchObject({ ok: false, status: 422, error: expect.stringContaining("4번 슬라이드"), issues: [{ path: "slides.3.notes" }] });
+    if (!result.ok) expect(result.issues?.[0]).not.toHaveProperty("partIndex");
+  });
+
+  it("도식이 없는 기존 수치 없는 자료는 추가 모델 호출을 하지 않는다", async () => {
+    expect(await checkStoredMaterialGrounding({ ...slideArgs, content: { ...slideArgs.content, slides: [legacy] } })).toEqual({ ok: true });
+    expect(mocks.evidence).not.toHaveBeenCalled();
+    expect(mocks.review).not.toHaveBeenCalled();
+  });
+
+  it("불완전한 연결과 출처 없는 도식은 원문·모델 호출 전 거절한다", async () => {
+    expect(await checkStoredMaterialGrounding({ ...slideArgs, content: { ...slideArgs.content,
+      slides: [{ ...decision, bullets: [decision.bullets[0]] }] } })).toMatchObject({ ok: false, status: 422 });
+    expect(await checkStoredMaterialGrounding({ ...slideArgs, content: { ...slideArgs.content, sources: [] } }))
+      .toMatchObject({ ok: false, status: 422 });
+    expect(mocks.evidence).not.toHaveBeenCalled();
+    expect(mocks.review).not.toHaveBeenCalled();
+  });
+
+  it("도식 검증용 원문 실패는 모델 호출 없이 불완전 상태를 유지한다", async () => {
+    mocks.evidence.mockResolvedValue({ sources: [source], contextText: "부분 원문", degraded: true });
+    expect(await checkStoredMaterialGrounding(slideArgs)).toMatchObject({ ok: false, status: 503 });
+    expect(mocks.review).not.toHaveBeenCalled();
+  });
+
+  it("도식 검토 시간초과·모델 실패·응답 위치 오류는 저장 성공이 되지 않는다", async () => {
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      for (const error of [new DOMException("timed out", "TimeoutError"), new Error("model unavailable")]) {
+        mocks.review.mockRejectedValueOnce(error);
+        expect(await checkStoredMaterialGrounding(slideArgs)).toMatchObject({ ok: false, status: 503 });
+      }
+      mocks.review.mockResolvedValueOnce({ ok: false, issues: [{ code: "unsupported_evidence_claim", path: "slides.99.notes", message: "위치 오류" }] });
+      expect(await checkStoredMaterialGrounding(slideArgs)).toMatchObject({ ok: false, status: 503 });
+    } finally { log.mockRestore(); }
+  });
+
+  it("기본 자료 경로도 기존 사용자 RLS 조회의 원문만 도식 검토에 쓴다", async () => {
+    mocks.external.mockReturnValue(false);
+    const native = nativeClient("이상 시 중단하고 보고합니다. 이상 없으면 동료 확인 후 진행합니다.");
+    expect(await checkStoredMaterialGrounding({ ...slideArgs, supabase: native.client })).toEqual({ ok: true });
+    expect(mocks.evidence).not.toHaveBeenCalled();
+    expect(native.filters).toEqual(["and(document_id.eq.7,page_num.eq.3)"]);
+    expect(mocks.review.mock.calls[0][0].evidenceText).toContain("이상 시 중단하고 보고합니다");
+  });
 });
 
 describe("서버 수치 검증의 실제 근거 경계", () => {

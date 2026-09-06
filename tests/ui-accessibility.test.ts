@@ -28,6 +28,8 @@ import {
 import { MobileMoreSheet } from "@/components/layout/MobileMoreSheet";
 import { TopicFocusPanel } from "@/components/generate/TopicFocusPanel";
 import { Button } from "@/components/ui/button";
+import { SlideDiagramReadable } from "@/components/generate/SlideDiagramEditor";
+import { slideIssueLocation } from "@/components/generate/SlideLayoutIssues";
 import { CardTitle } from "@/components/ui/card";
 import type {
   GeneratedDoc,
@@ -711,6 +713,58 @@ describe("슬라이드 편집 접근성과 상태", () => {
       diagram: 0,
       content: 0,
     });
+  });
+
+  it("글자가 넘치는 장의 구체 위치와 해당 본문 수정 동작을 제공한다", () => {
+    const longText = "긴문장확인".repeat(100);
+    const html = renderSlideDeck({ deck: { ...sampleDeck, slides: [{ ...sampleSlide, composition: "list", visual: { mode: "none" }, bullets: [longText, longText, longText] }] } });
+    expect(html).toContain("슬라이드 글자와 도식 확인");
+    expect(html).toContain("슬라이드 1 · 핵심 내용 1");
+    expect(html).toContain('aria-label="슬라이드 1 · 핵심 내용 1 수정으로 이동"');
+    expect(html).toContain('id="slide-bullet-0-0"');
+    expect(html).toContain("PPTX 다운로드 전에");
+    expect(html).toContain(longText);
+    expect(html).toContain('aria-describedby="slide-layout-check"');
+    expect(slideIssueLocation("slides.2.steps.1")).toEqual({ slideIndex: 2, label: "슬라이드 3 · 단계 2", fieldId: "slide-steps-2" });
+    expect(slideIssueLocation("title").fieldId).toBe("slide-deck-title");
+  });
+
+  it("도식 연결 편집에서 기존 조건·갈림길과 행동을 이름 있는 48px 선택으로 연결한다", () => {
+    const html = renderSlideDeck({ deck: { ...sampleDeck, slides: [{
+      ...sampleSlide, composition: "decision-flow", visual: { mode: "native-diagram" },
+      steps: ["안전 조건 확인", "충족", "미충족"], bullets: ["접근", "중단 보고"],
+    }] } });
+    expect(html).toContain("판단할 조건");
+    expect(html).toContain("1번 갈림길 이름");
+    expect(html).toContain("2번 갈림길 이름");
+    expect(html).toContain("핵심 내용 1을 수행할 갈림길");
+    expect(html).toContain("도식 연결 적용");
+    expect(html).toMatch(/<select[^>]*class="min-h-12/);
+    expect(html).toContain("본문·단계를 수정하면 기존 도식 연결이 해제됩니다.");
+    expect(html).toContain("현재 구성 · 원문 0장 · 편집 가능한 도형 0장 · 내용 중심 1장");
+  });
+
+  it("일반 보기와 보조기술도 실제 판단 조건별 행동 연결을 읽을 수 있다", () => {
+    const html = renderToStaticMarkup(createElement(SlideDiagramReadable, { slide: {
+      ...sampleSlide, composition: "decision-flow", steps: ["안전 조건 확인", "충족", "미충족"], bullets: ["확보 후 접근", "중단 후 보고"],
+      diagram: { kind: "decision", conditionStepIndex: 0, branches: [{ labelStepIndex: 1, bulletIndices: [0] }, { labelStepIndex: 2, bulletIndices: [1] }] },
+    } }));
+    expect(html).toContain('aria-label="판단 조건과 갈림길별 행동"');
+    expect(html).toContain("판단 조건: 안전 조건 확인");
+    expect(html.indexOf("확보 후 접근")).toBeLessThan(html.indexOf("미충족"));
+    expect(html).toContain("중단 후 보고");
+  });
+
+  it("구도를 바꿔도 입력한 초과 단계나 본문을 잘라 버리지 않고 오래된 연결만 해제한다", () => {
+    const steps = ["첫 단계", "둘째 단계", "셋째 단계", "넷째 단계", "다섯째 단계", "여섯째 입력 보존"];
+    const slide: GeneratedSlide = { ...sampleSlide, composition: "process", steps, bullets: ["첫째", "둘째", "셋째", "넷째", "다섯째 보존"], diagram: { kind: "process", nodes: [] } };
+    const patch = normalizedCompositionPatch(slide, "comparison");
+    expect(patch.steps).toEqual(steps);
+    expect(patch.bullets).toEqual(slide.bullets);
+    expect(patch).toHaveProperty("diagram", undefined);
+    const html = renderSlideDeck({ deck: { ...sampleDeck, slides: [slide] } });
+    expect(html).toContain("입력한 6개 단계를 모두 보존했습니다.");
+    expect(html).toContain("여섯째 입력 보존");
   });
 });
 

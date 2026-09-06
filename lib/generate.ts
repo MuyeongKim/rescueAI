@@ -1,6 +1,7 @@
 // 교육자료·훈련계획 생성 — 스키마·옵션·프롬프트의 단일 출처.
 // UI는 클릭·선택형(자유 입력 최소화): 유형 × 분야 × 대상 × 시간 조합으로 생성한다.
 import { z } from "zod";
+import { inspectSlideDiagram, slideDiagramSchema, SLIDE_DIAGRAM_PROMPT, validSlideDiagram } from "@/lib/slide-diagram";
 import { normalizeDocumentText } from "@/lib/document-text";
 import {
   SOP_APPLICATION_MARKER,
@@ -310,8 +311,9 @@ export const generatedSlideSchema = z.object({
     .max(5)
     .optional()
     .describe(
-      "비교는 앞 두 항목이 기준명이고 이후 최대 3개는 추가 확인 단계, 절차·시간흐름·판단흐름은 순서대로 3~5개 단계어"
+      "과정·시간흐름은 단계명, 비교는 기준명과 필요한 행 이름, 판단은 조건과 서로 다른 분기 이름. 연결은 diagram에서 명시"
     ),
+  diagram: slideDiagramSchema.optional().describe("기존 steps·bullets 번호만 연결한 과정·비교·판단 관계. 원문에서 관계가 명확할 때만 제공"),
   notes: z
     .string()
     .describe("교관이 그대로 활용할 수 있는 설명 대본. 근거·시범 포인트·질문을 포함한 4~7문장"),
@@ -746,11 +748,12 @@ export function buildGeneratePrompt(req: GenerateRequest, sopEvidence?: SopEvide
 - 발표자 노트는 4~7문장으로 충분히 작성하세요. 근거가 되는 이유·교관이 보여줄 시범·대원에게 던질 질문·
   실수하기 쉬운 지점·잘못했을 때의 교정 방법 중 해당되는 내용을 포함하여 교관이 그대로 설명할 수 있게 하세요.
 - **비교 장**은 steps의 앞 두 항목에 양쪽 기준명을 넣고, 필요한 추가 확인 단계는 뒤에 최대 3개까지 보존하세요. **절차·시간흐름·판단흐름 장**은 steps에 3~5개 단계 핵심어를
-  순서대로 넣고 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 제한하세요. 나머지 장은 steps를 생략하세요.
+  순서대로 넣고 각 단계어는 ${MAX_SLIDE_STEP_CHARS}자 이내로 제한하세요. 명시적 diagram이 있는 판단 장은 조건과 두 분기 이름으로 구성하며, 비교 장은 기준명과 필요한 행 이름을 사용하세요. 나머지 장은 steps를 생략하세요.
 - 각 장에 교육 역할 role과 화면 구도 composition을 서로 구분하여 지정하세요.
   · role: objectives, concept, procedure, equipment, comparison, timeline, decision, case, safety, evidence, summary
   · composition: statement, list, process, comparison, timeline, decision-flow, checklist, scenario, visual-explanation, summary
   같은 role을 여러 장에서 써도 화면 목적이 다르면 composition을 달리하고, 전체 덱에 최소 4종류의 composition을 사용하세요.
+- ${SLIDE_DIAGRAM_PROMPT}
 - 구체적인 현장 상황에서 대원이 우선 조치를 판단하는 장 → 대원이 직접 수행하고 피드백받는 실습 장 → 관찰 가능한 기준으로 평가하는 장의 순서를 포함하세요.
 - 현장 판단 장에는 상황, 판단 조건, 우선 행동, 그 행동을 선택한 근거를 함께 적으세요. 참고 자료에 없는 상황 설정은 "훈련 가정:"으로 구분하세요.
 - 참여 실습 장은 composition=process로 구성하고 steps에 3~5개의 실제 대원 행동 핵심어를 순서대로 넣으세요. 화면 또는 발표자 노트에는 시작 조건, 교관 시범, 대원 동작, 동작 후 확인, 이상 시 중단·보고, 자주 생기는 실수와 즉시 교정·재수행 방법을 포함하세요.
@@ -854,12 +857,14 @@ export type GenerationQualityIssueCode =
   | "slide_title_too_long"
   | "slide_bullet_too_long"
   | "slide_step_too_long"
+  | "slide_step_count_limit"
   | "duplicate_slide_title"
   | "duplicate_slide_content"
   | "missing_slide_layout"
   | "missing_slide_role"
   | "missing_slide_composition"
   | "invalid_slide_composition"
+  | "invalid_slide_diagram"
   | "missing_slide_visual"
   | "invalid_slide_visual"
   | "generic_slide_title"
@@ -913,12 +918,14 @@ export const GENERATION_QUALITY_LABELS = {
   slide_title_too_long: "일부 슬라이드 제목 길이",
   slide_bullet_too_long: "일부 슬라이드 핵심 문장 길이",
   slide_step_too_long: "일부 슬라이드 단계어 길이",
+  slide_step_count_limit: "한 장의 단계·조건 개수(최대 5개)",
   duplicate_slide_title: "중복 슬라이드 제목",
   duplicate_slide_content: "중복 슬라이드 내용",
   missing_slide_layout: "슬라이드 구성 방식",
   missing_slide_role: "슬라이드 교육 역할",
   missing_slide_composition: "슬라이드 화면 구성",
   invalid_slide_composition: "슬라이드 화면 구성과 내용",
+  invalid_slide_diagram: "도식의 단계·본문 연결",
   missing_slide_visual: "슬라이드 시각자료 계획",
   invalid_slide_visual: "슬라이드 시각자료 근거",
   generic_slide_title: "슬라이드 결론형 제목",
@@ -964,6 +971,7 @@ export const BLOCKING_GENERATION_QUALITY_CODES: ReadonlySet<GenerationQualityIss
     "time_total_mismatch",
     "thin_content",
     "slide_count_limit",
+    "slide_step_count_limit",
     "missing_source_citation",
     "missing_source_refs",
     "invalid_source_ref",
@@ -972,6 +980,7 @@ export const BLOCKING_GENERATION_QUALITY_CODES: ReadonlySet<GenerationQualityIss
     "unsupported_evidence_claim",
     "unmet_training_condition",
     "invalid_slide_visual",
+    "invalid_slide_diagram",
     "mixed_chemical_protection_levels",
     "conflicting_pressure_values",
     "unqualified_decontamination_sequence",
@@ -2002,6 +2011,11 @@ export function inspectGeneratedSlides(
 
   draft.slides.forEach((slide, index) => {
     const titleKey = normalizedKey(slide.title);
+    issues.push(...inspectSlideDiagram(slide).issues.map((issue) => ({
+      code: "invalid_slide_diagram" as const,
+      path: `slides.${index}.${issue.path}`,
+      message: issue.message,
+    })));
     const contentKey = normalizedKey(slide.bullets.join(" "));
     const slideText = `${slide.title} ${slide.bullets.join(" ")} ${slide.notes}`;
 
@@ -2048,6 +2062,10 @@ export function inspectGeneratedSlides(
         path: `slides.${index}.bullets.${bulletIndex}`,
         message: `핵심 문장이 ${chars}자로 깁니다. 의미와 출처는 유지하면서 ${MAX_SLIDE_BULLET_CHARS}자 이내로 줄이세요.`,
       });
+    });
+    if ((slide.steps?.length ?? 0) > 5) issues.push({
+      code: "slide_step_count_limit", path: `slides.${index}.steps`,
+      message: "한 장에는 단계·조건을 최대 5개까지 저장할 수 있습니다. 초과 내용은 다른 장으로 나눠 주세요.",
     });
     slide.steps?.forEach((step, stepIndex) => {
       const chars = compactText(step).length;
@@ -2303,7 +2321,8 @@ export function buildGenerationRepairPrompt(args: {
       ? `
 - 보호등급·압력 수치·제독 순서의 정합성 문제는 값을 임의로 하나로 통일하거나 새 절차를 만들지 마세요. 적용 조건과 근거 출처를 분리해 명시하고, 참고 자료로 구분할 수 없으면 "참고 자료에서 확인되지 않습니다"라고 밝히세요.
 - 현장 상황 판단 → 대원 참여 실습 → 수행평가 순서를 만들고, 같은 role·composition의 과도한 반복은 각 장의 실제 교육 목적에 맞게 분산하세요.
-- 참여 실습 장은 steps에 실제 대원 행동 3~5개를 순서대로 넣고, 노트에는 시작 조건·동작 후 확인·이상 시 중단과 보고·교정 및 재수행을 연결하세요. 평가 장은 이 행동들을 같은 순서로 관찰하게 하세요.`
+- 참여 실습 장은 steps에 실제 대원 행동 3~5개를 순서대로 넣고, 노트에는 시작 조건·동작 후 확인·이상 시 중단과 보고·교정 및 재수행을 연결하세요. 평가 장은 이 행동들을 같은 순서로 관찰하게 하세요.
+- ${SLIDE_DIAGRAM_PROMPT}`
       : `
 - 훈련내용 또는 대원실습에는 '대원 행동절차:'와 최소 3개의 번호 행동을 줄마다 작성하세요. 각 행동은 실제 동작과 확인 지점을 연결하고, 마지막에 이상 시 중단·보고·교정 또는 재수행을 적으세요.
 - 자료에 고정 순서가 없으면 기술 절차를 새로 만들지 말고 교육 진행 순서임을 밝힌 뒤 판단 조건 → 행동 → 확인 → 보고로 구성하세요.`;
@@ -2496,6 +2515,9 @@ ${outlineText}
 ${args.current.bullets.map((b) => `· ${b}`).join("\n")}
 (노트: ${args.current.notes})${instr}
 
+[현재 구도·단계·검증된 도식 연결 — 수정 후 본문 번호에 맞게 다시 연결]
+${JSON.stringify({ composition: args.current.composition, steps: args.current.steps ?? [], diagram: validSlideDiagram(args.current) ?? undefined }, null, 2)}
+
 [작성 규칙]
 - 위 '참고 자료'에 있는 내용만 근거로 작성하세요. 자료에 없는 절차·수치를 지어내지 마세요.
 - ${condition.rule}
@@ -2504,7 +2526,8 @@ ${args.current.bullets.map((b) => `· ${b}`).join("\n")}
 - 제목은 분류명이 아니라 이 장의 결론이 드러나는 서술형으로 ${MAX_SLIDE_TITLE_CHARS}자 이내로 쓰고, 핵심 문장은 구체적으로 2~4개를 각각 ${MAX_SLIDE_BULLET_CHARS}자 이내로 작성하세요.
 - 발표자 노트는 이유·시범 포인트·질문·흔한 실수·교정 방법 중 해당 내용을 포함해 4~7문장으로 작성하세요.
 - ${slideMode.rules}
-- 비교 장이면 steps의 앞 두 항목에 기준명을 넣고, 기존 추가 확인 단계는 삭제하지 말고 뒤에 최대 3개까지 유지하세요(총 2~5개). 절차·시간흐름·판단흐름 장이면 ${MAX_SLIDE_STEP_CHARS}자 이내의 단계어 3~5개를 넣고, 아니면 steps를 생략하세요.
+- 비교 장이면 steps에 기준명과 필요한 행 이름을 넣고, 기존 추가 확인 단계는 삭제하지 마세요(총 2~5개). 과정·시간흐름은 ${MAX_SLIDE_STEP_CHARS}자 이내 단계어 3~5개, 명시적 판단 도식은 조건과 두 분기 이름을 넣으세요. 도식에 모두 연결할 수 없으면 diagram을 생략해 기존 본문을 보존하세요.
+- ${SLIDE_DIAGRAM_PROMPT}
 - 참여 실습 또는 절차 장이면 steps를 실제 대원 행동 3~5개로 구성하고, 화면·노트에 동작 후 확인과 이상 시 중단·보고·재수행을 연결하세요. 근거에 고정 순서가 없으면 기술 절차를 임의로 만들지 마세요.
 - 내용 의미에 맞는 role과 composition을 서로 구분해 지정하고, 호환용 layout도 함께 지정하세요.
 - visual은 source-page/native-diagram/none 중 하나로 지정하세요. 원문 시각자료는 참고 자료 본문에 사진·그림·표·도해 같은 시각 단서가 확인되는 경우에만 visual-explanation 화면에서 사용하고 정확한 sourceRef와 altText를 넣되 assetId·documentId·imageData는 만들지 마세요.

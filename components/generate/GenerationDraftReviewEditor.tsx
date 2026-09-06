@@ -10,7 +10,7 @@ import type { PublicGenerationJob } from "@/lib/generation-job";
 type ReviewText = {
   title: string;
   sections?: { heading: string; content: string }[];
-  slides?: { title: string; bullets: string[]; notes: string }[];
+  slides?: { title: string; bullets: string[]; notes: string; steps?: string[]; hasDiagram?: boolean; clearDiagram?: boolean }[];
 };
 
 /** 미검증 초안은 완성본 편집기와 분리한다. 닫아도 이 작업 화면에 있는 동안 수정 내용은 유지한다. */
@@ -28,6 +28,7 @@ export function GenerationDraftReviewEditor({ job, open, busy, onOpenChange, onS
       ...(job.request.type === "slides"
         ? { slides: (Array.isArray(source.slides) ? source.slides : []).map((item) => ({
             title: String(item.title ?? ""), bullets: Array.isArray(item.bullets) ? item.bullets.map(String) : [], notes: String(item.notes ?? ""),
+            steps: Array.isArray(item.steps) ? item.steps.map(String) : undefined, hasDiagram: Boolean(item.diagram),
           })) }
         : { sections: (Array.isArray(source.sections) ? source.sections : []).map((item) => ({
             heading: String(item.heading ?? ""), content: String(item.content ?? ""),
@@ -70,6 +71,11 @@ export function GenerationDraftReviewEditor({ job, open, busy, onOpenChange, onS
             <h3 className="font-semibold">슬라이드 {index + 1}</h3>
             <label className="block space-y-1">제목<Input value={slide.title} maxLength={120} className="min-h-12 text-base" onChange={(event) => setDraft({ ...draft, slides: draft.slides!.map((item, position) => position === index ? { ...item, title: event.target.value } : item) })} /></label>
             {slide.bullets.map((bullet, bulletIndex) => <label className="block space-y-1" key={bulletIndex}>핵심 문장 {bulletIndex + 1}<Textarea value={bullet} maxLength={500} className="text-base" onChange={(event) => setDraft({ ...draft, slides: draft.slides!.map((item, position) => position === index ? { ...item, bullets: item.bullets.map((text, position) => position === bulletIndex ? event.target.value : text) } : item) })} /></label>)}
+            {slide.steps?.map((step, stepIndex) => <label className="block space-y-1" key={`step-${stepIndex}`}>단계·조건 {stepIndex + 1}<Textarea value={step} maxLength={100} className="text-base" onChange={(event) => setDraft({ ...draft, slides: draft.slides!.map((item, position) => position === index ? { ...item, steps: item.steps!.map((text, position) => position === stepIndex ? event.target.value : text) } : item) })} /></label>)}
+            {slide.hasDiagram && <div className="space-y-2 rounded-lg bg-muted/40 p-3 text-sm">
+              <p>핵심 문장이나 단계·조건을 수정하면 기존 도식 연결을 해제하고 전체 근거를 다시 검토합니다.</p>
+              <Button type="button" variant="outline" className="min-h-12" disabled={slide.clearDiagram} onClick={() => setDraft({ ...draft, slides: draft.slides!.map((item, position) => position === index ? { ...item, clearDiagram: true } : item) })}>{slide.clearDiagram ? "도식 해제 후 재검토 예정" : "도식을 해제하고 본문으로 검토"}</Button>
+            </div>}
             <label className="block space-y-1">교관 설명<Textarea value={slide.notes} maxLength={16_000} className="min-h-40 text-base" onChange={(event) => setDraft({ ...draft, slides: draft.slides!.map((item, position) => position === index ? { ...item, notes: event.target.value } : item) })} /></label>
           </section>)}
         </fieldset>

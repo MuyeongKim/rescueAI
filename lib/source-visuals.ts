@@ -6,6 +6,7 @@ import {
   type GeneratedSlide,
   type GeneratedSlideDeck,
 } from "@/lib/generate";
+import { validSlideDiagram } from "@/lib/slide-diagram";
 
 const PDF_WORKER_PATH = "/pdf.worker.min.mjs";
 const MAX_SOURCE_VISUALS_PER_DECK = 8;
@@ -229,7 +230,7 @@ export function autoAssignDeckSourceVisuals(
     const priority = automaticVisualPriority(slide);
     const isExistingSource =
       slide.visual?.mode === "source-page" || slide.visual?.mode === "source-crop";
-    if (priority === null || isExistingSource || slide.visual?.mode === "native-diagram") return;
+    if (priority === null || isExistingSource || slide.visual?.mode === "native-diagram" || validSlideDiagram(slide)) return;
 
     const slideSources = new Map<string, VerifiedSource>();
     for (const rawRef of slide.sourceRefs ?? []) {
@@ -308,6 +309,7 @@ export function autoAssignDeckSourceVisuals(
       return {
         ...slide,
         composition: "visual-explanation",
+        diagram: undefined,
         visual: {
           mode: "source-page",
           documentId: source.document_id,
@@ -381,6 +383,8 @@ export function fallbackSourceVisualSlide(slide: GeneratedSlide): GeneratedSlide
             ? "summary"
             : "concept";
   const fallbackBase: GeneratedSlide = { ...slide, composition, layout };
+  // 그림 구도의 오래된 연결이 우연히 새 구도와 맞아도 되살리지 않는다.
+  if (!validSlideDiagram(slide) || !validSlideDiagram(fallbackBase)) delete fallbackBase.diagram;
   return {
     ...fallbackBase,
     visual: {

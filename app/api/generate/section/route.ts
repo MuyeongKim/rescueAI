@@ -1,5 +1,6 @@
 import { generateObject } from "ai";
 import { z } from "zod";
+import { slideDiagramSchema } from "@/lib/slide-diagram";
 import { getChatModel } from "@/lib/llm";
 import { requireApiUser } from "@/lib/auth";
 import {
@@ -145,6 +146,7 @@ const slideCurrentSchema = z
     layout: z.enum(SLIDE_LAYOUT_TYPES).optional(),
     role: z.enum(SLIDE_ROLE_TYPES).optional(),
     composition: z.enum(SLIDE_COMPOSITION_TYPES).optional(),
+    diagram: slideDiagramSchema.optional(),
     visual: slideVisualSchema.optional(),
     sourceRefs: z.array(z.string().max(300)).max(4).optional(),
   })
@@ -226,6 +228,7 @@ export async function POST(req: Request) {
         layout: cur.layout,
         role: cur.role,
         composition: cur.composition,
+        diagram: cur.diagram,
         visual: cur.visual,
         sourceRefs: cur.sourceRefs,
       } satisfies GeneratedSlide);
@@ -336,6 +339,9 @@ export async function POST(req: Request) {
               title: currentSlide.title ?? "",
               bullets: currentSlide.bullets ?? [],
               notes: currentSlide.notes ?? "",
+              steps: currentSlide.steps,
+              composition: currentSlide.composition,
+              diagram: currentSlide.diagram,
             },
             topic,
             focus,

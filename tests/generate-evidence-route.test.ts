@@ -225,6 +225,36 @@ describe("POST /api/generate/evidence", () => {
     expect(payload.remainingIssuePaths).toEqual([]);
   });
 
+  it.each([false, true])("근거 보완은 도식 관계를 보존하고 필요한 경우 모델에도 대응 관계를 전달한다 (보완 %s)", async (needsRepair) => {
+    const original = {
+      ...slide("연결 상태에 따라 다음 행동을 결정합니다", needsRepair ? [] : [SOURCE_A]),
+      steps: ["연결 이상 유무", "이상 확인", "정상 확인"],
+      composition: "decision-flow", role: "decision", layout: "process",
+      diagram: { kind: "decision", conditionStepIndex: 0, branches: [
+        { labelStepIndex: 1, bulletIndices: [0] },
+        { labelStepIndex: 2, bulletIndices: [1] },
+      ] },
+    };
+    mocks.generateObject.mockResolvedValue({ object: { repairs: [{ index: 0, sourceRefs: [SOURCE_A] }] } });
+
+    const response = await POST(requestWith(body({ deck: { ...body().deck, slides: [original] } })));
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.deck.slides[0]).toMatchObject({
+      steps: original.steps, bullets: original.bullets, diagram: original.diagram,
+      sourceRefs: [SOURCE_A],
+    });
+    if (needsRepair) {
+      const prompt = mocks.generateObject.mock.calls[0][0].prompt;
+      expect(prompt).toContain("연결 이상 유무");
+      expect(prompt).toContain('"conditionStepIndex": 0');
+      expect(prompt).toContain('"labelStepIndex": 1');
+    } else {
+      expect(mocks.generateObject).not.toHaveBeenCalled();
+    }
+  });
+
   it("정밀 Gemini 외의 명시 모델과 기본 모델 선택은 그대로 전달한다", async () => {
     const missingDeck = {
       ...body().deck,

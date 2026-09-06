@@ -196,11 +196,16 @@ describe("PPTX 실제 파일 생성", () => {
           "이상 표시는 즉시 사용을 멈추고 안전담당자에게 보고합니다",
           "원인이 해소되기 전에는 장비를 다시 사용하지 않습니다",
         ],
+        diagram: { kind: "comparison", columnStepIndices: [0, 1], rows: [{ cells: [[0, 1], [2, 3]] }] },
       }),
       slide("훈련은 사전 준비와 교관 시범부터 대원 실습 및 결과 보고까지 이어집니다", {
         role: "timeline",
         composition: "timeline",
         steps: ["사전 준비", "교관 시범", "대원 실습", "결과 보고"],
+        diagram: { kind: "process", nodes: [
+          { stepIndex: 0, bulletIndices: [0] }, { stepIndex: 1, bulletIndices: [] },
+          { stepIndex: 2, bulletIndices: [] }, { stepIndex: 3, bulletIndices: [] },
+        ] },
       }),
       slide("조건 확인 후 진행 또는 중단을 결정합니다", {
         role: "decision",
@@ -211,6 +216,9 @@ describe("PPTX 실제 파일 생성", () => {
           "정상 상태를 확인한 경우에만 다음 단계로 진행합니다",
           "이상 상태가 보이면 즉시 중단하고 안전담당자에게 보고합니다",
         ],
+        diagram: { kind: "decision", conditionStepIndex: 0, branches: [
+          { labelStepIndex: 1, bulletIndices: [0, 1] }, { labelStepIndex: 2, bulletIndices: [2] },
+        ] },
       }),
       slide("교범 원문 그림에서 확인 위치를 찾습니다", {
         role: "evidence",
@@ -249,6 +257,10 @@ describe("PPTX 실제 파일 생성", () => {
             layout === "process"
               ? ["위험 확인", "장비 점검", "대원 수행", "결과 보고"]
               : undefined,
+          diagram: layout === "process" ? { kind: "process" as const, nodes: [
+            { stepIndex: 0, bulletIndices: [] }, { stepIndex: 1, bulletIndices: [1] },
+            { stepIndex: 2, bulletIndices: [0] }, { stepIndex: 3, bulletIndices: [2] },
+          ] } : undefined,
           notes:
             "교관은 먼저 이 행동이 필요한 이유를 설명합니다. 정상 상태와 이상 상태를 직접 비교해 보여 줍니다. 대원에게 다음 행동을 질문하여 이해 여부를 확인합니다. 실습에서는 한 번에 한 가지 행동만 피드백합니다. 이상이 발견되면 즉시 중단하고 안전담당자에게 보고하도록 강조합니다.",
           layout,
@@ -284,7 +296,7 @@ describe("PPTX 실제 파일 생성", () => {
       const notePaths = Object.keys(zip.files)
         .filter((name) => /^ppt\/notesSlides\/notesSlide\d+\.xml$/.test(name))
         .sort(byNumber);
-      const expectedTotal = generatedPptxSlideCount(deck.slides.length, deck.sources.length);
+      const expectedTotal = generatedPptxSlideCount(deck.slides.length, deck.sources);
       expect(slidePaths).toHaveLength(expectedTotal);
       expect(notePaths).toHaveLength(expectedTotal);
 
@@ -411,7 +423,7 @@ describe("PPTX 실제 파일 생성", () => {
       const longTimelineTitleShape = (
         slideXmls[9].match(/<p:sp>[\s\S]*?<\/p:sp>/g) ?? []
       ).find((shapeXml) => shapeXml.includes('type="title"'));
-      expect(longTimelineTitleShape).toContain('sz="2900"');
+      expect(longTimelineTitleShape).toContain('sz="2800"');
 
       await Promise.all(
         slidePaths.map(async (slidePath, slideIndex) => {

@@ -2,6 +2,7 @@
 // UI(components/generate/*)에서 분리해 두면 저장본 복원 규칙을 테스트로 고정할 수 있다.
 import { documentMetadataLines, prepareGeneratedDocForPlainTextExport, type DocumentMetadata } from "@/lib/document-export";
 import { normalizeDocumentText } from "@/lib/document-text";
+import { validSlideDiagram } from "@/lib/slide-diagram";
 import {
   AUDIENCES,
   DURATIONS,
@@ -192,6 +193,14 @@ function storedSlides(value: unknown): GeneratedSlide[] {
       }
       const steps = storedStrings(slide.steps, 6, 200);
       if (steps.length > 0) safe.steps = steps;
+      // 빈 항목 제거·상한 절단으로 인덱스가 달라지면 기존 관계를 재사용하지 않는다.
+      const sameIndexedText = (raw: unknown, normalized: string[]) =>
+        Array.isArray(raw) && raw.length === normalized.length &&
+        raw.every((text, index) => typeof text === "string" && text.trim() === normalized[index]);
+      if (sameIndexedText(slide.bullets, safe.bullets) && sameIndexedText(slide.steps, steps)) {
+        const diagram = validSlideDiagram({ ...safe, diagram: slide.diagram });
+        if (diagram) safe.diagram = diagram;
+      }
       const sourceRefs = storedStrings(slide.sourceRefs, 20, 300);
       if (sourceRefs.length > 0) safe.sourceRefs = sourceRefs;
       if (visual) safe.visual = visual;
@@ -199,12 +208,12 @@ function storedSlides(value: unknown): GeneratedSlide[] {
     });
 }
 
-/** PPTX 다운로드용 imageData를 제거한 뒤에만 저장 API로 전달한다. */
+/** 런타임 그림만 제거한다. 편집 중인 문장·단계는 잘라내지 않고 서버 품질 검사에 전달한다. */
 export function stripSlideDeckRuntimeData(deck: GeneratedSlideDeck): GeneratedSlideDeck {
   return {
     ...deck,
     mode: resolveSlideDeckMode(deck.mode),
-    slides: storedSlides(deck.slides),
+    slides: deck.slides.map((slide) => ({ ...slide, visual: storedSlideVisual(slide.visual) })),
   };
 }
 

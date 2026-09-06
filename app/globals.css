@@ -14,6 +14,15 @@
   src: url('/fonts/PretendardVariable.woff2') format('woff2-variations');
 }
 
+/* 슬라이드 미리보기·폭 측정은 PPTX와 같은 서체를 사용한다. 사용 시에만 내려받는다. */
+@font-face {
+  font-family: 'Noto Sans KR';
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+  src: url('/fonts/NotoSansKR.woff2') format('woff2');
+}
+
 @theme {
   --font-sans:
     'Pretendard Variable', Pretendard, -apple-system, BlinkMacSystemFont,

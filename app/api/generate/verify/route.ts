@@ -18,6 +18,8 @@ const schema = z.object({
   content: z.record(z.unknown()),
 });
 
+export const maxDuration = 120;
+
 export async function POST(req: Request) {
   const supabase = DEMO ? null : await createClient();
   if (supabase) {

@@ -94,6 +94,19 @@ describe("원문 시각자료 자동 보강", () => {
     expect(assigned.every((slide) => slide.visual?.fit === "contain")).toBe(true);
   });
 
+  it("본문과 명시적으로 연결한 도식은 시각자료 자동 보강으로 덮어쓰지 않는다", () => {
+    const current = candidateSlide(0, {
+      composition: "process", role: "procedure", visual: { mode: "none" },
+      steps: ["장비 외관 확인", "연결 상태 확인"],
+      diagram: { kind: "process", nodes: [
+        { stepIndex: 0, bulletIndices: [0] }, { stepIndex: 1, bulletIndices: [1] },
+      ] },
+    });
+    const input = { ...deck([current]), sources };
+
+    expect(autoAssignDeckSourceVisuals(input).slides[0]).toEqual(current);
+  });
+
   it("기존 원문 선택은 보존하면서 남은 자리만 채우고 기본 다이어그램은 덮어쓰지 않는다", () => {
     const withExplicitSource: GeneratedSlideDeck = {
       ...deck([
@@ -361,5 +374,36 @@ describe("원문 시각자료 요청 계획", () => {
     expect(fallback.visual?.mode).toBe("native-diagram");
     expect(fallback.visual?.documentId).toBeUndefined();
     expect(fallback.visual?.page).toBeUndefined();
+  });
+
+  it("그림 대체는 원래 구도에서 무효했던 관계를 새 구도에 되살리지 않는다", () => {
+    const original = sourceSlide(0, {
+      role: "decision",
+      steps: ["연결 이상 유무", "이상 확인", "정상 확인"],
+      diagram: { kind: "decision", conditionStepIndex: 0, branches: [
+        { labelStepIndex: 1, bulletIndices: [0] },
+        { labelStepIndex: 2, bulletIndices: [1] },
+      ] },
+    });
+    const fallback = fallbackSourceVisualSlide(original);
+
+    expect(fallback.composition).toBe("decision-flow");
+    expect(fallback.diagram).toBeUndefined();
+    expect(fallback.steps).toEqual(original.steps);
+    expect(fallback.bullets).toEqual(original.bullets);
+    expect(original.diagram).toBeDefined();
+  });
+
+  it("내용과 관계가 유효한 같은 구도의 도식은 그림 대체 후에도 보존한다", () => {
+    const original = sourceSlide(0, {
+      role: "procedure", composition: "process",
+      steps: ["장비 확인", "동료 점검", "결과 보고"],
+      diagram: { kind: "process", nodes: [
+        { stepIndex: 0, bulletIndices: [0] }, { stepIndex: 1, bulletIndices: [1] },
+        { stepIndex: 2, bulletIndices: [] },
+      ] },
+    });
+
+    expect(fallbackSourceVisualSlide(original).diagram).toEqual(original.diagram);
   });
 });

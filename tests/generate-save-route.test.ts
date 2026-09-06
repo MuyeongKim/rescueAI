@@ -168,7 +168,7 @@ function makeDeleteClient({
 }
 
 function makePatchClient(stored: Record<string, unknown> | null) {
-  const storedMaybeSingle = vi.fn().mockResolvedValue({ data: stored, error: null });
+  const storedMaybeSingle = vi.fn().mockResolvedValue({ data: stored ? { revision: 3, ...stored } : null, error: null });
   const storedOwnerEq = vi.fn(() => ({ maybeSingle: storedMaybeSingle }));
   const storedEq = vi.fn(() => ({ eq: storedOwnerEq }));
   const storedSelect = vi.fn(() => ({ eq: storedEq }));
@@ -181,7 +181,8 @@ function makePatchClient(stored: Record<string, unknown> | null) {
   const profileSelect = vi.fn(() => ({ eq: profileEq }));
 
   const updateSelect = vi.fn().mockResolvedValue({ data: [{ id: 12 }], error: null });
-  const updateEq = vi.fn(() => ({ select: updateSelect }));
+  const updateBuilder = { eq: vi.fn(), select: updateSelect };
+  const updateEq = updateBuilder.eq.mockImplementation(() => updateBuilder);
   const update = vi.fn(() => ({ eq: updateEq }));
 
   return {
@@ -190,7 +191,7 @@ function makePatchClient(stored: Record<string, unknown> | null) {
         ? { select: profileSelect }
         : { select: storedSelect, update }
     ),
-    spies: { storedSelect, storedEq, storedOwnerEq, storedMaybeSingle, update, profileSelect },
+    spies: { storedSelect, storedEq, storedOwnerEq, storedMaybeSingle, update, updateEq, updateSelect, profileSelect },
   };
 }
 
@@ -1453,7 +1454,7 @@ describe("PATCH /api/generate/save", () => {
 
     expect(response.status).toBe(200);
     expect(client.spies.storedSelect).toHaveBeenCalledWith(
-      "id, kind, category, audience, duration, topic, title, content"
+      "id, revision, kind, category, audience, duration, topic, title, content"
     );
     expect(client.spies.storedEq).toHaveBeenCalledWith("id", 12);
     expect(client.spies.storedOwnerEq).toHaveBeenCalledWith("user_id", "user-1");
@@ -1466,6 +1467,35 @@ describe("PATCH /api/generate/save", () => {
       shared: true,
       author_name: "검증 대원",
     });
+    expect(client.spies.updateEq).toHaveBeenCalledWith("revision", 3);
+    expect(client.spies.updateEq).toHaveBeenCalledWith("user_id", "user-1");
+  });
+
+  it("공유 근거 검토 중 다른 화면이 저장하면 확인하지 않은 새 개정은 공유하지 않는다", async () => {
+    const client = makePatchClient({ id: 12, revision: 7, ...validFoundContractBody("plan") });
+    mocks.createClient.mockResolvedValue(client);
+    mocks.checkStoredMaterialGrounding.mockImplementationOnce(async () => {
+      // 검토한 개정 7 대신 개정 8이 저장되어 최종 UPDATE CAS가 0행이 된다.
+      client.spies.updateSelect.mockResolvedValueOnce({ data: [], error: null });
+      return { ok: true };
+    });
+
+    const response = await PATCH(patchRequestWith({ id: 12, shared: true }));
+
+    expect(response.status).toBe(409);
+    await expect(response.json()).resolves.toMatchObject({ code: "material_revision_conflict" });
+    expect(client.spies.updateEq).toHaveBeenCalledWith("revision", 7);
+  });
+
+  it("검증할 저장본의 개정 번호가 없으면 조건 없는 공유 쓰기로 진행하지 않는다", async () => {
+    const client = makePatchClient({ id: 12, ...validFoundContractBody("plan"), revision: undefined });
+    mocks.createClient.mockResolvedValue(client);
+
+    const response = await PATCH(patchRequestWith({ id: 12, shared: true }));
+
+    expect(response.status).toBe(503);
+    expect(client.spies.update).not.toHaveBeenCalled();
+    expect(mocks.checkStoredMaterialGrounding).not.toHaveBeenCalled();
   });
 
   it("저장 당시 함께 조작된 원문 시각자료 출처는 새 공유 전에 다시 검증해 차단한다", async () => {
@@ -1582,6 +1612,8 @@ describe("PATCH /api/generate/save", () => {
     expect(client.spies.storedSelect).not.toHaveBeenCalled();
     expect(mocks.fetchExternalSopContext).not.toHaveBeenCalled();
     expect(client.spies.update).toHaveBeenCalledWith({ shared: false });
+    expect(client.spies.updateEq).toHaveBeenCalledWith("user_id", "user-1");
+    expect(client.spies.updateEq.mock.calls.some(([key]) => key === "revision")).toBe(false);
   });
 
   it("NotebookLM 저장본 공유는 기존처럼 SOP 검증 대상에서 제외한다", async () => {
