@@ -624,6 +624,8 @@ type HybridCandidateResult = {
 // 5~6명 동시 시범운영에서도 한 질문이 과도한 병렬 요청을 만들지 않게 고정한다.
 export const MAX_KEYWORD_SEARCH_QUERIES = 12;
 export const MAX_CONCURRENT_KEYWORD_SEARCHES = 4;
+// 자료제작의 일반 FTS(최대 4개)와 동시에 실행하므로 별도 SOP 조회는 두 개씩 진행한다.
+export const MAX_CONCURRENT_SOP_SEARCHES = 2;
 
 // 절차형 질문의 공통 단계. 화학보호복뿐 아니라 공기호흡기·로프·펌프·잠수장비에도
 // 같은 분해 규칙을 적용하고, OCR 별칭은 실제 적재 자료에서 확인된 최소 범위만 둔다.
@@ -2371,9 +2373,16 @@ export async function fetchExternalSopContext(
     };
   }
 
-  const results = await Promise.all(
-    plans.slice(0, 4).flatMap((plan) =>
-      plan.queries.slice(0, 2).map(async (keywordQuery) => {
+  const searches = plans.slice(0, 4).flatMap((plan) =>
+    plan.queries.slice(0, 2).map((keywordQuery) => ({ plan, keywordQuery }))
+  );
+  const results = new Array<{ rows: RagRow[]; degraded: boolean; terms: string[] }>(searches.length);
+  let nextIndex = 0;
+  const worker = async () => {
+    while (nextIndex < searches.length) {
+      const index = nextIndex++;
+      const { plan, keywordQuery } = searches[index];
+      results[index] = await (async () => {
         try {
           const request = (supabase.from as CallableFunction)(RAG_TABLE)
             .select("id, content, metadata")
@@ -2408,9 +2417,10 @@ export async function fetchExternalSopContext(
           );
           return { rows: [] as RagRow[], degraded: true, terms: plan.terms };
         }
-      })
-    )
-  );
+      })();
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(MAX_CONCURRENT_SOP_SEARCHES, searches.length) }, () => worker()));
 
   const degraded = results.some((result) => result.degraded);
   const combined = interleaveUnique(

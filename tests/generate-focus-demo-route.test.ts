@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/demo", () => ({ DEMO: true }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/lib/supabase/generation-rag", () => ({ createGenerationRagReader: vi.fn() }));
 vi.mock("@/lib/auth", () => ({ requireApiUser: vi.fn() }));
 vi.mock("@/lib/rate-limit", () => ({
   rateLimit: vi.fn(),
@@ -9,6 +10,7 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 
 import { POST } from "@/app/api/generate/focus/route";
+import { createGenerationRagReader } from "@/lib/supabase/generation-rag";
 
 function requestWith(body: unknown): Request {
   return new Request("http://localhost/api/generate/focus", {
@@ -42,6 +44,7 @@ describe("데모 세부 훈련 방향 요청", () => {
     expect(payload.options).toHaveLength(4);
     expect(payload.options[0].sourceRefs).toEqual(["[데모 연결 교범 p.1]"]);
     expect(payload.recommendedId).toBeUndefined();
+    expect(createGenerationRagReader).not.toHaveBeenCalled();
   });
 
   it("구체적인 주제도 명시적으로 세분화를 요청하면 선택지를 제공한다", async () => {

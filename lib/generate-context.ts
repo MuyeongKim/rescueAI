@@ -5,6 +5,7 @@ import {
   ragTableEnabled,
   fetchExternalRagContext,
   fetchExternalSopContext,
+  type ExternalSopContext,
 } from "@/lib/rag-external";
 import {
   generatedSourceLabel,
@@ -14,6 +15,7 @@ import {
 } from "@/lib/generate";
 import type { SopEvidence } from "@/lib/sop-evidence";
 import { generationRetrievalQuery } from "@/lib/generation-evidence-coverage";
+import { createGenerationRagReader } from "@/lib/supabase/generation-rag";
 import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 
 export type GenerationContext = {
@@ -121,6 +123,7 @@ export async function supplementGenerationContext(
   };
 }
 
+// 인증·레이트리밋을 통과한 생성 API 또는 인증된 worker에서만 호출한다.
 // 분야 자료의 청크를 모아 생성 컨텍스트 + 출처 목록을 만든다.
 // topic 이 있으면 주제 관련 청크를 우선 검색한다(rag_rescue 경로).
 export async function fetchCategoryContext(
@@ -133,11 +136,22 @@ export async function fetchCategoryContext(
   // RAG_TABLE=rag_rescue: 외부에서 임베딩해 둔 기존 테이블 사용
   if (ragTableEnabled()) {
     const query = topic?.trim() || `${category} 분야 핵심 훈련`;
+    const readSop = async (): Promise<ExternalSopContext> => {
+      try {
+        return await (suppliedClient
+          ? fetchExternalSopContext(category, query, 4, suppliedClient)
+          : createGenerationRagReader().fetchSopContext(category, query, 4));
+      } catch (error) {
+        console.error("[generate-context] SOP reader unavailable:", error instanceof Error ? error.message : error);
+        return { contextText: "", sources: [], bindingSources: [], degraded: true,
+          evidence: { status: "degraded", sourceLabels: [] } };
+      }
+    };
     const [general, sop] = await Promise.all([
       fetchExternalRagContext(category, limit, generationRetrievalQuery(query, options.conditions), suppliedClient),
       // SOP 적용 가능성은 DB와 같은 원래 주제·세부 방향으로 제한한다. 현장 조건의
       // '대원·보고' 같은 공통어가 다른 절차를 해당 주제의 SOP로 승격하면 안 된다.
-      fetchExternalSopContext(category, query, 4, suppliedClient),
+      readSop(),
     ]);
 
     const merged = splitGeneratedSourcesForDisplay(

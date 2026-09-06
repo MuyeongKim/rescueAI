@@ -32,6 +32,7 @@ import {
   fetchExternalRagContext,
   fetchExternalSopContext,
   MAX_CONCURRENT_KEYWORD_SEARCHES,
+  MAX_CONCURRENT_SOP_SEARCHES,
   MAX_KEYWORD_SEARCH_QUERIES,
   searchExternalRag,
   sopCategoryScope,
@@ -666,6 +667,28 @@ describe("searchExternalRag Supabase I/O 계약", () => {
         ["산악", COMMON_SOP_CATEGORY],
       ]);
     }
+  });
+
+  it("SOP 검색은 최대 두 개씩 실행하면서 모든 계획 결과와 장애 상태를 보존한다", async () => {
+    let active = 0;
+    let maximum = 0;
+    const supabase = createSupabaseMock(async (record) => {
+      active += 1; maximum = Math.max(maximum, active);
+      await new Promise((resolve) => setTimeout(resolve, 1));
+      active -= 1;
+      return record.index === 0 ? { data: null, error: { message: "statement timeout" } }
+        : { data: [], error: null };
+    });
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await fetchExternalSopContext("화재", "공기호흡기 점검 착용 탈의 훈련", 4, supabase.client as never);
+      expect(MAX_CONCURRENT_SOP_SEARCHES).toBe(2);
+      expect(maximum).toBe(2);
+      expect(supabase.records.length).toBeGreaterThan(2);
+      expect(supabase.records.length).toBeLessThanOrEqual(8);
+      expect(result.degraded).toBe(true);
+      expect(result.evidence.status).toBe("degraded");
+    } finally { log.mockRestore(); }
   });
 
   it("요청 분야 근거를 우선하면서 관련 현장지휘·공통 SOP를 보조 근거로 포함한다", async () => {

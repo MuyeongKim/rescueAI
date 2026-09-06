@@ -1,9 +1,10 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const mocks = vi.hoisted(() => ({ fetchRag: vi.fn(), fetchSop: vi.fn() }));
+const mocks = vi.hoisted(() => ({ fetchRag: vi.fn(), fetchSop: vi.fn(), reader: vi.fn(), readerSop: vi.fn() }));
 
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
+vi.mock("@/lib/supabase/generation-rag", () => ({ createGenerationRagReader: mocks.reader }));
 vi.mock("@/lib/rag-external", () => ({
   ragTableEnabled: () => true,
   fetchExternalRagContext: mocks.fetchRag,
@@ -18,6 +19,7 @@ import {
 } from "@/lib/generate-context";
 
 const utf8Bytes = (value: string) => new TextEncoder().encode(value).byteLength;
+beforeEach(() => { vi.clearAllMocks(); mocks.reader.mockReturnValue({ fetchSopContext: mocks.readerSop }); });
 
 describe("생성 근거 체크포인트 예산", () => {
   it("현장 조건의 대원·보고 같은 공통어가 주제 밖 SOP를 채택하게 하지 않는다", async () => {
@@ -37,6 +39,32 @@ describe("생성 근거 체크포인트 예산", () => {
     expect(mocks.fetchSop).toHaveBeenCalledWith("화재", topic, 4, client);
     expect(result.sopEvidence.sourceLabels).toEqual(["[공기호흡기 SOP p.3]"]);
     expect(result.bindingSources).not.toContainEqual(unrelated);
+    expect(mocks.reader).not.toHaveBeenCalled();
+  });
+
+  it("세션 경로의 SOP만 제한된 reader로 조회하고 일반자료의 세션 RLS와 조건 검색은 유지한다", async () => {
+    const source = { document_id: 17, doc: "공기호흡기 SOP", page: 3 };
+    mocks.fetchRag.mockResolvedValue({ contextText: "[일반자료 p.1]\n현장 조건", sources: [], bindingSources: [], degraded: false });
+    mocks.readerSop.mockResolvedValue({ contextText: "[공기호흡기 SOP p.3]\n착용 원문", sources: [source], bindingSources: [source], degraded: false, evidence: { status: "found", sourceLabels: ["[공기호흡기 SOP p.3]"] } });
+    const result = await fetchCategoryContext("화재", 40, "공기호흡기 착용", undefined, { conditions: "동료 확인" });
+    expect(mocks.fetchRag).toHaveBeenCalledWith("화재", 40, "동료 확인 공기호흡기 착용", undefined);
+    expect(mocks.fetchSop).not.toHaveBeenCalled();
+    expect(mocks.readerSop).toHaveBeenCalledWith("화재", "공기호흡기 착용", 4);
+    expect(result.degraded).toBe(false);
+    expect(result.sopEvidence.status).toBe("found");
+  });
+
+  it.each(["구성", "조회"])("SOP reader %s 실패를 미확인 또는 정상 상태로 숨기지 않는다", async (failure) => {
+    mocks.fetchRag.mockResolvedValue({ contextText: "[일반자료 p.1]\n보존할 일반 원문", sources: [], bindingSources: [], degraded: false });
+    if (failure === "구성") mocks.reader.mockImplementation(() => { throw new Error("reader configuration unavailable"); });
+    else mocks.readerSop.mockRejectedValue(new Error("SOP read failed"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const result = await fetchCategoryContext("화재", 40, "공기호흡기 착용");
+      expect(result.contextText).toContain("보존할 일반 원문");
+      expect(result.degraded).toBe(true);
+      expect(result.sopEvidence).toEqual({ status: "degraded", sourceLabels: [] });
+    } finally { log.mockRestore(); }
   });
 
   it("일반 교범과 SOP를 청크 경계로 제한하면서 SOP 예산을 보존한다", () => {
