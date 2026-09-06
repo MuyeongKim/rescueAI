@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -174,7 +174,7 @@ export function savedMaterialBlockingQualityIssues(
   return blockingGenerationQualityIssues(inspectSavedMaterialQuality(material));
 }
 
-/** 검색장애 상태는 개인 보관·내보내기는 가능하지만 동료 공유 근거로는 사용할 수 없다. */
+/** 검색장애 상태는 개인 보관할 수 있지만 내보내기·공유 전에 현재 근거 확인이 필요하다. */
 export function savedMaterialSopStatus(
   material: SavedMaterial
 ): "found" | "not_found" | "degraded" | undefined {
@@ -195,6 +195,7 @@ export function SavedList({
   const [items, setItems] = useState(initial);
   const [openId, setOpenId] = useState<number | null>(null);
   const [busyId, setBusyId] = useState<number | null>(null);
+  const busyRef = useRef(false);
 
   // 충돌 뒤 router.refresh()로 받은 최신 서버 목록을 로컬 상태에도 반영한다.
   useEffect(() => {
@@ -245,12 +246,37 @@ export function SavedList({
   }
 
   async function handleDownload(it: SavedMaterial) {
+    if (busyRef.current) return;
     if (!ensureQualityReady(it, it.kind === "notebooklm" ? "복사" : "내보내기")) {
       return;
     }
+    busyRef.current = true;
     setBusyId(it.id);
     let visualToastId: string | number | undefined;
     try {
+      if (it.kind !== "notebooklm") {
+        let response: Response;
+        try {
+          response = await fetch("/api/generate/verify", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            signal: AbortSignal.timeout(60_000),
+            body: JSON.stringify({
+              kind: it.kind, title: it.title, category: it.category,
+              topic: it.topic, audience: it.audience ?? undefined,
+              duration: it.duration ?? undefined, content: it.content,
+            }),
+          });
+        } catch {
+          throw new Error("원문 근거 확인에 연결하지 못해 다운로드를 보류했습니다. 잠시 후 다시 시도해 주세요.");
+        }
+        const payload = await response.json().catch(() => null) as { ok?: unknown; error?: unknown; degraded?: unknown } | null;
+        if (!response.ok || payload?.ok !== true || payload.degraded === true) {
+          throw new Error(typeof payload?.error === "string"
+            ? payload.error
+            : "현재 원문 근거를 확인하지 못해 다운로드를 보류했습니다. 잠시 후 다시 시도해 주세요.");
+        }
+      }
       if (it.kind === "slides") {
         const deck = hydrateMaterial(it).deck;
         if (!deck) throw new Error("저장한 슬라이드를 불러오지 못했습니다.");
@@ -303,16 +329,21 @@ export function SavedList({
           toast.info("한글 작성 서버 미연결 — 기본 양식으로 생성했습니다");
         }
       }
-    } catch {
+    } catch (error) {
       if (visualToastId !== undefined) toast.dismiss(visualToastId);
-      toast.error("다운로드에 실패했습니다");
+      toast.error("다운로드에 실패했습니다", {
+        description: error instanceof Error ? error.message : "잠시 후 다시 시도해 주세요.",
+      });
     } finally {
+      busyRef.current = false;
       setBusyId(null);
     }
   }
 
   async function handleDelete(it: SavedMaterial) {
+    if (busyRef.current) return;
     if (!window.confirm("이 자료를 삭제할까요? 되돌릴 수 없습니다.")) return;
+    busyRef.current = true;
     setBusyId(it.id);
     try {
       const params = new URLSearchParams({
@@ -334,22 +365,25 @@ export function SavedList({
     } catch {
       toast.error("삭제 중 오류가 발생했습니다");
     } finally {
+      busyRef.current = false;
       setBusyId(null);
     }
   }
 
   // 내 자료 공유/해제 토글
   async function toggleShare(it: SavedMaterial) {
+    if (busyRef.current) return;
     const next = !it.shared;
     // 오래된 비준수 자료도 공유 해제는 즉시 가능해야 한다.
     if (next && !ensureQualityReady(it, "공유")) return;
     if (next && savedMaterialSopStatus(it) === "degraded") {
       toast.error("SOP 검색 상태를 다시 확인한 뒤 공유해 주세요", {
         description:
-          "검색장애 상태의 자료는 개인 보관·내보내기만 가능합니다. 검색이 정상화되면 다시 생성·저장해 주세요.",
+          "검색장애 상태의 자료는 개인 보관할 수 있습니다. 검색이 정상화되면 다시 생성·저장해 주세요.",
       });
       return;
     }
+    busyRef.current = true;
     setBusyId(it.id);
     try {
       const res = await fetch("/api/generate/save", {
@@ -369,13 +403,16 @@ export function SavedList({
     } catch {
       toast.error("네트워크 오류로 변경하지 못했습니다.");
     } finally {
+      busyRef.current = false;
       setBusyId(null);
     }
   }
 
   // 공유 자료를 내 자료로 복제(편집 가능하게)
   async function cloneToMine(it: SavedMaterial) {
+    if (busyRef.current) return;
     if (!ensureQualityReady(it, "복제")) return;
+    busyRef.current = true;
     setBusyId(it.id);
     try {
       const res = await fetch("/api/generate/save", {
@@ -400,6 +437,7 @@ export function SavedList({
     } catch {
       toast.error("네트워크 오류로 복제하지 못했습니다");
     } finally {
+      busyRef.current = false;
       setBusyId(null);
     }
   }
@@ -524,7 +562,7 @@ export function SavedList({
                   variant="outline"
                   size="sm"
                   className="gap-1.5"
-                  disabled={busy}
+                  disabled={busyId !== null}
                   onClick={() => handleDownload(it)}
                 >
                   {busy ? (
@@ -546,7 +584,7 @@ export function SavedList({
                     variant="outline"
                     size="sm"
                     className="gap-1.5"
-                    disabled={busy}
+                    disabled={busyId !== null}
                     onClick={() => router.push(`/generate?m=${it.id}`)}
                   >
                     <Pencil className="h-4 w-4" /> 편집
@@ -558,7 +596,7 @@ export function SavedList({
                     variant="outline"
                     size="sm"
                     className="gap-1.5"
-                    disabled={busy}
+                    disabled={busyId !== null}
                     onClick={() => cloneToMine(it)}
                   >
                     <CopyPlus className="h-4 w-4" /> 내 자료로 복제
@@ -571,7 +609,7 @@ export function SavedList({
                       variant={it.shared ? "secondary" : "outline"}
                       size="sm"
                       className="gap-1.5"
-                      disabled={busy}
+                      disabled={busyId !== null}
                       onClick={() => toggleShare(it)}
                       title={
                         !it.shared && sopSearchUnavailable
@@ -586,7 +624,7 @@ export function SavedList({
                       variant="ghost"
                       size="sm"
                       className="ml-auto gap-1.5 text-destructive hover:text-destructive"
-                      disabled={busy}
+                      disabled={busyId !== null}
                       onClick={() => handleDelete(it)}
                     >
                       <Trash2 className="h-4 w-4" /> 삭제

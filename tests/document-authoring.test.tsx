@@ -5,11 +5,12 @@ import { DocumentSectionBody } from "@/components/generate/DocumentSectionBody";
 import { DocumentSectionEvidence } from "@/components/generate/DocumentSectionEvidence";
 import { buildDocxBlob } from "@/lib/docx";
 import { normalizeDocumentText } from "@/lib/document-text";
-import { documentSectionBlocks, evaluationTableRows, replaceDocumentSpan, trainingTableRows } from "@/lib/document-structure";
+import { documentSectionBlocks, evaluationTableRows, replaceDocumentSpan, replaceEvaluationCell, trainingTableRows } from "@/lib/document-structure";
 import { docToText, hydrateMaterial } from "@/lib/generate-material";
 import { prepareGeneratedDocForExport } from "@/lib/document-export";
 import { normalizeHwpxCellText } from "@/lib/hwpx-format";
-import type { GeneratedDoc, SavedMaterial } from "@/lib/generate";
+import { buildHwpxFiles } from "@/lib/hwpx";
+import { inspectGeneratedPlan, type GeneratedDoc, type SavedMaterial } from "@/lib/generate";
 
 const training = {
   heading: "훈련내용",
@@ -86,6 +87,69 @@ describe("문서 시간표·평가표 호환", () => {
     expect(edit).toContain("교관시범 배정 시간 분");
     expect(edit).toContain("전체 본문 편집");
     expect(edit).toContain("disabled");
+  });
+
+  it("평가항목명은 한 줄, 긴 설명 세 칸은 높이가 확보된 여러 줄 입력으로 제공한다", () => {
+    const longText = "교관은 대원의 장비 점검 순서를 관찰하고 동료 확인 및 이상 발견 시 보고 여부를 확인한다. ".repeat(4);
+    const row = evaluationTableRows(evaluation)[0];
+    const section = { ...evaluation, content: replaceEvaluationCell(evaluation.content, row, 1, longText) };
+    const html = renderToStaticMarkup(<DocumentSectionBody section={section} index={4} editing disabled={false} onChange={() => {}} />);
+    expect(html.match(/<input\b/g)).toHaveLength(2);
+    expect(html.match(/rows="3"/g)).toHaveLength(6);
+    expect(html.match(/min-h-24 text-base leading-relaxed/g)).toHaveLength(6);
+    expect(html).toContain(longText.trim());
+  });
+
+  it("평가 셀의 Enter·빈 줄·따옴표·구분자를 왕복하고 다른 문단과 평가 행을 보존한다", () => {
+    const values = ["순서를 관찰한다.\n\n동료가 \"확인\"한다.\n", "통과 판단\n누락 없이 수행 / 보고한다.", "피드백 후 재시연\n다시 확인한다."];
+    let content = evaluation.content;
+    for (let index = 1; index <= 3; index++) {
+      content = replaceEvaluationCell(content, evaluationTableRows({ ...evaluation, content })[0], index, values[index - 1]);
+    }
+    const rows = evaluationTableRows({ ...evaluation, content });
+    expect(rows).toHaveLength(2);
+    expect(rows[0].cells).toEqual(["장비 점검", ...values]);
+    expect(rows[1].cells).toEqual(evaluationTableRows(evaluation)[1].cells);
+    expect(content).toContain("평가 전 교관 확인\n");
+    expect(content).toContain("\n수치 기준은 원문에서 확인\n");
+    const editedSecond = replaceEvaluationCell(content, rows[1], 2, "통과 기준 확인\n보고 내용 확인");
+    expect(evaluationTableRows({ ...evaluation, content: editedSecond })[1].cells[2]).toBe("통과 기준 확인\n보고 내용 확인");
+    expect(documentSectionBlocks({ ...evaluation, content }).find((block) => block.type === "table")).toMatchObject({ rows: [["장비 점검", ...values]] });
+    const quality = inspectGeneratedPlan({ title: "확인", sections: [{ ...evaluation, content }] }, "1시간");
+    expect(quality.issues.some((issue) => issue.code === "missing_evaluation")).toBe(false);
+  });
+
+  it("복사·로컬 HWPX는 저장용 셀 인용만 해제하고 실제 따옴표와 줄바꿈을 보존한다", () => {
+    const values = ['첫 줄\n\n"확인"이라고 보고\n', '"통과"', "재시연 / 재평가"];
+    let content = evaluation.content;
+    for (let index = 1; index <= 3; index++) {
+      content = replaceEvaluationCell(content, evaluationTableRows({ ...evaluation, content })[0], index, values[index - 1]);
+    }
+    const doc: GeneratedDoc = { title: "평가표", sections: [{ ...evaluation, content }], sources: [] };
+    const original = structuredClone(doc);
+    const expected = `- 장비 점검 — ${values.join(" / ")}`;
+    expect(docToText(doc)).toContain(expected);
+    const files = buildHwpxFiles(doc);
+    expect(files["Preview/PrvText.txt"]).toContain(expected);
+    expect(files["Contents/section0.xml"]).toContain('&quot;확인&quot;이라고 보고');
+    expect(files["Contents/section0.xml"]).toContain('&quot;통과&quot;');
+    expect(files["Contents/section0.xml"]).not.toContain('&quot;&quot;');
+    expect(files["Preview/PrvText.txt"]).toContain("수치 기준은 원문에서 확인");
+    expect(doc).toEqual(original);
+    expect(prepareGeneratedDocForExport(doc).sections[0].content).toBe(content);
+    expect(evaluationTableRows(prepareGeneratedDocForExport(doc).sections[0])[0].cells).toEqual(["장비 점검", ...values]);
+  });
+
+  it("기존 한 줄 평가 셀의 자연스러운 인용과 이웃 셀 편집 후 따옴표를 보존한다", () => {
+    const section = { heading: "훈련평가", content: '- 보고 — "확인" / "통과" / "재수행"' };
+    const rows = evaluationTableRows(section);
+    expect(rows[0].cells).toEqual(["보고", '"확인"', '"통과"', '"재수행"']);
+    const doc: GeneratedDoc = { title: "기존 평가", sections: [section], sources: [] };
+    expect(docToText(doc)).toContain(section.content);
+    expect(buildHwpxFiles(doc)["Preview/PrvText.txt"]).toContain(section.content);
+    const edited = { ...section, content: replaceEvaluationCell(section.content, rows[0], 2, '"판단"') };
+    expect(evaluationTableRows(edited)[0].cells).toEqual(["보고", '"확인"', '"판단"', '"재수행"']);
+    expect(docToText({ ...doc, sections: [edited] })).toContain('- 보고 — "확인" / "판단" / "재수행"');
   });
 
   it("근거 후보를 사실성 검증으로 표현하지 않고 정확한 원문 페이지에 연결한다", () => {

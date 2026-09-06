@@ -5,6 +5,7 @@ import { requireApiUser } from "@/lib/auth";
 import { DEMO } from "@/lib/demo";
 import { fetchCategoryContext } from "@/lib/generate-context";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
+import { generationRetrievalQuery } from "@/lib/generation-evidence-coverage";
 import {
   AUDIENCES,
   DURATIONS,
@@ -296,7 +297,7 @@ export async function POST(request: Request) {
     const context = await fetchCategoryContext(
       body.category,
       40,
-      buildFocusedTrainingQuery(body.topic, body.focus ?? "")
+      generationRetrievalQuery(buildFocusedTrainingQuery(body.topic, body.focus ?? ""), body.conditions)
     );
     const allowedSourceRefs = normalizedAllowedSourceRefs(context.contextText);
     if (allowedSourceRefs.length === 0) {

@@ -122,6 +122,13 @@ describe("POST /api/generate 입력 경계", () => {
     expect(generationProDraftCallMaxMs("slides")).toBe(180_000);
   });
 
+  it("동기 생성도 Workflow·저장 검증과 같이 현장 조건과 세부 방향으로 검색한다", async () => {
+    const response = await POST(requestWith(validBody({ conditions: "야간 동료 확인", focus: "착용 전 점검" })));
+    expect(response.status).toBe(422);
+    expect(mocks.fetchCategoryContext).toHaveBeenCalledWith("화재", 40, "야간 동료 확인 착용 전 점검 / 상위 주제: 공기호흡기 착용 방법");
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
   it("인증 실패는 잘못된 JSON을 읽기 전에 반환한다", async () => {
     mocks.requireApiUser.mockResolvedValue({
       ok: false,

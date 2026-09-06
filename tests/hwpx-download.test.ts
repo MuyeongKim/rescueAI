@@ -3,6 +3,7 @@ import JSZip from "jszip";
 
 import { downloadHwpx } from "@/lib/hwpx-download";
 import type { GeneratedDoc } from "@/lib/generate";
+import { evaluationTableRows, replaceEvaluationCell } from "@/lib/document-structure";
 
 const doc: GeneratedDoc = {
   title: "훈련계획",
@@ -49,6 +50,17 @@ describe("downloadHwpx", () => {
     expect(await downloadHwpx(doc)).toBe("local");
     const xml = await downloadedXml();
     expect(xml).not.toContain("훈련 정보"); expect(xml).toContain("훈련 목표");
+  });
+
+  it("서버 실패 뒤 로컬 생성에서도 평가 셀을 중복 해제하여 실제 따옴표를 잃지 않는다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 501 })));
+    const downloadedXml = captureDownload();
+    const section = { heading: "훈련평가", content: "- 점검 — 관찰 / 통과 / 피드백" };
+    section.content = replaceEvaluationCell(section.content, evaluationTableRows(section)[0], 1, '"확인"');
+    expect(await downloadHwpx({ ...doc, sections: [section] }, { template: "training_plan" })).toBe("local");
+    const xml = await downloadedXml();
+    expect(xml).toContain('&quot;확인&quot;');
+    expect(xml).not.toContain('&quot;&quot;');
   });
 
   it("필수 항목 누락 응답은 로컬 양식으로 숨기지 않고 사용자에게 전달한다", async () => {

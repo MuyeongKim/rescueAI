@@ -4,7 +4,7 @@ import { DEMO } from "@/lib/demo";
 import { normalizeTrainingPlanHwpx } from "@/lib/hwpx-template";
 import {
   appendDocumentSources,
-  prepareGeneratedDocForExport,
+  prepareGeneratedDocForPlainTextExport,
 } from "@/lib/document-export";
 import { normalizeHwpxCellText } from "@/lib/hwpx-format";
 import { claimedGeneratedSources } from "@/lib/source-provenance";
@@ -82,7 +82,7 @@ export async function POST(req: Request) {
     );
   }
   const sources = claimedSources.sources;
-  const sections = prepareGeneratedDocForExport({
+  const sections = prepareGeneratedDocForPlainTextExport({
     title,
     sections: rawSections.map((section) => ({
       heading: section.heading ?? "",

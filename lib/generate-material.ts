@@ -1,6 +1,6 @@
 // 생성물 ↔ 폼 상태 변환 (순수 함수, 클라이언트/서버 공용).
 // UI(components/generate/*)에서 분리해 두면 저장본 복원 규칙을 테스트로 고정할 수 있다.
-import { documentMetadataLines, prepareGeneratedDocForExport, type DocumentMetadata } from "@/lib/document-export";
+import { documentMetadataLines, prepareGeneratedDocForPlainTextExport, type DocumentMetadata } from "@/lib/document-export";
 import { normalizeDocumentText } from "@/lib/document-text";
 import {
   AUDIENCES,
@@ -313,7 +313,7 @@ export function hydrateMaterial(m?: SavedMaterial | null): HydratedMaterial {
 
 /** 생성 문서를 클립보드 복사용 평문으로 편다(제목 + 섹션 + 근거 목록). */
 export function docToText(input: GeneratedDoc, metadata?: DocumentMetadata): string {
-  const doc = prepareGeneratedDocForExport(input);
+  const doc = prepareGeneratedDocForPlainTextExport(input);
   const body = doc.sections.map((s) => `${s.heading}\n${s.content}`).join("\n\n");
   const sources = doc.sources.length
     ? `\n\n[근거 자료]\n${doc.sources

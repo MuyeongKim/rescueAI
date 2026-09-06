@@ -98,6 +98,13 @@ describe("POST /api/generate/section 입력 경계", () => {
     vi.restoreAllMocks();
   });
 
+  it.each([validSectionBody, validSlideBody])("문서·슬라이드 부분 재생성에서도 원래 현장 조건을 검색에 포함한다", async (makeBody) => {
+    const response = await POST(requestWith(makeBody({ conditions: "야간 동료 확인", focus: "착용 전 점검" })));
+    expect(response.status).toBe(422);
+    expect(mocks.fetchCategoryContext).toHaveBeenCalledWith("화재", 40, "야간 동료 확인 착용 전 점검 / 상위 주제: 공기호흡기 착용 방법");
+    expect(mocks.generateObject).not.toHaveBeenCalled();
+  });
+
   it("정밀 모델 시간초과 시 결합된 호출 신호로 빠른 모델을 한 번 재시도한다", async () => {
     vi.spyOn(Date, "now").mockReturnValue(0);
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout");

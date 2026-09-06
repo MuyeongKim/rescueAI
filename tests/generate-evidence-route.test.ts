@@ -149,6 +149,7 @@ describe("POST /api/generate/evidence", () => {
     expect(mocks.fetchCategoryContext).toHaveBeenCalledOnce();
     expect(mocks.fetchCategoryContext.mock.calls[0][2]).toContain("경사면 구조 훈련");
     expect(mocks.fetchCategoryContext.mock.calls[0][2]).toContain("들것 보조자 배치");
+    expect(mocks.fetchCategoryContext.mock.calls[0][2]).toContain("훈련장 경사면에서 팀 단위 실습");
     expect(mocks.generateObject).not.toHaveBeenCalled();
     expect(payload.deck.sources).toEqual(trustedSources);
     expect(payload.deck.sourceLabels).toEqual([SOURCE_A, SOURCE_B, SOP_SOURCE]);

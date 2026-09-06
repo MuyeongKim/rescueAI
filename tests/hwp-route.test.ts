@@ -19,6 +19,7 @@ vi.mock("@/lib/hwpx-template", () => ({
 }));
 
 import { POST } from "@/app/api/hwp/route";
+import { evaluationTableRows, replaceEvaluationCell } from "@/lib/document-structure";
 
 function requestWith(body: unknown): Request {
   return new Request("http://localhost/api/hwp", {
@@ -83,6 +84,25 @@ describe("POST /api/hwp 출처 배치", () => {
       "체크리스트로 평가한다.\n\n근거 자료 및 출처\n- 로프구조 — 경사면 구조 p.44"
     );
     expect(JSON.stringify(payload.values).match(/근거 자료 및 출처/g)).toHaveLength(1);
+  });
+
+  it.each(["training_plan", undefined])("%s 서버 양식도 평가 셀의 실제 따옴표·줄바꿈을 한 번만 복원한다", async (template) => {
+    const section = { heading: "훈련평가", content: "- 장비 점검 — 관찰 / 통과 / 재시연" };
+    section.content = replaceEvaluationCell(section.content, evaluationTableRows(section)[0], 1, '첫 줄\n"확인"이라고 보고');
+    section.content = replaceEvaluationCell(section.content, evaluationTableRows(section)[0], 2, '"통과"');
+    const original = section.content;
+    const response = await POST(requestWith({
+      title: "평가표", template,
+      sections: [
+        { heading: "훈련목표", content: "수행한다." }, { heading: "훈련내용", content: "반복한다." },
+        { heading: "필요장비", content: "장비" }, { heading: "안전관리", content: "중단하고 보고한다." }, section,
+      ],
+      sources: [{ document_id: 7, doc: "교육자료", page: 3 }],
+    }));
+    expect(response.status).toBe(200);
+    const payload = JSON.parse(String(mocks.fetch.mock.calls[0][1].body));
+    expect(template ? payload.values.evaluation : payload.body).toContain('- 장비 점검 — 첫 줄\n"확인"이라고 보고 / "통과" / 재시연');
+    expect(section.content).toBe(original);
   });
 
   it("한 줄로 붙은 단계·목록 표지를 표준 양식에 실제 줄바꿈으로 전달한다", async () => {

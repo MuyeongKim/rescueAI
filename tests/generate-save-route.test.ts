@@ -1021,6 +1021,21 @@ describe("POST /api/generate/save", () => {
     expect(client.spies.update).not.toHaveBeenCalled();
   });
 
+  it.each(["plan", "lesson", "slides"] as const)("%s 생성 때의 현장 조건·세부 방향을 유지하여 정상 SOP 집합을 충돌로 오인하지 않는다", async (kind) => {
+    const client = makeClient();
+    mocks.createClient.mockResolvedValue(client);
+    const original = validFoundContractBody(kind);
+    const body = { ...original, content: { ...original.content, conditions: "야간 중단 및 보고", focus: "장비 점검" } };
+    const expectedQuery = "야간 중단 및 보고 장비 점검 / 상위 주제: 산악사고 대비 훈련";
+    mocks.fetchExternalSopContext.mockImplementation(async (_category, query) => sopLookupResult(
+      query === expectedQuery ? original.content.sopEvidence : { status: "not_found", sourceLabels: [] }
+    ));
+    const response = await POST(requestWith(body));
+    expect(response.status).toBe(200);
+    expect(mocks.fetchExternalSopContext).toHaveBeenCalledWith("산악", expectedQuery, 4);
+    expect(client.spies.insert.mock.calls[0][0].content.sopEvidence).toEqual(original.content.sopEvidence);
+  });
+
   it("상태가 같아도 실제 SOP 문서나 페이지가 다르면 409로 거절한다", async () => {
     const client = makeClient();
     mocks.createClient.mockResolvedValue(client);

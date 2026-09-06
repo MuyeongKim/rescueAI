@@ -1,5 +1,6 @@
 import type { GeneratedDoc, GeneratedDocSource } from "@/lib/generate";
 import { normalizeDocumentText } from "@/lib/document-text";
+import { documentSectionPlainText } from "@/lib/document-structure";
 
 export type DocumentMetadata = {
   topic?: string;
@@ -116,5 +117,14 @@ export function prepareGeneratedDocForExport(doc: GeneratedDoc): GeneratedDoc {
     })),
     sources: [...doc.sources],
     sourceLabels: doc.sourceLabels ? [...doc.sourceLabels] : undefined,
+  };
+}
+
+/** 텍스트 복사와 HWPX 작성 직전 한 번만 셀 인용을 해제한다. DOCX·화면 표에는 사용하지 않는다. */
+export function prepareGeneratedDocForPlainTextExport(doc: GeneratedDoc): GeneratedDoc {
+  const prepared = prepareGeneratedDocForExport(doc);
+  return {
+    ...prepared,
+    sections: prepared.sections.map((section) => ({ ...section, content: documentSectionPlainText(section) })),
   };
 }

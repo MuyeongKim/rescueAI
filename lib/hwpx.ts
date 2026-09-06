@@ -7,7 +7,7 @@ import {
   DOCUMENT_SOURCE_SECTION_TITLE,
   appendDocumentSources,
   documentSourceLines,
-  prepareGeneratedDocForExport,
+  prepareGeneratedDocForPlainTextExport,
 } from "@/lib/document-export";
 import { hwpxParagraphs } from "@/lib/hwpx-format";
 
@@ -256,7 +256,7 @@ function buildPreviewText(doc: GeneratedDoc): string {
 
 // HWPX 패키지 파일 맵 (테스트에서도 재사용)
 export function buildHwpxFiles(doc: GeneratedDoc): Record<string, string> {
-  const exportDoc = prepareGeneratedDocForExport(doc);
+  const exportDoc = prepareGeneratedDocForPlainTextExport(doc);
   return {
     mimetype: "application/hwp+zip",
     "version.xml": VERSION_XML,

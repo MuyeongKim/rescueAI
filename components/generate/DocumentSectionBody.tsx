@@ -1,7 +1,7 @@
 "use client";
 
 import type { GeneratedSection } from "@/lib/generate";
-import { documentSectionBlocks, evaluationTableRows, replaceDocumentSpan, trainingTableRows } from "@/lib/document-structure";
+import { documentSectionBlocks, evaluationTableRows, replaceDocumentSpan, replaceEvaluationCell, trainingTableRows } from "@/lib/document-structure";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 
@@ -46,7 +46,9 @@ export function DocumentSectionBody({ section, index, editing, disabled, onChang
       {evaluationRows.map((row, rowIndex) => <fieldset key={rowIndex} disabled={disabled} className="grid gap-3 rounded-lg border bg-muted/10 p-3 sm:grid-cols-2">
         <legend className="px-1 text-base font-semibold">평가항목 {rowIndex + 1}</legend>
         {["평가항목", "관찰 가능한 수행 기준", "통과 판단", "미달 시 피드백·재수행"].map((label, cellIndex) => <label key={label} className="space-y-1 text-base"><span>{label}</span>
-          <Input value={row.cells[cellIndex]} className="min-h-12 text-base" disabled={disabled} onChange={(event) => onChange(replaceDocumentSpan(section.content, row.spans[cellIndex], event.target.value))} /></label>)}
+          {cellIndex === 0
+            ? <Input value={row.cells[cellIndex]} className="min-h-12 text-base" disabled={disabled} onChange={(event) => onChange(replaceEvaluationCell(section.content, row, cellIndex, event.target.value))} />
+            : <Textarea value={row.cells[cellIndex]} rows={3} className="min-h-24 text-base leading-relaxed" disabled={disabled} onChange={(event) => onChange(replaceEvaluationCell(section.content, row, cellIndex, event.target.value))} />}</label>)}
       </fieldset>)}
     </div>}
     {structured ? <details className="rounded-lg border"><summary className="min-h-12 cursor-pointer px-3 py-3 text-base font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">전체 본문 편집</summary><div className="border-t p-3">{rawEditor}</div></details> : rawEditor}
