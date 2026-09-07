@@ -78,4 +78,57 @@ describe("buildRetrievalQuestion", () => {
     expect(result).toContain("화학보호복");
     expect(result).toMatch(/후속 질문: 중단 기준은\?$/);
   });
+
+  it("불만·기능 문의를 거쳐도 원래 학습 주제로 이어서 검색한다", () => {
+    const history = [
+      user("너라면 구조기술평가 중에 어느것 부터 준비할래?"),
+      assistant("관련 매뉴얼에서 확인되지 않습니다. 구조 매뉴얼 담당자에게 문의하세요."),
+      user("너는 생각이 없니?"), assistant("거절"),
+      user("너는 딱 RAG된 자료에서만 답변을 하는구나?"), assistant("거절"),
+      user("파생되는 질문에 대한 답변을 못하는군"), assistant("거절"),
+      user("준비물은?"),
+    ];
+    expect(buildRetrievalQuestion(history)).toBe("너라면 구조기술평가 중에 어느것 부터 준비할래?\n후속 질문: 준비물은?");
+  });
+
+  it.each([
+    "그중 가장 중요한 것은 어떤 거야?",
+    "너라면 뭘 먼저 준비하겠어?",
+    "방금 설명한 내용을 내가 매일 어떻게 연습하면 좋을까?",
+    "왜 그렇게 생각해?",
+  ])("동사 활용이 다른 자연스러운 후속 질문도 앞 주제를 복원한다: %s", (question) => {
+    expect(buildRetrievalQuestion([user("로프 기술의 기본을 알려줘"), assistant("답변"), user(question)]))
+      .toBe(`로프 기술의 기본을 알려줘\n후속 질문: ${question}`);
+  });
+
+  it.each([
+    "그럼 소방드론에서 가장 알아야 할 부분이 뭐야?",
+    "처음 보는 미지장비X의 작동 방식은?",
+    "이번에는 다른 주제로, 그걸 수중에서 사용해도 될까?",
+  ])("명시적 새 대상·주제 전환과 불명확한 새 명사는 이전 대상에 묶지 않는다: %s", (question) => {
+    expect(buildRetrievalQuestion([user("화학보호복 착용 절차"), user(question)])).toBe(question);
+  });
+
+  it("감사와 불만 뒤에도 바뀐 등급을 잃지 않는다", () => {
+    expect(buildRetrievalQuestion([
+      user("인명구조사 2급 실기평가 기준은?"), user("그럼 1급은?"), user("고마워요"),
+      user("답변을 못하는군"), user("감점 항목은?"),
+    ])).toBe("인명구조사 1급 실기평가 기준은?\n후속 질문: 감점 항목은?");
+  });
+
+  it("현재 메타 질문에는 학습 검색어를 억지로 덧붙이지 않는다", () => {
+    const question = "너는 딱 RAG된 자료에서만 답변을 하는구나?";
+    expect(buildRetrievalQuestion([user("로프 기술"), user(question)])).toBe(question);
+  });
+
+  it("부분 평가에 대한 조언은 이전 자격과 등급을 잇되 독립 기술 질문은 새 주제로 검색한다", () => {
+    const current = "너라면 구조기술평가 중에 어느것 부터 준비할래?";
+    const history = [user("인명구조사 2급을 준비하려고 해"), user(current)];
+    expect(buildRetrievalQuestion(history)).toBe(`인명구조사 2급 구조기술평가\n후속 질문: ${current}`);
+    expect(buildRetrievalQuestion([...history, user("너는 생각이 없니?"), user("준비물은?")]))
+      .toBe("인명구조사 2급 구조기술평가\n후속 질문: 준비물은?");
+    const newTopic = "로프기술중에 가장 알아야할 부분이 어떤게 있어?";
+    expect(buildRetrievalQuestion([...history, user(newTopic)])).toBe(newTopic);
+    expect(buildRetrievalQuestion([user("화학보호복 점검"), user(current)])).toBe(current);
+  });
 });

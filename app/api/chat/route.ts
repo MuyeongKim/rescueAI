@@ -2,6 +2,7 @@ import { getChatModel } from "@/lib/llm";
 import {
   createDataStreamResponse,
   streamText,
+  generateText,
   convertToCoreMessages,
   formatDataStreamPart,
   type Message,
@@ -10,7 +11,10 @@ import { createClient } from "@/lib/supabase/server";
 import { requireApiUser } from "@/lib/auth";
 import { prepareChatAnswerText, uniqueChatSources } from "@/lib/chat-answer";
 import { trimChatHistory } from "@/lib/chat-history";
-import { buildRetrievalQuestion } from "@/lib/chat-retrieval-query";
+import { buildDirectChatReply, classifyChatTurn } from "@/lib/chat-turn";
+import { expandChatQuery } from "@/lib/chat-query-expansion";
+import { buildChatEvidenceFallback } from "@/lib/chat-evidence-fallback";
+import { reviewChatLearningAnswer } from "@/lib/chat-learning-review";
 import { answerPlanGuidance, buildChatAnswerPlan } from "@/lib/chat-answer-plan";
 import { searchContext, buildSystemPrompt, NOT_FOUND_MESSAGE } from "@/lib/rag";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
@@ -39,6 +43,7 @@ export async function POST(req: Request) {
     });
   }
 
+  const requestDeadline = Date.now() + 55_000;
   const supabase = await createClient();
   const auth = await requireApiUser(supabase);
   if (!auth.ok) return auth.response;
@@ -85,7 +90,7 @@ export async function POST(req: Request) {
   if (!question) return new Response("질문이 비어 있습니다.", { status: 400 });
   // 사용자는 분야나 검색어를 다시 지정하지 않아도 된다. "준비물은?" 같은 후속 질문은
   // 최근 독립 주제를 서버가 복원해 검색하고, LLM에는 원래 대화 흐름을 그대로 전달한다.
-  const retrievalQuestion = buildRetrievalQuestion(messages);
+  const turnKind = classifyChatTurn(question);
 
   // 재시도는 같은 질문 행을 재사용한다. 키 조회도 세션 클라이언트/RLS를 통과하며,
   // 다른 사용자의 키를 추측한 충돌은 질문 내용이나 대화 ID를 반환하지 않는다.
@@ -159,25 +164,13 @@ export async function POST(req: Request) {
       let independentEvidenceTopics: string[] = [];
       let retrievalCoverage: import("@/lib/rag").RetrievalCoverage | undefined;
       let ragFailed = false;
-      try {
-        const r = await searchContext(retrievalQuestion, category);
-        contextText = r.contextText;
-        sources = r.sources;
-        independentEvidenceTopics = r.independentEvidenceTopics ?? [];
-        retrievalCoverage = r.retrievalCoverage;
-        ragFailed = r.degraded ?? false;
-      } catch (e) {
-        ragFailed = true;
-        console.error("[chat] RAG 인프라 장애 — 확인 불가 응답 반환:", e);
-      }
-
-      const persistAnswer = async (text: string) => {
+      const persistAnswer = async (text: string, hideSources = false) => {
         const latencyMs = Date.now() - startedAt;
         const answerText = prepareChatAnswerText(text);
         if (!answerText.trim()) return;
         // 전체가 표준 거절문인 답변에만 출처를 숨긴다. 일부 조건의 근거를 설명한 뒤
         // 미확인 범위를 밝힌 답변은 표준 문구가 포함되어도 참고 자료를 보존한다.
-        const effectiveSources = answerText.replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE
+        const effectiveSources = hideSources || answerText.replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE
           ? []
           : uniqueChatSources(sources);
         const { data: saved, error } = await supabase
@@ -204,27 +197,95 @@ export async function POST(req: Request) {
         });
       };
 
-      if (!contextText.trim()) {
-        // 근거 없이 모델을 호출해 확인 불가 문구 뒤에 추측을 붙이지 않게 한다.
-        // 검색 장애 여부는 별도 표시해 정상적인 무근거 검색과 구분한다.
-        dataStream.write(formatDataStreamPart("text", NOT_FOUND_MESSAGE));
-        await persistAnswer(NOT_FOUND_MESSAGE);
+      const directReply = buildDirectChatReply(turnKind, messages);
+      if (directReply) {
+        dataStream.write(formatDataStreamPart("text", directReply));
+        await persistAnswer(directReply, true);
+        console.info("[chat] outcome", { requestId: clientRequestId, kind: turnKind, state: "direct" });
         return;
       }
 
+      const queryPlan = await expandChatQuery(messages);
+      const retrievalQuestion = queryPlan.retrievalQuestion;
+      let matched = 0;
+      try {
+        const r = await searchContext(retrievalQuestion, category, undefined, { expansion: queryPlan.expansion });
+        contextText = r.contextText;
+        sources = r.sources;
+        matched = r.matched;
+        independentEvidenceTopics = r.independentEvidenceTopics ?? [];
+        retrievalCoverage = r.retrievalCoverage;
+        ragFailed = r.degraded ?? false;
+      } catch {
+        ragFailed = true;
+        console.error("[chat] RAG 검색 실패", { requestId: clientRequestId });
+      }
+      console.info("[chat] retrieval", {
+        requestId: clientRequestId, kind: turnKind, queryMethod: queryPlan.method,
+        matched, contextChars: contextText.length, degraded: ragFailed,
+      });
+
+      if (!contextText.trim()) {
+        const state = ragFailed ? "degraded" : "empty";
+        const reply = buildChatEvidenceFallback(state, category);
+        dataStream.write(formatDataStreamPart("text", reply));
+        await persistAnswer(reply, true);
+        console.info("[chat] outcome", { requestId: clientRequestId, kind: turnKind, state });
+        return;
+      }
+
+      const answerPlan = buildChatAnswerPlan(retrievalQuestion, { learningAdvice: turnKind === "learning" });
       const system = buildSystemPrompt(
         contextText,
-        answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion)),
+        answerPlanGuidance(answerPlan),
         independentEvidenceTopics,
-        retrievalCoverage
+        retrievalCoverage,
+        { learningAdvice: turnKind === "learning", retrievalQuestion }
       );
+
+      if (answerPlan.mode === "learning") {
+        // 학습 조언에 기술 사실이 섞일 수 있어 원문 대조 전 초안을 화면에 노출하지 않는다.
+        const { text } = await generateText({
+          model: getChatModel(modelKey), system, messages: convertToCoreMessages(messages),
+          temperature: 0.2, maxRetries: 0,
+          abortSignal: AbortSignal.timeout(Math.max(1, Math.min(30_000, requestDeadline - Date.now() - 4_000))),
+        });
+        if (prepareChatAnswerText(text).replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE) {
+          const reply = buildChatEvidenceFallback(ragFailed ? "degraded" : "insufficient", category);
+          dataStream.write(formatDataStreamPart("text", reply));
+          await persistAnswer(reply, true);
+          console.info("[chat] outcome", { requestId: clientRequestId, kind: turnKind, state: "insufficient", degraded: ragFailed });
+          return;
+        }
+        const reviewed = await reviewChatLearningAnswer(text, contextText, { deadline: requestDeadline });
+        const reply = reviewed.status === "unverified" ? buildChatEvidenceFallback("review_failed") : reviewed.text;
+        dataStream.write(formatDataStreamPart("text", reply));
+        await persistAnswer(reply, reviewed.status === "unverified");
+        console.info("[chat] outcome", {
+          requestId: clientRequestId, kind: turnKind,
+          state: reviewed.status === "unverified" ? "review_unverified" : "answered",
+          review: reviewed.status, reviewChecks: reviewed.checks, degraded: ragFailed,
+        });
+        return;
+      }
 
       const result = streamText({
         model: getChatModel(modelKey),
         system,
         messages: convertToCoreMessages(messages),
         temperature: 0.2,
-        onFinish: async ({ text }) => persistAnswer(text),
+        onFinish: async ({ text }) => {
+          const refused = prepareChatAnswerText(text).replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE;
+          // 스트리밍된 본문은 바꾸지 않는다. 모델이 전체 확인 불가로 끝냈으면
+          // 다음 질문 안내를 덧붙이고 화면과 같은 최종 본문을 저장한다.
+          const tail = refused ? `\n\n${buildChatEvidenceFallback(ragFailed ? "degraded" : "insufficient", category)}` : "";
+          if (tail) dataStream.write(formatDataStreamPart("text", tail));
+          await persistAnswer(text + tail, refused);
+          console.info("[chat] outcome", {
+            requestId: clientRequestId, kind: turnKind,
+            state: refused ? "insufficient" : "answered", degraded: ragFailed,
+          });
+        },
       });
 
       // 클라이언트가 중간에 끊거나(Stop·탭 닫기) 연결이 끊겨도 스트림을 끝까지 소비해
