@@ -4,6 +4,13 @@ import { ChatRequestError, chatErrorMessage, fetchChat } from "@/lib/chat-reques
 afterEach(() => vi.unstubAllGlobals());
 
 describe("튜터 실패 안내", () => {
+  it("일일 예산 429는 잠시 혼잡으로 잘못 안내하지 않고 공유계정 합산을 설명한다", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(Response.json({ code: "ai_usage_limited", scope: "account_daily", error: "untrusted backend detail" }, { status: 429, headers: { "retry-after": "3600" } })));
+    const failure = await fetchChat("/api/chat").catch(error => error);
+    expect(failure.message).toContain("한국시간 자정");
+    expect(failure.message).toContain("공용 계정");
+    expect(failure.message).not.toContain("backend");
+  });
   it("429 재시도 대기시간을 보존하되 서버 오류 원문은 노출하지 않는다", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("internal token details", { status: 429, headers: { "retry-after": "12" } })));
     const failure = await fetchChat("/api/chat").catch(error => error);

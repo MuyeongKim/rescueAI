@@ -70,11 +70,12 @@ export function UserGuideContent({ actions }: { actions?: ReactNode }) {
       <GuideSection id="ask">
         <ol className={styles.stepList}>
           <li><strong>분야는 ‘자동’으로 시작하세요.</strong><p>찾을 분야가 분명할 때만 직접 바꾸세요.</p></li>
-          <li><strong>상황과 원하는 설명을 함께 적으세요.</strong><p>‘안전하게 쓰는 법’보다는 어떤 장비인지, 누구를 위한 설명인지 알려주는 것이 좋습니다.</p></li>
+          <li><strong>목적과 궁금한 범위, 원하는 정리 방식을 적으세요.</strong><p>어떤 내용을 누구를 위해 배우는지, 체크리스트나 비교표처럼 어떻게 정리하면 좋을지 알려주세요.</p></li>
           <li><strong>답변을 읽고 출처를 확인하세요.</strong><p>답변 아래의 출처에서 자료 제목과 페이지를 확인하세요. 필요하면 원본을 열어 앞뒤 내용도 읽어보세요.</p></li>
         </ol>
         <QuestionIllustration />
         <dl className={styles.questionParts}>{USER_GUIDE_QUESTION_PARTS.map((part) => <div key={part.title}><dt>{part.title}</dt><dd>{part.text}</dd></div>)}</dl>
+        <p className={styles.tip}>AI 튜터의 <strong>‘이렇게 질문해 보세요’</strong>에서 예시를 선택하면 입력창에 담깁니다. 내 상황에 맞게 고친 뒤 전송하세요. 작성 중인 질문이 있다면 보내거나 지운 뒤 예시를 넣을 수 있습니다. 대화 중에도 입력창 옆의 <strong>‘질문 도움말’</strong>로 안내를 다시 열 수 있습니다.</p>
         <p className={styles.tip}>같은 주제는 이어서 질문하세요. 예: <strong>“방금 설명한 내용을 점검표로 정리해줘.”</strong> 다른 주제라면 새 대화를 시작하면 됩니다.</p>
         <div className={styles.helpList}>{USER_GUIDE_HELP.slice(0, 2).map((item) => <details key={item.question} className={styles.help}><summary>{item.question}<ChevronDown aria-hidden="true" size={20} /></summary><p>{item.answer}</p></details>)}</div>
       </GuideSection>

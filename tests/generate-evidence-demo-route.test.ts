@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   getChatModel: vi.fn(),
 }));
 
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("@/lib/demo", () => ({ DEMO: true }));
 vi.mock("@/lib/auth", () => ({ requireApiUser: mocks.requireApiUser }));
 vi.mock("@/lib/rate-limit", () => ({

@@ -1,4 +1,4 @@
-// 챗봇 인기 질문 (서버 전용). popular_questions RPC(집계만 반환)를 호출한다.
+// 현재 계정에서 반복한 질문만 조회한다. 다른 계정의 질문 원문은 공유하지 않는다.
 import { createClient } from "@/lib/supabase/server";
 import { DEMO, demoPopularQuestions } from "@/lib/demo";
 

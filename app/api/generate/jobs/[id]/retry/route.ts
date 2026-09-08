@@ -10,6 +10,7 @@ import {
   toPublicGenerationJob,
 } from "@/lib/generation-job-store";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 import { createGenerationWorkerClient } from "@/lib/supabase/generation-worker";
 import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 import { createClient } from "@/lib/supabase/server";
@@ -105,6 +106,8 @@ export async function POST(
     } catch (editError) { return Response.json({ error: editError instanceof z.ZodError ? "초안의 제목·본문 분량을 확인해 주세요." : editError instanceof Error ? editError.message : "초안을 확인해 주세요." }, { status: 422 }); }
   }
   let queuedResult;
+  const usageLimit = await guardAiUsage("generate-job-retry", supabase);
+  if (usageLimit) return usageLimit;
   try {
     queuedResult = await withSupabaseRequestTimeout(
       worker

@@ -30,6 +30,7 @@ import {
 import { DEMO } from "@/lib/demo";
 import { fetchCategoryContext } from "@/lib/generate-context";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
 import {
   LimitedJsonBodyError,
@@ -185,6 +186,8 @@ export async function POST(req: Request) {
     // 부분 재생성 남용 방지 (분당 20회/사용자)
     const rl = rateLimit(`generate-section:${auth.user.id}`, 30, 60_000);
     if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
+    const usageLimit = await guardAiUsage("generate-section");
+    if (usageLimit) return usageLimit;
   }
 
   let input: unknown;

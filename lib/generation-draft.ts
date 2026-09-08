@@ -60,7 +60,7 @@ export const generationDraftSnapshotSchema = z.object({
 });
 export type GenerationDraftSnapshot = z.infer<typeof generationDraftSnapshotSchema>;
 export type GenerationDraft = { id: string; draftKey: string; revision: number; updatedAt: string; snapshot: GenerationDraftSnapshot };
-export type GenerationDraftSummary = Pick<GenerationDraft, "id" | "draftKey" | "updatedAt"> & { title: string; kind: string };
+export type GenerationDraftSummary = Pick<GenerationDraft, "id" | "draftKey" | "updatedAt"> & { title: string; kind: string; saved?: boolean };
 
 export function generationDraftTitle(snapshot: GenerationDraftSnapshot): string {
   return snapshot.doc?.title || snapshot.deck?.title || snapshot.context.topic || "제목 없는 편집 초안";

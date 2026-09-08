@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("@/lib/demo", () => ({ DEMO: true }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/supabase/generation-rag", () => ({ createGenerationRagReader: vi.fn() }));

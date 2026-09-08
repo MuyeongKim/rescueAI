@@ -61,4 +61,12 @@ describe("개인 편집 초안 계약", () => {
     expect(html).toContain("/generate?j=complete"); expect(html).toContain("/generate?j=attention"); expect(html).toContain("/generate?d=draft");
     expect(html).toContain("편집한 주제 초안 삭제");
   });
+  it("저장 완료 사본도 상태를 구분하고 기존 초안 삭제 경로로 정리할 수 있다", () => {
+    const html = renderToStaticMarkup(<GenerationRecoveryList jobs={[]} drafts={[{
+      id: "saved-draft", draftKey: "material:17", title: "정식 저장한 자료의 사본", kind: "plan", updatedAt: "2026-09-08", saved: true,
+    }]} />);
+    expect(html).toContain("저장 완료 사본 · 다시 열기");
+    expect(html).toContain("/generate?d=saved-draft");
+    expect(html).toContain("정식 저장한 자료의 사본 초안 삭제");
+  });
 });

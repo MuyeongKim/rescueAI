@@ -9,7 +9,7 @@ import type { GenerationDraftSnapshot } from "@/lib/generation-draft";
 const draftKey = "local:aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const snapshot: GenerationDraftSnapshot = { version: 1, kind: "plan", context: { category: "산악", audience: "일반 대원", duration: "1시간", topic: "로프", focus: "", conditions: "", date: "", place: "", slideMode: "presenter" }, doc: { title: "편집 초안", sections: [{ heading: "훈련목표", content: "" }], sources: [] }, deck: null, nlm: null, materialId: null, materialRevision: null, saved: false };
 type Row = { id: string; user_id?: string; draft_key: string; revision: number; updated_at: string; snapshot: GenerationDraftSnapshot };
-function client(initial: Row | null = null, ownsMaterial = true) {
+function client(initial: Row | null = null, ownsMaterial = true, writeError: { code: string; message: string } | null = null) {
   let row = initial;
   const writes: Array<{ value: unknown; filters: Record<string, unknown> }> = [];
   return { writes, row: () => row, from: vi.fn((table: string) => {
@@ -20,6 +20,7 @@ function client(initial: Row | null = null, ownsMaterial = true) {
       if (count) return { count: row ? 1 : 0, data: null, error: null };
       if (action === "read") return { data: row, error: null };
       writes.push({ value, filters });
+      if (writeError) return { data: null, error: writeError };
       if (action === "delete") {
         if (!row || row.id !== filters.id || (row.user_id ?? "owner") !== filters.user_id || row.updated_at !== filters.updated_at) return { data: null, error: null };
         const removed = { id: row.id }; row = null; return { data: removed, error: null };
@@ -69,6 +70,15 @@ describe("개인 편집 초안 API", () => {
     const db = client(null, false); mocks.createClient.mockResolvedValue(db);
     const response = await POST(request({ draftKey: "material:17", revision: 0, snapshot: { ...snapshot, materialId: 17, materialRevision: 1 } }));
     expect(response.status).toBe(404); expect(db.writes).toHaveLength(0);
+  });
+  it("DB에서 동시 저장 한도를 거절하면 409와 보관함 정리 안내를 반환하고 기존 편집을 보존한다", async () => {
+    const db = client({ id: "draft", draft_key: draftKey, revision: 4, updated_at: "now", snapshot }, true,
+      { code: "P0001", message: "generation_drafts_storage_limit_exceeded" });
+    mocks.createClient.mockResolvedValue(db);
+    const response = await POST(request({ draftKey, revision: 4, snapshot }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "draft_storage_limit", error: expect.stringContaining("초안 보관함 정리") });
+    expect(db.row()?.revision).toBe(4);
   });
   it("삭제도 인증 전에 본문이나 DB를 조회하지 않는다", async () => {
     const db = client(); mocks.createClient.mockResolvedValue(db); mocks.auth.mockResolvedValue({ ok: false, response: new Response(null, { status: 401 }) });

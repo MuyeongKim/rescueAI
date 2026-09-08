@@ -8,6 +8,33 @@ type ServerClient = Awaited<ReturnType<typeof createClient>>;
 
 export type AuthedUser = { id: string; email?: string };
 
+class ProfileAccessError extends Error {
+  constructor(readonly status: 403 | 503) {
+    super(status === 403
+      ? "등록된 사용자 정보를 확인할 수 없습니다. 관리자에게 문의해 주세요."
+      : "사용자 정보를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.");
+  }
+}
+
+async function requiredProfile(supabase: ServerClient, userId: string): Promise<Profile> {
+  let result;
+  try {
+    result = await supabase.from("profiles").select("*").eq("id", userId).maybeSingle();
+  } catch {
+    throw new ProfileAccessError(503);
+  }
+  if (result.error) throw new ProfileAccessError(503);
+  if (!result.data) throw new ProfileAccessError(403);
+  // 마이그레이션 누락도 "비밀번호 변경 완료"로 간주하지 않는다.
+  if (typeof result.data.must_change_password !== "boolean") throw new ProfileAccessError(503);
+  return result.data;
+}
+
+function authFailure(error: unknown): ApiAuthResult {
+  const failure = error instanceof ProfileAccessError ? error : new ProfileAccessError(503);
+  return { ok: false, response: new Response(failure.message, { status: failure.status }) };
+}
+
 /**
  * 현재 사용자와 프로필을 조회한다. **부작용 없음(리다이렉트하지 않는다).**
  * 페이지/레이아웃에서는 requireUserAndProfile() 을, route handler 에서는 이 함수나
@@ -27,34 +54,9 @@ export async function getUserAndProfile(): Promise<{
 
   if (!user) return { user: null, profile: null };
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("*")
-    .eq("id", user.id)
-    .maybeSingle();
-
-  if (profile) {
-    return { user: { id: user.id, email: user.email }, profile };
-  }
-
-  // profiles 미생성(마이그레이션 전) 폴백 — 인증 계정 메타데이터로 프로필 구성.
-  // 역할(role)은 app_metadata 에서만 읽는다: 서버(관리자 API)로만 수정 가능해 위변조 불가.
-  // (user_metadata 는 사용자가 직접 바꿀 수 있으므로 권한 판단에 쓰지 않는다.)
-  const appRole = (user.app_metadata as { role?: string } | null)?.role;
-  const fallback: Profile = {
-    id: user.id,
-    email: user.email ?? null,
-    full_name:
-      (user.user_metadata as { full_name?: string } | null)?.full_name ?? null,
-    role: appRole === "admin" ? "admin" : "user",
-    division: null,
-    rank: null,
-    team: null,
-    digital_id: null,
-    must_change_password: false,
-    created_at: user.created_at ?? "",
-  };
-  return { user: { id: user.id, email: user.email }, profile: fallback };
+  // DB 프로필이 권한·초기 비밀번호 상태의 단일 출처다. 오류나 누락을 메타데이터로 대체하지 않는다.
+  const profile = await requiredProfile(supabase, user.id);
+  return { user: { id: user.id, email: user.email }, profile };
 }
 
 /**
@@ -67,6 +69,7 @@ export async function requireUserAndProfile(): Promise<{
   profile: Profile | null;
 }> {
   const result = await getUserAndProfile();
+  if (!result.user) redirect("/login");
   if (result.profile?.must_change_password) redirect("/change-password");
   return result;
 }
@@ -91,36 +94,49 @@ const MUST_CHANGE_PASSWORD_RESPONSE = () =>
  *
  * 이미 만든 supabase 클라이언트가 있으면 넘겨서 재사용한다(쿠키 파싱 중복 방지).
  */
-export async function requireApiUser(client?: ServerClient): Promise<ApiAuthResult> {
+async function authenticatedApiUser(client: ServerClient | undefined, requireChangedPassword: boolean): Promise<ApiAuthResult> {
   if (DEMO) return { ok: true, user: demoUser };
 
-  const supabase = client ?? (await createClient());
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) return { ok: false, response: new Response("Unauthorized", { status: 401 }) };
+  try {
+    const supabase = client ?? (await createClient());
+    const {
+      data: { user },
+    } = await supabase.auth.getUser();
+    if (!user) return { ok: false, response: new Response("Unauthorized", { status: 401 }) };
 
-  const { data: profile } = await supabase
-    .from("profiles")
-    .select("must_change_password")
-    .eq("id", user.id)
-    .maybeSingle();
-  if (profile?.must_change_password) {
-    return { ok: false, response: MUST_CHANGE_PASSWORD_RESPONSE() };
+    const profile = await requiredProfile(supabase, user.id);
+    if (requireChangedPassword && profile.must_change_password) {
+      return { ok: false, response: MUST_CHANGE_PASSWORD_RESPONSE() };
+    }
+
+    // 사용자 설정 읽기용이며 역할·접근권한 판단에는 사용하지 않는다.
+    return { ok: true, user: { id: user.id, email: user.email }, userMetadata: user.user_metadata };
+  } catch (error) {
+    return authFailure(error);
   }
+}
 
-  // 사용자 설정 읽기용이며 역할·접근권한 판단에는 사용하지 않는다.
-  return { ok: true, user: { id: user.id, email: user.email }, userMetadata: user.user_metadata };
+export async function requireApiUser(client?: ServerClient): Promise<ApiAuthResult> {
+  return authenticatedApiUser(client, true);
+}
+
+/** 비밀번호 변경 API 전용. 세션·등록 프로필은 검증하고 초기 비밀번호 플래그만 예외로 둔다. */
+export async function requireApiPasswordChangeUser(client?: ServerClient): Promise<ApiAuthResult> {
+  return authenticatedApiUser(client, false);
 }
 
 /** route handler 용 관리자 인증 — 세션 + role='admin' + 초기 비번 변경 완료. */
 export async function requireApiAdmin(): Promise<ApiAuthResult> {
-  const { user, profile } = await getUserAndProfile();
-  if (!user || !isAdmin(profile)) {
-    return { ok: false, response: new Response("Forbidden", { status: 403 }) };
+  try {
+    const { user, profile } = await getUserAndProfile();
+    if (!user || !isAdmin(profile)) {
+      return { ok: false, response: new Response("Forbidden", { status: 403 }) };
+    }
+    if (profile?.must_change_password) {
+      return { ok: false, response: MUST_CHANGE_PASSWORD_RESPONSE() };
+    }
+    return { ok: true, user };
+  } catch (error) {
+    return authFailure(error);
   }
-  if (profile?.must_change_password) {
-    return { ok: false, response: MUST_CHANGE_PASSWORD_RESPONSE() };
-  }
-  return { ok: true, user };
 }

@@ -348,10 +348,10 @@ async function technicalGateBeforeUse(
     supabase,
   });
   return check.ok ? null : Response.json({
-    code: check.status === 503 ? "grounding_verification_unavailable" : "generation_grounding_invalid",
+    code: check.status === 429 ? "ai_usage_limited" : check.status === 503 ? "grounding_verification_unavailable" : "generation_grounding_invalid",
     error: check.error,
     issues: check.issues ?? [],
-  }, { status: check.status });
+  }, { status: check.status, headers: check.retryAfterSeconds ? { "Retry-After": String(check.retryAfterSeconds) } : undefined });
 }
 
 // 생성물 저장 — insert/update는 본인 세션과 RLS로만 수행한다. service role은 인증 뒤

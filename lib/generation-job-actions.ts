@@ -7,6 +7,7 @@ import { createGenerationWorkerClient } from "@/lib/supabase/generation-worker";
 import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 import { readLimitedJsonBody, LimitedJsonBodyError } from "@/lib/generated-material-save";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 import { GENERATION_JOB_PUBLIC_COLUMNS, toPublicGenerationJob } from "@/lib/generation-job-store";
 import { applyGenerationOutlineEdit, generationOutlineEditSchema, projectGenerationOutline, projectGenerationReviewDraft } from "@/lib/generation-job-review";
 import { generateRequestSchema } from "@/lib/generation-request";
@@ -74,6 +75,8 @@ export async function generationJobAction(request: Request, id: string, action: 
       };
       checkpoint = applyGenerationOutlineEdit(current.checkpoint, parsedRequest, outline);
     } catch (editError) { return Response.json({ error: editError instanceof Error ? editError.message : "목차를 확인해 주세요." }, { status: 422 }); }
+    const usageLimit = await guardAiUsage("generate-job-review", client);
+    if (usageLimit) return usageLimit;
     const runToken = crypto.randomUUID();
     const { data: queued, error: updateError } = await withSupabaseRequestTimeout(worker.from("generation_jobs").update({
       status: "queued", stage: "확인한 목차로 본문 제작을 준비하는 중", checkpoint,

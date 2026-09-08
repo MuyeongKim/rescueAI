@@ -20,7 +20,7 @@ export function GenerationRecoveryList({ jobs, drafts, collapsible = false }: {
     <ul className="divide-y">
       {drafts.map((draft) => <li key={draft.id} className="flex items-center gap-3">
         <Link className="flex min-h-16 min-w-0 flex-1 flex-wrap items-center justify-between gap-2 py-3 text-base focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" href={`/generate?d=${draft.id}`}>
-          <span className="min-w-0 break-words font-medium">{draft.title}</span><span className="text-sm font-semibold text-primary">편집 초안 이어서 열기 →</span>
+          <span className="min-w-0 break-words font-medium">{draft.title}</span><span className="text-sm font-semibold text-primary">{draft.saved ? "저장 완료 사본 · 다시 열기 →" : "편집 초안 이어서 열기 →"}</span>
         </Link>
         <DeleteGenerationDraftButton id={draft.id} updatedAt={draft.updatedAt} title={draft.title} />
       </li>)}

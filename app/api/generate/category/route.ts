@@ -18,6 +18,7 @@ import {
 } from "@/lib/generated-material-save";
 import { getChatModel } from "@/lib/llm";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 
 export const maxDuration = 30;
 
@@ -177,6 +178,8 @@ export async function POST(request: Request) {
   }
 
   const controller = new AbortController();
+  const usageLimit = await guardAiUsage("generate-category");
+  if (usageLimit) return usageLimit;
   const abortFromRequest = () => controller.abort();
   if (request.signal.aborted) abortFromRequest();
   else request.signal.addEventListener("abort", abortFromRequest, { once: true });

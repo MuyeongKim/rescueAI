@@ -5,7 +5,7 @@
 -- 마이그레이션을 순서대로 이어붙인 것이라, 기존 프로젝트에 개별 마이그레이션을 적용한 결과와
 -- 동일한 스키마가 됩니다. (중간에 만들었다가 지우는 테이블이 보이는 것은 정상 — 이력 그대로입니다.)
 --
--- 포함된 마이그레이션 31개:
+-- 포함된 마이그레이션 36개:
 --   · 0001_init.sql
 --   · 0002_hybrid_search.sql
 --   · 0003_triggers_rls.sql
@@ -37,6 +37,11 @@
 --   · 20260905140458_align_generated_document_endnote_evidence.sql
 --   · 20260906010516_generation_job_review_controls.sql
 --   · 20260906010707_align_edited_slide_count.sql
+--   · 20260908042754_close_public_rpc_leaks_and_limit_private_drafts.sql
+--   · 20260908042842_enforce_password_change_completion.sql
+--   · 20260908042907_distributed_ai_usage_budget.sql
+--   · 20260908043547_harden_legacy_function_permissions.sql
+--   · 20260908043629_use_verified_auth_password_completion.sql
 
 -- ============================================================================
 -- 0001_init.sql
@@ -6327,4 +6332,404 @@ $$;
 revoke all on function public.generated_material_core_quality_valid(
   text, text, text, text, text, text, jsonb
 ) from public, anon, authenticated;
+
+
+-- ============================================================================
+-- 20260908042754_close_public_rpc_leaks_and_limit_private_drafts.sql
+-- ============================================================================
+
+-- 질문 원문은 계정 간에 공유하지 않는다. 기존 RPC 계약은 유지하되 RLS와 소유권을
+-- 함께 적용하고, Supabase에 남아 있을 수 있는 역할별 명시적 EXECUTE도 회수한다.
+begin;
+
+create or replace function public.popular_questions(
+  days integer default 30,
+  min_count integer default 2,
+  max_rows integer default 8
+)
+returns table (question text, cnt bigint)
+language sql
+stable
+security invoker
+set search_path = ''
+as $$
+  select pg_catalog.btrim(m.content) as question, count(*)::bigint as cnt
+  from public.messages as m
+  join public.conversations as c on c.id = m.conversation_id
+  where c.user_id = (select auth.uid())
+    and m.role = 'user'
+    and m.created_at >= pg_catalog.now() - pg_catalog.make_interval(
+      days => least(greatest(coalesce(days, 30), 1), 90)
+    )
+    and pg_catalog.char_length(pg_catalog.btrim(m.content)) between 4 and 100
+  group by pg_catalog.btrim(m.content)
+  having count(*) >= greatest(coalesce(min_count, 2), 2)
+  order by cnt desc, question
+  limit least(greatest(coalesce(max_rows, 8), 0), 8);
+$$;
+
+revoke all on function public.popular_questions(integer, integer, integer)
+  from public, anon, authenticated;
+grant execute on function public.popular_questions(integer, integer, integer)
+  to authenticated;
+comment on function public.popular_questions(integer, integer, integer) is
+  '현재 계정의 반복 질문만 최근 90일·최대 8개 범위에서 반환한다. 다른 계정의 질문은 공개하지 않는다.';
+
+-- 제거된 체력 기능의 데이터는 보존하되 이름·소속을 반환하는 RPC는 더 이상 공개하지 않는다.
+revoke all on function public.fitness_leaderboard(date)
+  from public, anon, authenticated;
+
+-- 동시 탭·공용 계정 세션의 합산 사용량은 한 행의 원자적 UPDATE로 검사한다.
+-- 앱의 사전 count와 관계없이 INSERT/UPDATE/DELETE 및 직접 Data API 호출에 적용된다.
+create schema if not exists generation_private;
+revoke all on schema generation_private from public, anon, authenticated;
+
+create table if not exists generation_private.draft_storage_usage (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  unsaved_count bigint not null default 0 check (unsaved_count >= 0),
+  saved_count bigint not null default 0 check (saved_count >= 0),
+  snapshot_bytes bigint not null default 0 check (snapshot_bytes >= 0)
+);
+alter table generation_private.draft_storage_usage enable row level security;
+revoke all on table generation_private.draft_storage_usage
+  from public, anon, authenticated, service_role;
+
+-- 기존 행을 지우거나 수정하지 않고 사용량만 집계한다. 이 잠금은 백필부터 트리거
+-- 설치까지 다른 쓰기가 틈으로 빠져나가지 않게 하며 트랜잭션 종료 시 풀린다.
+lock table public.generation_drafts in share row exclusive mode;
+insert into generation_private.draft_storage_usage (
+  user_id, unsaved_count, saved_count, snapshot_bytes
+)
+select user_id,
+  count(*) filter (where not coalesce(snapshot -> 'saved' = 'true'::jsonb, false)),
+  count(*) filter (where coalesce(snapshot -> 'saved' = 'true'::jsonb, false)),
+  coalesce(sum(pg_catalog.octet_length(snapshot::text)), 0)
+from public.generation_drafts
+group by user_id
+on conflict (user_id) do update set
+  unsaved_count = excluded.unsaved_count,
+  saved_count = excluded.saved_count,
+  snapshot_bytes = excluded.snapshot_bytes;
+update generation_private.draft_storage_usage as usage
+set unsaved_count = 0, saved_count = 0, snapshot_bytes = 0
+where not exists (
+  select 1 from public.generation_drafts as draft where draft.user_id = usage.user_id
+);
+
+create or replace function public.enforce_generation_draft_storage_limit()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+declare
+  v_user_id uuid;
+  v_unsaved_delta bigint := 0;
+  v_saved_delta bigint := 0;
+  v_bytes_delta bigint := 0;
+  v_applied boolean := false;
+begin
+  if tg_op <> 'INSERT' then
+    v_user_id := old.user_id;
+    if coalesce(old.snapshot -> 'saved' = 'true'::jsonb, false) then
+      v_saved_delta := -1;
+    else
+      v_unsaved_delta := -1;
+    end if;
+    v_bytes_delta := -pg_catalog.octet_length(old.snapshot::text);
+  end if;
+  if tg_op <> 'DELETE' then
+    if tg_op = 'UPDATE' and new.user_id is distinct from old.user_id then
+      raise exception 'generation_draft_identity_immutable' using errcode = '23514';
+    end if;
+    v_user_id := new.user_id;
+    if coalesce(new.snapshot -> 'saved' = 'true'::jsonb, false) then
+      v_saved_delta := v_saved_delta + 1;
+    else
+      v_unsaved_delta := v_unsaved_delta + 1;
+    end if;
+    v_bytes_delta := v_bytes_delta + pg_catalog.octet_length(new.snapshot::text);
+    insert into generation_private.draft_storage_usage (user_id)
+      values (v_user_id) on conflict (user_id) do nothing;
+  end if;
+
+  -- 저장 완료 사본까지 합계 200 MiB, 미저장·저장 완료 초안은 각각 200개다.
+  -- 기존 데이터가 초과해도 삭제·축소는 허용하고 새 증가분만 차단한다.
+  update generation_private.draft_storage_usage as usage
+  set unsaved_count = usage.unsaved_count + v_unsaved_delta,
+      saved_count = usage.saved_count + v_saved_delta,
+      snapshot_bytes = usage.snapshot_bytes + v_bytes_delta
+  where usage.user_id = v_user_id
+    and (v_unsaved_delta <= 0 or usage.unsaved_count + v_unsaved_delta <= 200)
+    and (v_saved_delta <= 0 or usage.saved_count + v_saved_delta <= 200)
+    and (v_bytes_delta <= 0 or usage.snapshot_bytes + v_bytes_delta <= 209715200)
+  returning true into v_applied;
+
+  if not coalesce(v_applied, false) and tg_op <> 'DELETE' then
+    raise exception 'generation_drafts_storage_limit_exceeded'
+      using errcode = 'P0001',
+            hint = 'Remove old private drafts, including saved copies, before retrying.';
+  end if;
+  return null;
+end;
+$$;
+revoke all on function public.enforce_generation_draft_storage_limit()
+  from public, anon, authenticated, service_role;
+drop trigger if exists enforce_generation_draft_storage_limit on public.generation_drafts;
+create trigger enforce_generation_draft_storage_limit
+after insert or update or delete on public.generation_drafts
+for each row execute function public.enforce_generation_draft_storage_limit();
+
+commit;
+
+
+-- ============================================================================
+-- 20260908042842_enforce_password_change_completion.sql
+-- ============================================================================
+
+-- 초기 비밀번호 변경 완료는 Auth의 실제 비밀번호 변경과 같은 트랜잭션에서만 기록한다.
+-- 기존 계정·비밀번호·세션은 변경하지 않는다. 기존 UI의 완료 후 같은 false 재전송도 허용한다.
+create schema if not exists app_auth_private;
+revoke all on schema app_auth_private from public, anon, authenticated, service_role;
+
+create or replace function app_auth_private.protect_password_change_requirement()
+returns trigger
+language plpgsql
+security invoker
+set search_path = ''
+as $$
+begin
+  -- JWT/user_metadata 또는 재귀 깊이를 신뢰하지 않고 실제 PostgreSQL 호출 역할을 확인한다.
+  -- postgres는 아래 Auth 트리거 및 DB 운영자, service_role은 관리자 일괄 계정 발급용이다.
+  if new.must_change_password is distinct from old.must_change_password
+     and current_user not in ('postgres', 'service_role') then
+    raise exception 'password_change_requirement_is_server_managed' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+alter function app_auth_private.protect_password_change_requirement() owner to postgres;
+revoke all on function app_auth_private.protect_password_change_requirement() from public, anon, authenticated, service_role;
+
+drop trigger if exists profiles_protect_password_change on public.profiles;
+create trigger profiles_protect_password_change
+before update of must_change_password on public.profiles
+for each row execute function app_auth_private.protect_password_change_requirement();
+
+create or replace function app_auth_private.complete_password_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = ''
+as $$
+begin
+  -- 인자 없는 비공개 trigger 함수이며 다른 테이블에 붙여 호출해도 작동하지 않는다.
+  if tg_table_schema <> 'auth' or tg_table_name <> 'users' or tg_op <> 'UPDATE' then
+    raise exception 'password_change_trigger_context_invalid' using errcode = '42501';
+  end if;
+  if new.encrypted_password is distinct from old.encrypted_password
+     and coalesce(new.encrypted_password, '') <> '' then
+    update public.profiles
+    set must_change_password = false
+    where id = new.id and must_change_password = true;
+  end if;
+  return new;
+end;
+$$;
+alter function app_auth_private.complete_password_change() owner to postgres;
+revoke all on function app_auth_private.complete_password_change() from public, anon, authenticated, service_role;
+
+drop trigger if exists on_auth_password_changed on auth.users;
+create trigger on_auth_password_changed
+after update of encrypted_password on auth.users
+for each row execute function app_auth_private.complete_password_change();
+
+
+-- ============================================================================
+-- 20260908042907_distributed_ai_usage_budget.sql
+-- ============================================================================
+
+-- 공유 계정의 로그인/병렬 사용을 유지하면서 모든 서버 인스턴스가 같은 AI 호출량을 센다.
+-- 단위는 실제 청구 금액이나 토큰 수가 아닌 가중 요청량이다. DB 관리자만 정책을 변경한다.
+create schema if not exists security_private;
+revoke all on schema security_private from public, anon, authenticated;
+
+create table if not exists security_private.ai_usage_policy (
+  action text primary key,
+  minute_limit integer not null check (minute_limit between 1 and 1000),
+  units integer not null check (units between 1 and 1000),
+  admin_only boolean not null default false
+);
+insert into security_private.ai_usage_policy(action, minute_limit, units, admin_only) values
+  ('chat', 30, 1, false),
+  ('generate', 20, 20, false),
+  ('generate-section', 30, 3, false),
+  ('generate-focus', 20, 1, false),
+  ('generate-category', 12, 1, false),
+  ('generate-evidence', 20, 3, false),
+  ('generate-job', 10, 40, false),
+  ('generate-job-retry', 6, 40, false),
+  ('generate-job-review', 10, 40, false),
+  ('grounding-review', 30, 3, false),
+  ('news-summary', 10, 5, true),
+  ('news-refresh', 6, 5, true),
+  ('news-cron', 1, 5, true)
+on conflict (action) do nothing;
+
+create table if not exists security_private.ai_budget_settings (
+  singleton boolean primary key default true check (singleton),
+  account_daily_units integer not null check (account_daily_units between 40 and 1000000),
+  global_daily_units integer not null check (global_daily_units between 40 and 10000000)
+);
+insert into security_private.ai_budget_settings values (true, 2000, 4000) on conflict (singleton) do nothing;
+
+-- 키마다 현재 시간대의 카운터만 보관하므로 요청 횟수에 비례해 행이 늘지 않는다.
+create table if not exists security_private.ai_usage_counters (
+  bucket_key text primary key,
+  window_start timestamptz not null,
+  used integer not null check (used >= 0)
+);
+alter table security_private.ai_usage_policy enable row level security;
+alter table security_private.ai_budget_settings enable row level security;
+alter table security_private.ai_usage_counters enable row level security;
+revoke all on all tables in schema security_private from public, anon, authenticated;
+
+create or replace function security_private.consume_ai_usage(p_subject uuid, p_action text)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare
+  v_policy security_private.ai_usage_policy%rowtype;
+  v_settings security_private.ai_budget_settings%rowtype;
+  v_now timestamptz;
+  v_minute timestamptz;
+  v_day timestamptz;
+  v_keys text[];
+  v_starts timestamptz[];
+  v_limits integer[];
+  v_costs integer[];
+  v_kinds text[] := array['minute', 'account_daily', 'global_daily'];
+  v_used integer;
+  v_index integer;
+begin
+  -- 대기 중 시간대가 바뀌어도 과거 카운터로 되돌리지 않도록 잠금 뒤 현재 시각을 읽는다.
+  perform pg_catalog.pg_advisory_xact_lock(81190206);
+  v_now := pg_catalog.clock_timestamp();
+  v_minute := pg_catalog.date_trunc('minute', v_now);
+  v_day := pg_catalog.date_trunc('day', v_now at time zone 'Asia/Seoul') at time zone 'Asia/Seoul';
+  select * into strict v_policy from security_private.ai_usage_policy where action = p_action;
+  select * into strict v_settings from security_private.ai_budget_settings where singleton;
+  v_keys := array['minute:' || p_subject::text || ':' || p_action, 'day:account:' || p_subject::text, 'day:global'];
+  v_starts := array[v_minute, v_day, v_day];
+  v_limits := array[v_policy.minute_limit, v_settings.account_daily_units, v_settings.global_daily_units];
+  v_costs := array[1, v_policy.units, v_policy.units];
+  -- 짧은 DB 트랜잭션만 직렬화하고 모델 실행이나 로그인을 잠그지 않는다.
+  for v_index in 1..3 loop
+    select used into v_used from security_private.ai_usage_counters
+      where bucket_key = v_keys[v_index] and window_start = v_starts[v_index];
+    if coalesce(v_used, 0) + v_costs[v_index] > v_limits[v_index] then
+      return pg_catalog.jsonb_build_object('ok', false, 'limit_kind', v_kinds[v_index],
+        'retry_after_seconds', greatest(1, ceil(extract(epoch from
+          ((case when v_index = 1 then v_minute + interval '1 minute' else v_day + interval '1 day' end) - v_now)))::integer));
+    end if;
+  end loop;
+  -- 세 한도가 모두 허용한 경우에만 함께 차감한다. 거절된 요청은 다른 예산을 소모하지 않는다.
+  for v_index in 1..3 loop
+    insert into security_private.ai_usage_counters(bucket_key, window_start, used)
+      values (v_keys[v_index], v_starts[v_index], v_costs[v_index])
+    on conflict (bucket_key) do update set
+      used = case when ai_usage_counters.window_start = excluded.window_start
+        then ai_usage_counters.used + excluded.used else excluded.used end,
+      window_start = excluded.window_start;
+  end loop;
+  return pg_catalog.jsonb_build_object('ok', true, 'retry_after_seconds', 0);
+end;
+$$;
+revoke all on function security_private.consume_ai_usage(uuid, text) from public, anon, authenticated;
+
+create or replace function public.consume_ai_budget(p_action text)
+returns jsonb language plpgsql security definer set search_path = '' as $$
+declare
+  v_user uuid := auth.uid();
+  v_admin boolean;
+  v_admin_only boolean;
+begin
+  if v_user is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  select role = 'admin' into v_admin from public.profiles
+    where id = v_user and must_change_password is false;
+  if not found then raise exception 'Registered account with changed password required' using errcode = '42501'; end if;
+  select admin_only into v_admin_only from security_private.ai_usage_policy
+    where action = p_action and action <> 'news-cron';
+  if not found or (v_admin_only and v_admin is not true) then
+    raise exception 'AI action is not permitted' using errcode = '42501';
+  end if;
+  return security_private.consume_ai_usage(v_user, p_action);
+end;
+$$;
+revoke all on function public.consume_ai_budget(text) from public, anon, authenticated;
+grant execute on function public.consume_ai_budget(text) to authenticated;
+
+-- Cron은 쿠키 인증이나 subject/action 인자를 받지 않는다. 서버에서 Cron 비밀 검증 후 호출한다.
+create or replace function public.consume_news_cron_budget()
+returns jsonb language sql security definer set search_path = '' as $$
+  select security_private.consume_ai_usage('00000000-0000-0000-0000-000000000000'::uuid, 'news-cron');
+$$;
+revoke all on function public.consume_news_cron_budget() from public, anon, authenticated;
+grant execute on function public.consume_news_cron_budget() to service_role;
+
+-- 삭제된 계정의 작은 카운터도 정리하되 오늘 전체 사용량은 되돌리지 않는다.
+create or replace function security_private.cleanup_deleted_user_ai_usage()
+returns trigger language plpgsql security definer set search_path = '' as $$
+begin
+  if tg_table_schema <> 'auth' or tg_table_name <> 'users' or tg_op <> 'DELETE' then
+    raise exception 'Unexpected AI counter cleanup trigger' using errcode = '42501';
+  end if;
+  perform pg_catalog.pg_advisory_xact_lock(81190206);
+  delete from security_private.ai_usage_counters
+    where bucket_key = 'day:account:' || old.id::text
+       or bucket_key like 'minute:' || old.id::text || ':%';
+  return old;
+end;
+$$;
+revoke all on function security_private.cleanup_deleted_user_ai_usage() from public, anon, authenticated, service_role;
+drop trigger if exists cleanup_deleted_user_ai_usage on auth.users;
+create trigger cleanup_deleted_user_ai_usage after delete on auth.users
+  for each row execute function security_private.cleanup_deleted_user_ai_usage();
+
+
+-- ============================================================================
+-- 20260908043547_harden_legacy_function_permissions.sql
+-- ============================================================================
+
+-- 레거시 함수의 객체 탐색 경로를 고정하고, 트리거 전용 함수를 API 역할에서 닫는다.
+-- 원본 테이블·벡터·검색 알고리즘·기존 로그인 세션은 변경하지 않는다.
+alter function public.bump_conversation_updated_at() set search_path = public, pg_temp;
+alter function public.protect_profile_role() set search_path = public, pg_temp;
+alter function public.hybrid_search(text, public.vector, integer, text) set search_path = public, pg_temp;
+
+revoke all on function public.handle_new_user() from public, anon, authenticated;
+revoke all on function public.bump_conversation_updated_at() from public, anon, authenticated;
+revoke all on function public.protect_profile_role() from public, anon, authenticated;
+
+-- Supabase가 설치한 이벤트 트리거는 새 프로젝트 환경에 따라 없을 수도 있다.
+do $$
+begin
+  if to_regprocedure('public.rls_auto_enable()') is not null then
+    execute 'revoke all on function public.rls_auto_enable() from public, anon, authenticated';
+  end if;
+end;
+$$;
+
+
+-- ============================================================================
+-- 20260908043629_use_verified_auth_password_completion.sql
+-- ============================================================================
+
+-- encrypted_password는 로그인 중 저장 암호화키 교체에도 바뀔 수 있으므로
+-- 이 내부 컬럼의 변경만으로 사용자가 새 비밀번호를 설정했다고 판단하지 않는다.
+-- /api/auth/change-password가 세션 Auth API의 변경 성공을 확인한 뒤,
+-- 서버 전용 한 컬럼 writer로만 완료 상태를 기록한다.
+drop trigger if exists on_auth_password_changed on auth.users;
+drop function if exists app_auth_private.complete_password_change();
+
+-- profiles_protect_password_change는 유지한다. 브라우저/REST의 직접 해제는 계속 차단하며
+-- 기존 계정, 비밀번호, 프로필 상태, 동시 세션에는 데이터 변경을 가하지 않는다.
 

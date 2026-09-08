@@ -4,7 +4,6 @@ import { useRef, useState } from "react";
 import { toast } from "sonner";
 import { Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
 
-import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -17,6 +16,7 @@ import {
 } from "@/components/ui/card";
 
 const MIN_LEN = 8;
+const MAX_LEN = 128;
 
 export default function ChangePasswordPage() {
   const [password, setPassword] = useState("");
@@ -35,8 +35,8 @@ export default function ChangePasswordPage() {
     setFormError(null);
 
     const nextPasswordError =
-      password.length < MIN_LEN
-        ? `비밀번호를 ${MIN_LEN}자 이상 입력해 주세요.`
+      password.length < MIN_LEN || password.length > MAX_LEN
+        ? `비밀번호를 ${MIN_LEN}~${MAX_LEN}자로 입력해 주세요.`
         : null;
     const nextConfirmError =
       password !== confirm ? "새 비밀번호와 동일하게 입력해 주세요." : null;
@@ -54,35 +54,19 @@ export default function ChangePasswordPage() {
 
     setLoading(true);
     try {
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-      if (!user) {
+      const response = await fetch("/api/auth/change-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ password }),
+      });
+      if (response.status === 401) {
         setFormError("로그인 시간이 만료되었습니다. 다시 로그인해 주세요.");
         window.location.assign("/login");
         return;
       }
-
-      // 1) 비밀번호 변경
-      const { error: pwErr } = await supabase.auth.updateUser({ password });
-      if (pwErr) {
-        setFormError(
-          "비밀번호를 변경하지 못했습니다. 잠시 후 다시 시도하거나 관리자에게 문의해 주세요."
-        );
-        return;
-      }
-
-      // 2) 변경 강제 플래그 해제 (본인 profiles 행 — RLS "own profile update" 허용)
-      const { error: profErr } = await supabase
-        .from("profiles")
-        .update({ must_change_password: false })
-        .eq("id", user.id);
-      if (profErr) {
-        // 비번은 이미 바뀜 — 플래그만 못 내린 경우. 재시도 안내.
-        setFormError(
-          "비밀번호는 변경되었지만 설정을 저장하지 못했습니다. 새 비밀번호로 다시 로그인해 주세요."
-        );
+      const result = await response.json().catch(() => null) as { ok?: boolean; error?: string } | null;
+      if (!response.ok || result?.ok !== true) {
+        setFormError(result?.error ?? "비밀번호를 변경하지 못했습니다. 잠시 후 다시 시도해 주세요.");
         return;
       }
 
@@ -110,6 +94,9 @@ export default function ChangePasswordPage() {
             처음 로그인하셨습니다. 보안을 위해 초기 비밀번호(디지털식별번호)를
             새 비밀번호로 변경해 주세요.
           </CardDescription>
+          <p className="text-sm text-muted-foreground">
+            공용 계정의 비밀번호를 바꾸면 함께 접속한 분들도 새 비밀번호로 다시 로그인해야 합니다.
+          </p>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="space-y-4">
@@ -124,7 +111,7 @@ export default function ChangePasswordPage() {
                   type={showPassword ? "text" : "password"}
                   autoComplete="new-password"
                   required
-                  placeholder={`${MIN_LEN}자 이상`}
+                  placeholder={`${MIN_LEN}~${MAX_LEN}자`}
                   value={password}
                   onChange={(e) => {
                     setPassword(e.target.value);
@@ -132,8 +119,8 @@ export default function ChangePasswordPage() {
                     setFormError(null);
                   }}
                   onBlur={() => {
-                    if (password && password.length < MIN_LEN) {
-                      setPasswordError(`비밀번호를 ${MIN_LEN}자 이상 입력해 주세요.`);
+                    if (password && (password.length < MIN_LEN || password.length > MAX_LEN)) {
+                      setPasswordError(`비밀번호를 ${MIN_LEN}~${MAX_LEN}자로 입력해 주세요.`);
                     }
                   }}
                   className="h-12 pr-12 text-base"
@@ -156,7 +143,7 @@ export default function ChangePasswordPage() {
                 </button>
               </div>
               <p id="password-hint" className="text-sm text-muted-foreground">
-                {MIN_LEN}자 이상 입력하세요. 다른 서비스와 다른 비밀번호를 권장합니다.
+                {MIN_LEN}~{MAX_LEN}자로 입력하세요. 다른 서비스와 다른 비밀번호를 권장합니다.
               </p>
               {passwordError && (
                 <p id="password-error" role="alert" className="text-sm text-destructive">

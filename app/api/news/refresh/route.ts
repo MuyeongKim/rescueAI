@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireApiAdmin } from "@/lib/auth";
 import { summarizeHeadlines } from "@/lib/news-ai";
 import { collectRecentNews } from "@/lib/news-feed";
+import { guardAiUsage, guardNewsCronUsage } from "@/lib/ai-usage";
+import { isSameOriginRequest } from "@/lib/same-origin";
 
 // 구조 동향 자동 수집(B): 최근 30일 Google News RSS → AI 제목 요약/분류 → 중복 제외 저장.
 // 호출 권한: Vercel Cron(Authorization: Bearer CRON_SECRET) 또는 관리자(수동 버튼).
@@ -20,13 +22,6 @@ function secretMatches(header: string | null, secret: string): boolean {
   const actual = Buffer.from(header);
   if (expected.length !== actual.length) return false;
   return timingSafeEqual(expected, actual);
-}
-
-async function authorize(req: Request): Promise<boolean> {
-  const secret = process.env.CRON_SECRET;
-  if (secret && secretMatches(req.headers.get("authorization"), secret)) return true;
-  const auth = await requireApiAdmin();
-  return auth.ok;
 }
 
 async function refresh() {
@@ -75,7 +70,16 @@ async function refresh() {
 }
 
 export async function GET(req: Request) {
-  if (!(await authorize(req))) return new Response("Forbidden", { status: 403 });
+  const secret = process.env.CRON_SECRET;
+  if (!secret || !secretMatches(req.headers.get("authorization"), secret)) {
+    return new Response("Forbidden", { status: 403 });
+  }
+  const limited = await guardNewsCronUsage(createAdminClient());
+  if (limited) return limited;
+  return runRefresh();
+}
+
+async function runRefresh() {
   try {
     const r = await refresh();
     return Response.json({ ok: true, ...r });
@@ -84,7 +88,12 @@ export async function GET(req: Request) {
   }
 }
 
-// 관리자 수동 버튼은 POST로도 호출 가능
+// 수동 실행은 같은 출처의 관리자 POST만 허용한다. Cron용 GET에 쿠키 권한을 섞지 않는다.
 export async function POST(req: Request) {
-  return GET(req);
+  if (!isSameOriginRequest(req)) return new Response("Forbidden", { status: 403 });
+  const auth = await requireApiAdmin();
+  if (!auth.ok) return auth.response;
+  const limited = await guardAiUsage("news-refresh");
+  if (limited) return limited;
+  return runRefresh();
 }

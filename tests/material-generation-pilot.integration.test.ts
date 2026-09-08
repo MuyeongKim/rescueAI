@@ -28,6 +28,7 @@ const MATERIAL_PILOT_RUNNER = readFileSync(
   "utf-8",
 );
 
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("@/lib/auth", () => ({
   requireApiUser: async () => ({ ok: true, user: { id: "material-pilot-evaluator" } }),
 }));

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ external: vi.fn(), evidence: vi.fn(), review: vi.fn() }));
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/rag-external", () => ({ ragTableEnabled: mocks.external }));
 vi.mock("@/lib/supabase/generation-rag", () => ({ createGenerationRagReader: () => ({ verifySourceEvidence: mocks.evidence }) }));
@@ -7,6 +8,7 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: vi.fn() }));
 vi.mock("@/lib/generation-grounding-review", () => ({ reviewGenerationGrounding: mocks.review }));
 import { checkStoredMaterialGrounding } from "@/lib/generation-grounding-server";
 import { verifyNativeDocumentSourceProvenance } from "@/lib/source-provenance";
+import { guardAiUsage } from "@/lib/ai-usage";
 
 const source = { document_id: 7, doc: "장비 교범", page: 3 };
 type ServerClient = Parameters<typeof checkStoredMaterialGrounding>[0]["supabase"];
@@ -36,6 +38,12 @@ beforeEach(() => {
   vi.clearAllMocks(); mocks.external.mockReturnValue(true);
   mocks.evidence.mockResolvedValue({ sources: [source], degraded: false, contextText: "장비 사용압력 30 MPa" });
   mocks.review.mockResolvedValue({ ok: true, issues: [] });
+});
+
+it("저장·공유·내보내기 모델 검토도 예산 거절과 재시도 시간을 보존한다", async () => {
+  vi.mocked(guardAiUsage).mockResolvedValueOnce(Response.json({ error: "오늘의 공용 계정 한도" }, { status: 429, headers: { "Retry-After": "500" } }));
+  expect(await checkStoredMaterialGrounding(args)).toMatchObject({ ok: false, status: 429, retryAfterSeconds: 500 });
+  expect(mocks.review).not.toHaveBeenCalled();
 });
 
 const decision = {

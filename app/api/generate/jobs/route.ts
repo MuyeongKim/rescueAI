@@ -20,6 +20,7 @@ import {
 } from "@/lib/generated-material-save";
 import { availableModels } from "@/lib/llm";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 import { createGenerationWorkerClient } from "@/lib/supabase/generation-worker";
 import { withSupabaseRequestTimeout } from "@/lib/supabase/request-timeout";
 import { createClient } from "@/lib/supabase/server";
@@ -164,6 +165,8 @@ export async function POST(request: Request) {
     // 응답 유실 재전송은 제한하지 않고 기존 작업을 돌려준다. 실제 새 Workflow만 제한한다.
     const limited = rateLimit(`generate-job:${auth.user.id}`, 10, 60_000);
     if (!limited.ok) return tooManyRequests(limited.retryAfterSec);
+    const usageLimit = await guardAiUsage("generate-job", supabase);
+    if (usageLimit) return usageLimit;
 
     const modelCandidates = qualityFirstModels(rawRequest.model);
     if (modelCandidates.length === 0) {

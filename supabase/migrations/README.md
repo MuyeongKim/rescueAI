@@ -74,6 +74,19 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 
 | `20260906010516_generation_job_review_controls.sql` | 목차 검토·취소 상태와 소유자 전용 검토 초안·품질 문제 공개 projection |
 | `20260906010707_align_edited_slide_count.sql` | 편집 PPT 6~20장 허용, 시간별 권장 장수와 공식 저장 제한 분리 |
+| `20260908042754_close_public_rpc_leaks_and_limit_private_drafts.sql` | 인기 질문 본인 한정·폐기 RPC 차단·초안 개수와 총 용량 DB 강제 |
+| `20260908042842_enforce_password_change_completion.sql` | 초기 비밀번호 플래그 직접 변경 차단(아래 후속 파일까지 함께 적용) |
+| `20260908042907_distributed_ai_usage_budget.sql` | 계정·기능별 분당 및 계정·전체 일일 AI 가중 요청량 원자 제한 |
+| `20260908043547_harden_legacy_function_permissions.sql` | 기존 함수 검색 경로 고정·트리거 직접 실행 권한 회수 |
+| `20260908043629_use_verified_auth_password_completion.sql` | Auth 내부 해시 변경 트리거 제거·서버가 실제 비밀번호 변경 성공 후 완료 기록 |
+
+2026-09-08 보안 보완은 위 5개 파일을 앱 배포 전에 순서대로 적용합니다. 비밀번호 관련 첫 파일만
+적용하고 중단하지 않습니다. Auth는 일반 로그인 중에도 내부 해시를 갱신할 수 있으므로, 마지막
+파일이 자동 해제 트리거를 제거하고 새 비밀번호 변경 API만 완료 플래그를 기록하도록 합니다.
+이전 적용 파일은 수정하지 않습니다. 기존 계정·세션·대화·자료는 보존하며, 초안 기존 초과분은
+삭제하지 않고 용량이 줄어드는 정리 작업을 허용합니다. 사용 한도는 `security_private.ai_budget_settings`와
+`ai_usage_policy`에서 DB 관리자가 조정하며 다시 적용해도 기존 설정을 덮어쓰지 않습니다.
+신규 가입 차단은 SQL과 별도로 Supabase Auth 설정에서 적용합니다.
 
 2026-09-06 자료제작 개선은 위 두 마이그레이션을 앱 배포 전에 순서대로 적용합니다.
 기존 작업·생성물은 수정하지 않으며 checkpoint와 run_token의 비공개, 소유자 조회 RLS,

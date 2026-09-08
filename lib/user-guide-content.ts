@@ -39,12 +39,12 @@ export const USER_GUIDE_SECTIONS = [
 export type UserGuideSectionId = (typeof USER_GUIDE_SECTIONS)[number]["id"];
 
 export const USER_GUIDE_QUESTION_EXAMPLE =
-  "신규 대원 교육용으로 공기호흡기 착용 전 점검 항목을 알려줘. 준비 순서와 주의사항을 나눠서 설명해줘.";
+  "신규 대원 교육용으로 공기호흡기 착용 전 점검 항목을 체크리스트로 정리해줘.";
 
 export const USER_GUIDE_QUESTION_PARTS = [
-  { title: "상황·대상", text: "신규 대원 교육용으로" },
-  { title: "장비·주제", text: "공기호흡기 착용 전 점검 항목을" },
-  { title: "원하는 답변", text: "준비 순서와 주의사항으로 나눠서" },
+  { title: "배우려는 목적", text: "신규 대원 교육용으로" },
+  { title: "궁금한 범위", text: "공기호흡기 착용 전 점검 항목을" },
+  { title: "원하는 정리 방식", text: "체크리스트로 정리해줘" },
 ];
 
 export const USER_GUIDE_CREATE_STEPS = [

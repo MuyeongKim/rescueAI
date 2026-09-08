@@ -6,10 +6,11 @@ import { claimedGeneratedSources, sameVerifiedSourceSet, verifyNativeDocumentSou
 import { generationTextParts, inspectTechnicalGrounding, type GroundingRequest } from "@/lib/generation-grounding";
 import { reviewGenerationGrounding } from "@/lib/generation-grounding-review";
 import { inspectSlideDiagram } from "@/lib/slide-diagram";
+import { guardAiUsage } from "@/lib/ai-usage";
 import type { GeneratedDoc, GeneratedSlideDeck, GenerationQualityIssue } from "@/lib/generate";
 
 export type GroundingCheck = { ok: true } | {
-  ok: false; status: 422 | 503; error: string; issues?: GenerationQualityIssue[];
+  ok: false; status: 422 | 429 | 503; error: string; retryAfterSeconds?: number; issues?: GenerationQualityIssue[];
 };
 
 /** 저장·공유·내보내기 직전 기술 수치와 명시적 도식 관계를 서버 원문과 대조한다. 사실성 보증은 아니다. */
@@ -65,6 +66,12 @@ export async function checkStoredMaterialGrounding(args: {
       issues: quality.issues,
     };
     if (reviewIndices.length > 0) {
+      const usageLimit = await guardAiUsage("grounding-review", args.supabase);
+      if (usageLimit) {
+        const body = await usageLimit.json() as { error: string };
+        return { ok: false, status: usageLimit.status === 429 ? 429 : 503, error: body.error,
+          retryAfterSeconds: Number(usageLimit.headers.get("retry-after")) || undefined };
+      }
       const review = await reviewGenerationGrounding({
         draft, partIndices: reviewIndices,
         evidenceText, request: args.request, modelKey: "gemini-flash", timeoutMs: 35_000,

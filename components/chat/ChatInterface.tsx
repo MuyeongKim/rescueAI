@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useChat } from "ai/react";
 import type { Message } from "ai";
 import {
-  ArrowRight,
+  CircleHelp,
   AlertTriangle,
   Loader2,
   RefreshCw,
@@ -34,17 +34,12 @@ import {
 } from "@/components/ui/sheet";
 import { MessageBubble } from "@/components/chat/MessageBubble";
 import { ConversationList } from "@/components/chat/ConversationList";
+import { QuestionGuide } from "@/components/chat/QuestionGuide";
+import { USER_GUIDE_QUESTION_EXAMPLE } from "@/lib/user-guide-content";
 import { COURSE_CATEGORIES } from "@/lib/courses";
 import { ChatRequestError, chatErrorMessage, fetchChat } from "@/lib/chat-request";
 
 const DEFAULT_CATEGORIES = [...COURSE_CATEGORIES];
-
-// 인기 질문이 없을 때(집계 부족) 폴백으로 보여줄 기본 예시
-const FALLBACK_EXAMPLES = [
-  "공기호흡기 착용 전 점검 절차를 알려줘",
-  "수난 구조 시 요구조자 접근 방법은?",
-  "유압전개기 안전 사용 수칙",
-];
 
 const RESPONSE_LABELS: Record<string, string> = {
   "빠른 처리": "빠른 답변",
@@ -63,7 +58,6 @@ export function ChatInterface({
   initialInput,
   categories,
   models = [],
-  popular = [],
 }: {
   conversationId?: string;
   initialMessages?: Message[];
@@ -73,8 +67,6 @@ export function ChatInterface({
   categories?: string[];
   /** 사용 가능한 LLM 모델(자격증명 있는 것만) — 서버 availableModels() */
   models?: { key: string; label: string; note?: string }[];
-  /** 인기 질문(대원들이 자주 묻는 것) — 없으면 기본 예시로 폴백 */
-  popular?: string[];
 }) {
   const [category, setCategory] = useState<string>("자동");
   const [model, setModel] = useState<string>(models[0]?.key ?? "");
@@ -88,13 +80,14 @@ export function ChatInterface({
   const requestStartedAtRef = useRef(0);
   const [retryAt, setRetryAt] = useState(0);
   const [retrySeconds, setRetrySeconds] = useState(0);
+  const [questionHelpOpen, setQuestionHelpOpen] = useState(false);
+  const focusQuestionOnClose = useRef(false);
 
   const {
     messages,
     input,
     handleInputChange,
     handleSubmit,
-    append,
     isLoading,
     stop,
     data,
@@ -198,14 +191,15 @@ export function ChatInterface({
     handleSubmit(e, { body });
   }
 
-  function askExample(q: string) {
-    if (isLoading || retrySeconds > 0) return;
-    hasSubmittedRef.current = true;
-    stoppedRef.current = false;
-    const body = { ...requestBody(), clientRequestId: crypto.randomUUID() };
-    lastRequestRef.current = body;
-    requestStartedAtRef.current = Date.now();
-    append({ role: "user", content: q }, { body });
+  function useQuestionExample() {
+    if (isLoading || input.trim()) return;
+    setInput(USER_GUIDE_QUESTION_EXAMPLE);
+    if (questionHelpOpen) {
+      focusQuestionOnClose.current = true;
+      setQuestionHelpOpen(false);
+    } else {
+      questionRef.current?.focus();
+    }
   }
 
   function retryLastQuestion() {
@@ -227,8 +221,6 @@ export function ChatInterface({
   }
 
   const empty = messages.length === 0;
-  const examples = popular.length > 0 ? popular : FALLBACK_EXAMPLES;
-  const examplesTitle = popular.length > 0 ? "대원들이 자주 묻는 질문" : "이렇게 물어보세요";
   const unansweredSavedQuestion = !hasSubmittedRef.current && messages.at(-1)?.role === "user";
   const lastQuestion = [...messages].reverse().find((message) => message.role === "user")?.content ?? "";
   const assistantStatus = hasSubmittedRef.current
@@ -377,40 +369,23 @@ export function ChatInterface({
       >
         <div className="mx-auto max-w-3xl px-3 py-4 sm:px-4">
           {empty ? (
-            <div className="mx-auto max-w-2xl py-8 sm:py-12">
+            <div className="mx-auto max-w-2xl py-3 sm:py-7">
               <div className="flex flex-col gap-4 border-b border-slate-300 pb-6 sm:flex-row sm:items-start sm:justify-between dark:border-slate-700">
                 <div>
                   <p className="flex items-center gap-2 text-[11px] font-bold text-primary">
-                    <span className="h-0.5 w-7 bg-primary" aria-hidden /> 근거 검색 대기
+                    <span className="h-0.5 w-7 bg-primary" aria-hidden /> 질문 시작하기
                   </p>
-                  <h2 className="mt-2 text-2xl font-extrabold">무엇을 도와드릴까요?</h2>
+                  <h2 className="mt-2 text-2xl font-extrabold">이렇게 질문해 보세요</h2>
                   <p className="mt-2 text-base leading-6 text-muted-foreground sm:text-sm">
-                    교육자료에 근거해 답하고, 출처는 답변 마지막에 모아 보여드립니다.
-                    근거가 없으면 추측하지 않습니다.
+                    짧게 질문해도 괜찮아요. 목적과 궁금한 범위, 원하는 정리 방식을 더해보세요.
                   </p>
                 </div>
                 <span className="flex min-h-10 shrink-0 items-center gap-2 self-start border border-slate-300 bg-white px-3 text-xs font-semibold text-emerald-700 dark:border-slate-700 dark:bg-slate-900 dark:text-emerald-400">
                   <ShieldCheck className="h-4 w-4" aria-hidden /> 출처 확인 모드
                 </span>
               </div>
-              <div className="mt-6 flex w-full flex-col gap-2">
-                <p className="mb-1 text-left text-xs font-bold text-slate-700 dark:text-slate-200">
-                  {examplesTitle}
-                </p>
-                {examples.map((q) => (
-                  <button
-                    key={q}
-                    type="button"
-                    onClick={() => askExample(q)}
-                    className="group flex min-h-[52px] touch-manipulation items-center gap-3 border border-slate-300 bg-card px-4 text-left text-base font-medium transition-colors motion-reduce:transition-none hover:border-primary hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring dark:border-slate-700"
-                  >
-                    <span className="min-w-0 flex-1">{q}</span>
-                    <ArrowRight
-                      className="h-4 w-4 shrink-0 text-slate-400 transition-transform motion-reduce:transition-none motion-reduce:group-hover:translate-x-0 group-hover:translate-x-1 group-hover:text-primary"
-                      aria-hidden
-                    />
-                  </button>
-                ))}
+              <div className="mt-5">
+                <QuestionGuide onUseExample={useQuestionExample} hasInput={Boolean(input.trim())} isLoading={isLoading} />
               </div>
             </div>
           ) : (
@@ -471,6 +446,33 @@ export function ChatInterface({
 
       {/* 입력창 (하단 고정) */}
       <div className="border-t-2 border-slate-300 bg-background px-3 py-3 sm:px-4 dark:border-slate-700">
+        <div className="mx-auto mb-1 flex max-w-3xl justify-end">
+          <Sheet open={questionHelpOpen} onOpenChange={setQuestionHelpOpen}>
+            <SheetTrigger asChild>
+              <Button type="button" variant="ghost" className="min-h-12 gap-1.5 px-2 text-sm text-muted-foreground">
+                <CircleHelp className="h-4 w-4" aria-hidden /> 질문 도움말
+              </Button>
+            </SheetTrigger>
+            <SheetContent side="bottom"
+              className="max-h-[85dvh] overflow-y-auto border-t-4 border-t-primary px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom))] sm:px-6"
+              onCloseAutoFocus={(event) => {
+                if (!focusQuestionOnClose.current) return;
+                event.preventDefault();
+                focusQuestionOnClose.current = false;
+                questionRef.current?.focus();
+              }}>
+              <div className="mx-auto max-w-2xl">
+                <SheetHeader className="mb-5 text-left">
+                  <SheetTitle className="text-xl font-extrabold">질문 도움말</SheetTitle>
+                  <SheetDescription className="text-base leading-6">
+                    짧게 질문해도 괜찮아요. 필요한 조건을 덧붙여 보세요.
+                  </SheetDescription>
+                </SheetHeader>
+                <QuestionGuide onUseExample={useQuestionExample} hasInput={Boolean(input.trim())} isLoading={isLoading} />
+              </div>
+            </SheetContent>
+          </Sheet>
+        </div>
         <form
           onSubmit={onSubmit}
           className="mx-auto flex max-w-3xl items-center gap-2"

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   recoverStalledGenerationDispatch: vi.fn(),
 }));
 
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/demo-flag", () => ({ DEMO: false }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
@@ -32,6 +33,7 @@ vi.mock("@/lib/generation-job-dispatch", () => ({
 }));
 
 import { POST, maxDuration } from "@/app/api/generate/jobs/route";
+import { guardAiUsage } from "@/lib/ai-usage";
 
 const JOB_ID = "11111111-1111-4111-8111-111111111111";
 const CLIENT_REQUEST_ID = "22222222-2222-4222-8222-222222222222";
@@ -134,6 +136,21 @@ describe("POST /api/generate/jobs", () => {
 
   it("접수·Workflow 연결·실패 기록의 합산 deadline보다 긴 route 예산을 둔다", () => {
     expect(maxDuration).toBe(100);
+  });
+
+  it("분산 예산이 거절되면 새 작업이나 Workflow를 만들지 않는다", async () => {
+    mocks.createGenerationWorkerClient.mockReturnValueOnce(findClient(null));
+    vi.mocked(guardAiUsage).mockResolvedValueOnce(new Response(null, { status: 429 }));
+    expect((await POST(requestWith(validBody()))).status).toBe(429);
+    expect(mocks.createGenerationWorkerClient).toHaveBeenCalledTimes(1);
+    expect(mocks.dispatchGenerationJob).not.toHaveBeenCalled();
+  });
+
+  it("같은 요청의 재전송은 예산을 다시 차감하지 않고 원래 작업을 반환한다", async () => {
+    mocks.createGenerationWorkerClient.mockReturnValueOnce(findClient(jobRow({ workflow_run_id: "existing-run" })));
+    expect((await POST(requestWith(validBody()))).status).toBe(202);
+    expect(guardAiUsage).not.toHaveBeenCalled();
+    expect(mocks.dispatchGenerationJob).not.toHaveBeenCalled();
   });
 
   it("인증 실패 시 요청 본문이나 worker를 건드리지 않는다", async () => {

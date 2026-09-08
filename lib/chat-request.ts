@@ -11,8 +11,18 @@ export async function fetchChat(input: RequestInfo | URL, init?: RequestInit): P
   if (response.ok) return response;
   const retryAfter = Number(response.headers.get("retry-after"));
   const seconds = Number.isFinite(retryAfter) && retryAfter > 0 ? Math.ceil(retryAfter) : 0;
+  let usageScope: string | undefined;
+  if (response.status === 429) {
+    try {
+      const body = await response.json();
+      if (body?.code === "ai_usage_limited" && typeof body.scope === "string") usageScope = body.scope;
+    } catch { /* 기존 텍스트 429와도 호환한다. 오류 원문은 노출하지 않는다. */ }
+  }
+  const usageMessage = usageScope === "account_daily" || usageScope === "global_daily"
+    ? "오늘의 AI 생성 사용 한도에 도달했습니다. 공용 계정의 요청은 합산됩니다. 한국시간 자정 이후 다시 이용하거나 관리자에게 문의해 주세요."
+    : usageScope === "minute" ? `공용 계정의 AI 요청이 잠시 많습니다. 함께 사용하는 분들의 요청이 합산되므로 ${seconds || 60}초 후 다시 시도해 주세요.` : null;
   const message = response.status === 429
-    ? `질문 요청이 잠시 몰렸습니다.${seconds ? ` ${seconds}초 후` : " 잠시 후"} 같은 질문을 다시 시도해 주세요.`
+    ? usageMessage ?? `질문 요청이 잠시 몰렸습니다.${seconds ? ` ${seconds}초 후` : " 잠시 후"} 같은 질문을 다시 시도해 주세요.`
     : response.status === 401 || response.status === 403
       ? "로그인 상태를 확인해 주세요. 질문은 이 화면에 남아 있습니다."
       : response.status === 400

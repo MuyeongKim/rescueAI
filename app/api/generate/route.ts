@@ -25,6 +25,7 @@ import { generateRequestSchema } from "@/lib/generation-request";
 import { DEMO } from "@/lib/demo";
 import { fetchCategoryContext } from "@/lib/generate-context";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
 import {
   LimitedJsonBodyError,
@@ -182,6 +183,8 @@ export async function POST(req: Request) {
     // 무제한 호출은 막도록 사용자 기준 분당 20회로 제한한다.
     const rl = rateLimit(`generate:${auth.user.id}`, 20, 60_000);
     if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
+    const usageLimit = await guardAiUsage("generate");
+    if (usageLimit) return usageLimit;
   }
 
   let input: unknown;

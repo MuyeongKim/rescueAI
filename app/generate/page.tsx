@@ -110,9 +110,16 @@ async function loadDocsByCategory(): Promise<Record<string, string[]>> {
 export default async function GeneratePage({
   searchParams,
 }: {
-  searchParams: Promise<{ m?: string; j?: string; d?: string }>;
+  searchParams: Promise<{ m?: string; j?: string; d?: string; includeSavedDrafts?: string }>;
 }) {
   const resolvedSearchParams = await searchParams;
+  const includeSavedDrafts = resolvedSearchParams.includeSavedDrafts === "1";
+  const draftFilterParams = new URLSearchParams();
+  for (const key of ["m", "j", "d"] as const) {
+    if (resolvedSearchParams[key]) draftFilterParams.set(key, resolvedSearchParams[key]);
+  }
+  if (!includeSavedDrafts) draftFilterParams.set("includeSavedDrafts", "1");
+  const draftFilterHref = `/generate${draftFilterParams.size ? `?${draftFilterParams}` : ""}#draft-storage`;
   const docsByCategory = await loadDocsByCategory();
   const categories = Object.keys(docsByCategory);
   const models = availableModels();
@@ -121,7 +128,7 @@ export default async function GeneratePage({
     loadMaterial(resolvedSearchParams.m),
     loadGenerationJob(resolvedSearchParams.j),
     listMyGenerationJobs(),
-    listMyGenerationDrafts(),
+    listMyGenerationDrafts(includeSavedDrafts ? 50 : 12, { includeSaved: includeSavedDrafts }),
     loadMyGenerationDraft(resolvedSearchParams.d, !resolvedSearchParams.d
       ? requestedJobId ? `job:${requestedJobId}` : resolvedSearchParams.m ? `material:${resolvedSearchParams.m}` : undefined
       : undefined),
@@ -183,7 +190,17 @@ export default async function GeneratePage({
         />
       )}
 
-      <GenerationRecoveryList jobs={jobs} drafts={drafts} collapsible />
+      <section id="draft-storage" className="scroll-mt-24 space-y-3">
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-sm text-muted-foreground">편집 초안 보관함</p>
+          <Link href={draftFilterHref} className="inline-flex min-h-12 items-center rounded-sm text-sm font-semibold text-primary underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+            {includeSavedDrafts ? "미저장 초안만 보기" : "저장 완료 초안 포함해서 보기"}
+          </Link>
+        </div>
+        {includeSavedDrafts && <p className="text-sm text-muted-foreground">미저장·저장 완료 초안은 각각 200개, 합계 200 MiB까지 보관됩니다. 초안을 삭제해도 정식 저장 자료와 제작 작업은 유지됩니다.</p>}
+        <GenerationRecoveryList jobs={jobs} drafts={drafts} collapsible={!includeSavedDrafts} />
+        {includeSavedDrafts && drafts.length === 0 && <p className="text-sm text-muted-foreground">정리할 편집 초안이 없습니다.</p>}
+      </section>
 
       {recentSaved.length > 0 && (
         <details className="group/saved rounded-lg border bg-card" aria-labelledby="generation-saved-heading">

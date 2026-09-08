@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   getChatModel: vi.fn(),
 }));
 
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("@/lib/demo", () => ({
   DEMO: false,
   demoGeneratedDoc: { title: "demo", sections: [] },
@@ -28,6 +29,7 @@ vi.mock("@/lib/llm", () => ({ getChatModel: mocks.getChatModel }));
 import { maxDuration, POST } from "@/app/api/generate/route";
 import { generationProDraftCallMaxMs } from "@/lib/generation-budget";
 import { SOP_NOT_FOUND_DISCLOSURE } from "@/lib/sop-evidence";
+import { guardAiUsage } from "@/lib/ai-usage";
 
 function requestWith(body: unknown, signal?: AbortSignal): Request {
   return new Request("http://localhost/api/generate", {
@@ -113,6 +115,13 @@ describe("POST /api/generate 입력 경계", () => {
       degraded: false,
       sopEvidence: { status: "not_found", sourceLabels: [] },
     });
+  });
+
+  it("분산 예산 거절은 입력 파싱·검색·모델 실행보다 먼저 반환한다", async () => {
+    vi.mocked(guardAiUsage).mockResolvedValueOnce(new Response("공용 계정 한도", { status: 429 }));
+    expect((await POST(requestWith("{"))).status).toBe(429);
+    expect(mocks.fetchCategoryContext).not.toHaveBeenCalled();
+    expect(mocks.generateObject).not.toHaveBeenCalled();
   });
 
   it("정밀 초안에 유형별 시간을 주고 서버 종료 전 빠른 모델 복구 여유를 둔다", () => {

@@ -20,20 +20,22 @@ export async function loadMyGenerationDraft(id?: string, draftKey?: string): Pro
   return { id: data.id, draftKey: data.draft_key, revision: data.revision, updatedAt: data.updated_at, snapshot: parsed.data };
 }
 
-export async function listMyGenerationDrafts(limit = 12): Promise<GenerationDraftSummary[]> {
+export async function listMyGenerationDrafts(limit = 12, { includeSaved = false } = {}): Promise<GenerationDraftSummary[]> {
   if (DEMO) return [];
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return [];
   // 목록에는 최대 900 KiB 본문 대신 제목만 가져온다.
-  const { data, error } = await withSupabaseRequestTimeout(supabase.from("generation_drafts")
-    .select("id,draft_key,updated_at,kind:snapshot->>kind,doc_title:snapshot->doc->>title,deck_title:snapshot->deck->>title,topic:snapshot->context->>topic")
-    .eq("user_id", user.id).eq("snapshot->>saved", "false")
+  let query = supabase.from("generation_drafts")
+    .select("id,draft_key,updated_at,saved:snapshot->>saved,kind:snapshot->>kind,doc_title:snapshot->doc->>title,deck_title:snapshot->deck->>title,topic:snapshot->context->>topic")
+    .eq("user_id", user.id);
+  if (!includeSaved) query = query.eq("snapshot->>saved", "false");
+  const { data, error } = await withSupabaseRequestTimeout(query
     .order("updated_at", { ascending: false }).limit(Math.min(50, Math.max(1, limit))), 10_000);
   if (error) return [];
   return (data ?? []).flatMap((row) => {
     if (!["plan", "lesson", "slides", "notebooklm"].includes(row.kind)) return [];
     return [{ id: row.id, draftKey: row.draft_key, updatedAt: row.updated_at,
-      title: row.doc_title || row.deck_title || row.topic || "제목 없는 편집 초안", kind: row.kind }];
+      title: row.doc_title || row.deck_title || row.topic || "제목 없는 편집 초안", kind: row.kind, saved: row.saved === "true" }];
   });
 }

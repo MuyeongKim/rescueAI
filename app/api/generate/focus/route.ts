@@ -22,6 +22,7 @@ import {
 } from "@/lib/generated-material-save";
 import { getChatModel } from "@/lib/llm";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 import { createClient } from "@/lib/supabase/server";
 import {
   prioritizeTrainingFocusOptions,
@@ -143,6 +144,8 @@ export async function POST(request: Request) {
   if (!auth.ok) return auth.response;
   const rl = rateLimit(`generate-focus:${auth.user.id}`, 20, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
+  const usageLimit = await guardAiUsage("generate-focus", supabase);
+  if (usageLimit) return usageLimit;
 
   let input: unknown;
   try {

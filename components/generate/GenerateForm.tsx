@@ -4241,7 +4241,10 @@ export function GenerateForm({
             : draftRecovery.unsynced ? "편집 초안을 개인 보관함에 보관하고 있습니다…"
               : saved ? "자료가 저장되었습니다." : "편집 초안 자동보관됨 · 공식 자료 저장은 ‘저장’을 눌러 주세요."}</p>
           {draftRecovery.status === "error" && (
-            <Button type="button" variant="outline" className="min-h-12" onClick={() => void draftRecovery.flush()}>보관 다시 시도</Button>
+            <>
+              <Button type="button" variant="outline" className="min-h-12" onClick={() => void draftRecovery.flush()}>보관 다시 시도</Button>
+              <a className="inline-flex min-h-12 items-center font-semibold underline" href="/generate?includeSavedDrafts=1#draft-storage" target="_blank" rel="noopener noreferrer">초안 보관함 정리</a>
+            </>
           )}
           {draftRecovery.status === "conflict" && <Button type="button" variant="outline" className="min-h-12" onClick={() => void draftRecovery.saveCopy()}>현재 편집을 별도 초안으로 보관</Button>}
           {draftRecovery.id && <a className="inline-flex min-h-12 items-center font-semibold underline" href={`/generate?d=${draftRecovery.id}`} target="_blank" rel="noopener noreferrer">보관한 초안 열기</a>}

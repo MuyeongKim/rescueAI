@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   reconcileStalledActiveGenerationJob: vi.fn(),
 }));
 
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
 vi.mock("@/lib/auth", () => ({ requireApiUser: mocks.requireApiUser }));

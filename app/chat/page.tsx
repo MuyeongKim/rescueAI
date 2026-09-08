@@ -1,6 +1,5 @@
 import { ChatInterface } from "@/components/chat/ChatInterface";
 import { listChatCategories } from "@/lib/categories-server";
-import { getPopularQuestions } from "@/lib/popular";
 import { availableModels } from "@/lib/llm";
 
 export const dynamic = "force-dynamic";
@@ -13,16 +12,12 @@ export default async function ChatPage({
   searchParams: Promise<{ q?: string }>;
 }) {
   const resolvedSearchParams = await searchParams;
-  const [categories, popular] = await Promise.all([
-    listChatCategories(),
-    getPopularQuestions(),
-  ]);
+  const categories = await listChatCategories();
   return (
     <ChatInterface
       initialInput={resolvedSearchParams.q?.slice(0, 200)}
       categories={categories}
       models={availableModels()}
-      popular={popular}
     />
   );
 }

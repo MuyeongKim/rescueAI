@@ -34,7 +34,8 @@ lib/supabase/   client(브라우저) · server(SSR) · admin(service role, 서�
 lib/rag.ts      검색 + 컨텍스트 조립        lib/embeddings.ts  쿼리 임베딩
 lib/auth.ts     세션·프로필 조회 + API/페이지 가드   lib/safe-redirect.ts  redirect 파라미터 검증(순수)
 lib/generation-job*.ts  영속 생성 작업 공개 계약·DB projection·Workflow 시작
-lib/chat-history.ts  대화 히스토리 상한(순수)   lib/rate-limit.ts  인메모리 레이트리밋
+lib/chat-history.ts  대화 히스토리 상한(순수)   lib/rate-limit.ts  인메모리 사전 제한
+lib/ai-usage.ts  세션 기반 DB 공용 AI 요청량 제한(계정별·전체, 실패 시 차단)
 lib/generate.ts AI 자료제작 스키마·프롬프트   lib/generate-material.ts  저장본↔폼 변환(순수)
 lib/docx.ts /pptx.ts /hwpx*.ts  문서 변환(클라이언트 동적 import)
 lib/courses.ts  분야(카테고리) 상수만        lib/database.types.ts  수작성 DB 타입
@@ -97,15 +98,32 @@ eval/           평가셋 러너(vitest 통합)
   쿼리를 유지한다. 요청 하나당 SOP 전문 검색의 동시 실행 상한은 2개, 일반 전문 검색은 4개이며, 조회 제한
   시간이나 DB 정책을 넓히지 않는다. 사용자 저장행 조회·쓰기는 계속 세션 클라이언트와 RLS·개정
   번호 CAS를 사용한다.
+  초기 비밀번호 완료 처리는 `lib/supabase/password-change.ts`의 전용 writer만 예외로 둔다.
+  `/api/auth/change-password`에서 출처·세션·등록 프로필·입력·횟수를 검증하고 같은 세션의
+  Auth 비밀번호 변경 성공을 확인한 뒤, 인증된 본인 행의 `must_change_password=false`만 쓴다.
+  요청에서 사용자 ID를 받거나 Auth 내부 비밀번호 해시 변경만으로 완료 처리하지 않는다.
 - 모든 사용자 데이터 테이블은 **RLS** 적용. 본인 데이터만 접근.
+- 인기 질문도 현재 계정의 질문만 조회한다. 개인 질문을 다른 계정에 추천용 원문으로 노출하지 않는다.
+  폐기 기능은 화면 제거와 함께 DB RPC의 PUBLIC·anon·authenticated 실행 권한도 회수한다.
 - **브라우저 스토리지(localStorage/sessionStorage) 의존 금지** — 상태는 서버/DB에.
 - 인증 가드는 `lib/auth.ts` 단일 출처:
   페이지/레이아웃=`requireUserAndProfile()`(첫 로그인 비번변경 강제),
   route handler=`requireApiUser()` / 관리자 API=`requireApiAdmin()`.
   API 에서 `supabase.auth.getUser()` 를 직접 쓰지 말 것 — 비번 미변경 계정이 API 로 새어 들어온다.
+- 등록 프로필 조회 오류·누락은 접근을 차단한다. 사용자 메타데이터나 가상 프로필로
+  비밀번호 변경 상태·역할을 대신 판단하지 않는다. 초기 비밀번호 변경 API만 공통 가드에서
+  변경 필요 플래그를 예외로 하며, 세션·등록 프로필 검증은 동일하게 적용한다.
+- Supabase 신규 가입은 서버 설정에서 끄고 로그인에 `shouldCreateUser: false`를 유지한다.
+  공용 계정의 동시 로그인과 `signOut({ scope: 'local' })`는 유지한다. 비밀번호 변경 같은
+  보안 작업에서 Auth가 다른 세션을 종료할 수 있는 점은 일반 로그아웃과 구분한다.
 - **리다이렉트 파라미터는 반드시 `safeRedirectPath()` 통과** — 외부 URL·`javascript:` 차단.
-- LLM 을 태우는 엔드포인트에는 `rateLimit()` 필수(비용 방어). 클라이언트가 보낸 대화 히스토리는
-  `trimChatHistory()` 로 개수·길이를 자른다.
+- LLM 을 태우는 엔드포인트에는 `rateLimit()` 사전 제한과 실제 실행 직전 `guardAiUsage()`가
+  필요하다. DB에서 사용자·작업별 분당 상한 및 계정·전체 KST 일일 가중 요청량을 원자적으로
+  검사한다. 사용자 입력으로 한도·대상 계정을 지정하거나 확인 실패 시 제한을 우회하지 않는다.
+  Cron 뉴스만 비밀값 확인 후 서비스 역할 전용 무인자 RPC를 사용한다. 가중 요청량은 실제
+  과금액·토큰 수 보증이 아니다. 클라이언트 대화는 `trimChatHistory()`로 개수·길이를 자른다.
+- 초안은 DB에서도 미저장·저장 완료 각각 200개/합계 200MiB를 강제한다. 동시 요청·직접 API를
+  고려하고 보관 실패 시 현재 편집을 유지한 채 기존 초안을 정리할 경로를 제공한다.
 - 데모 모드(`NEXT_PUBLIC_DEMO_MODE`)는 실제 Supabase 백엔드가 붙으면 자동으로 꺼진다(`lib/demo-flag.ts`).
   플래그 하나로 미들웨어 인증이 통째로 열리므로 이 가드를 제거하지 말 것.
 

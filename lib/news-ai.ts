@@ -71,13 +71,16 @@ export async function summarizeArticle(input: {
       model: getChatModel(),
       schema,
       temperature: 0.2,
+      maxTokens: 2_048,
+      maxRetries: 0,
+      abortSignal: AbortSignal.timeout(12_000),
       prompt: `다음은 소방·구조 관련 기사입니다. 구조대원이 빠르게 파악하도록 한국어로 처리하세요.
 - summary: 핵심을 2~3문장으로 요약(해외 기사면 한국어로 번역·요약).
 - region: 국내 사안이면 "전국", 해외 사안이면 "해외".
 - category: 분야 한 단어(수난/화재/산악/구급/드론/붕괴·매몰/구조일반 중 가장 가까운 것).
 
-제목: ${input.title}
-출처: ${input.source ?? "-"}
+제목: ${input.title.slice(0, 500)}
+출처: ${(input.source ?? "-").slice(0, 200)}
 내용: ${(input.text ?? "").slice(0, 4000)}`,
       // Gemini 사고 끄기(지연↓). 타 제공자는 무시됨. GLM 요청은 lib/llm에서 버전별로 보정.
       providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },

@@ -422,6 +422,14 @@ export interface Database {
     };
     Views: Record<string, never>;
     Functions: {
+      consume_ai_budget: {
+        Args: { p_action: string };
+        Returns: Json;
+      };
+      consume_news_cron_budget: {
+        Args: Record<string, never>;
+        Returns: Json;
+      };
       fitness_leaderboard: {
         Args: { since?: string | null };
         Returns: {

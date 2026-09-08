@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { guardAiUsage } from "@/lib/ai-usage";
 
 const mocks = vi.hoisted(() => ({
   createClient: vi.fn(), requireApiUser: vi.fn(), rateLimit: vi.fn(), searchContext: vi.fn(),
@@ -6,6 +7,7 @@ const mocks = vi.hoisted(() => ({
   generateText: vi.fn(), reviewChatLearningAnswer: vi.fn(),
   streamText: vi.fn(), finishes: [] as Promise<unknown>[],
 }));
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
 vi.mock("@/lib/auth", () => ({ requireApiUser: mocks.requireApiUser }));
 vi.mock("@/lib/demo", () => ({ DEMO: false }));
@@ -142,6 +144,19 @@ beforeEach(() => {
 });
 
 describe("튜터 오류 복구와 저장 경계", () => {
+  it("분산 예산 거절 시 저장·검색·모델 호출을 시작하지 않는다", async () => {
+    vi.mocked(guardAiUsage).mockResolvedValueOnce(new Response(null, { status: 429 }));
+    expect((await POST(request())).status).toBe(429);
+    expect(messages).toHaveLength(0); expect(mocks.searchContext).not.toHaveBeenCalled();
+    expect(mocks.streamText).not.toHaveBeenCalled();
+  });
+  it("출력 상한과 마감 시간을 지정하면서 한국어 장문 답변의 백그라운드 저장을 유지한다", async () => {
+    answerText = "대원은 장비를 확인하고 동료와 점검 결과를 공유합니다.\n".repeat(70);
+    await POST(request());
+    await Promise.all(mocks.finishes);
+    expect(mocks.streamText).toHaveBeenCalledWith(expect.objectContaining({ maxTokens: 4_000, maxRetries: 0, abortSignal: expect.any(AbortSignal) }));
+    expect(messages.find(row => row.role === "assistant")?.content).toBe(answerText);
+  });
   it("인증 실패에는 저장·검색·모델 호출이 없다", async () => {
     mocks.requireApiUser.mockResolvedValue({ ok: false, response: new Response("login", { status: 401 }) });
     expect((await POST(request())).status).toBe(401);

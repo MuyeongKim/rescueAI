@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   rateLimit: vi.fn(),
 }));
 
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("@/lib/demo", () => ({
   DEMO: true,
   demoDocuments: [],

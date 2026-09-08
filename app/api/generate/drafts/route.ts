@@ -10,6 +10,10 @@ import type { Json } from "@/lib/database.types";
 const bodySchema = z.object({ draftKey: generationDraftKeySchema, revision: z.number().int().nonnegative(), snapshot: generationDraftSnapshotSchema });
 const columns = "id,draft_key,revision,updated_at";
 const deleteSchema = z.object({ id: z.string().uuid(), updatedAt: z.string().datetime({ offset: true }) }).strict();
+const storageLimitResponse = () => Response.json({
+  code: "draft_storage_limit",
+  error: "편집 초안 보관 한도에 도달했습니다. ‘초안 보관함 정리’를 새 창으로 열어 이전 초안을 정리한 뒤 다시 시도해 주세요.",
+}, { status: 409 });
 
 /** 목록에서 사용자가 명시적으로 삭제한 개인 초안만 마지막 수정 시각 CAS로 제거한다. */
 export async function DELETE(request: Request) {
@@ -59,14 +63,15 @@ export async function POST(request: Request) {
       if (!data) return Response.json({ error: "생성 작업을 찾을 수 없습니다." }, { status: 404 });
     }
     if (revision === 0) {
-      const { count, error } = await withSupabaseRequestTimeout(supabase.from("generation_drafts").select("id", { count: "exact", head: true }).eq("user_id", auth.user.id).eq("snapshot->>saved", "false"), 10_000);
+      const { count, error } = await withSupabaseRequestTimeout(supabase.from("generation_drafts").select("id", { count: "exact", head: true }).eq("user_id", auth.user.id).eq("snapshot->>saved", String(snapshot.saved)), 10_000);
       if (error) throw error;
-      if ((count ?? 0) >= 200) return Response.json({ error: "편집 초안 보관 한도에 도달했습니다. 이전 초안을 정리해 주세요." }, { status: 409 });
+      if ((count ?? 0) >= 200) return storageLimitResponse();
     }
     const query = revision === 0
       ? supabase.from("generation_drafts").insert({ user_id: auth.user.id, draft_key: draftKey, snapshot: snapshot as unknown as Json })
       : supabase.from("generation_drafts").update({ snapshot: snapshot as unknown as Json }).eq("user_id", auth.user.id).eq("draft_key", draftKey).eq("revision", revision);
     const { data, error } = await withSupabaseRequestTimeout(query.select(columns).maybeSingle(), 10_000);
+    if (error?.message?.includes("generation_drafts_storage_limit_exceeded")) return storageLimitResponse();
     if (error?.code === "23505" || (!error && !data)) {
       // 응답 유실 재전송이면 동일 스냅샷만 성공으로 인정한다. 다른 탭의 변경은 덮지 않는다.
       const current = await withSupabaseRequestTimeout(supabase.from("generation_drafts").select(`${columns},snapshot`).eq("user_id", auth.user.id).eq("draft_key", draftKey).maybeSingle(), 10_000);

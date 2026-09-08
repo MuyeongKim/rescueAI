@@ -18,6 +18,7 @@ import { reviewChatLearningAnswer } from "@/lib/chat-learning-review";
 import { answerPlanGuidance, buildChatAnswerPlan } from "@/lib/chat-answer-plan";
 import { searchContext, buildSystemPrompt, NOT_FOUND_MESSAGE } from "@/lib/rag";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 import { DEMO, demoChatAnswer, demoChatSources } from "@/lib/demo";
 import type { DocSource } from "@/lib/database.types";
 
@@ -52,6 +53,8 @@ export async function POST(req: Request) {
   // LLM 호출 남용 방지 (분당 30회/사용자)
   const rl = rateLimit(`chat:${user.id}`, 30, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
+  const usageLimit = await guardAiUsage("chat", supabase);
+  if (usageLimit) return usageLimit;
 
   let body: {
     messages?: Message[];
@@ -248,6 +251,7 @@ export async function POST(req: Request) {
         const { text } = await generateText({
           model: getChatModel(modelKey), system, messages: convertToCoreMessages(messages),
           temperature: 0.2, maxRetries: 0,
+          maxTokens: 4_000,
           abortSignal: AbortSignal.timeout(Math.max(1, Math.min(30_000, requestDeadline - Date.now() - 4_000))),
         });
         if (prepareChatAnswerText(text).replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE) {
@@ -274,6 +278,10 @@ export async function POST(req: Request) {
         system,
         messages: convertToCoreMessages(messages),
         temperature: 0.2,
+        maxTokens: 4_000,
+        maxRetries: 0,
+        // 연결 종료 뒤 답변 보관은 유지하되 함수 종료 전에 모델 호출을 닫는다.
+        abortSignal: AbortSignal.timeout(Math.max(1, requestDeadline - Date.now() - 2_000)),
         onFinish: async ({ text }) => {
           const refused = prepareChatAnswerText(text).replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE;
           // 스트리밍된 본문은 바꾸지 않는다. 모델이 전체 확인 불가로 끝냈으면

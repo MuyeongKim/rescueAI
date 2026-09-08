@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), worker: vi.fn(), client: vi.fn(), dispatch: vi.fn(), dispatchFailed: vi.fn(), cancel: vi.fn(), limited: vi.fn() }));
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/auth", () => ({ requireApiUser: mocks.auth }));
 vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.client }));
@@ -12,6 +13,7 @@ import { POST as REVIEW } from "@/app/api/generate/jobs/[id]/review/route";
 import { POST as CANCEL } from "@/app/api/generate/jobs/[id]/cancel/route";
 import { POST as RETRY } from "@/app/api/generate/jobs/[id]/retry/route";
 import { projectGenerationOutline } from "@/lib/generation-job-review";
+import { guardAiUsage } from "@/lib/ai-usage";
 
 const jobId = "10000000-0000-4000-8000-000000000001";
 const owner = "20000000-0000-4000-8000-000000000002";
@@ -67,6 +69,16 @@ beforeEach(() => {
 });
 
 describe("사용자가 제어하는 생성 작업", () => {
+  it.each([REVIEW, RETRY])("계속 생성하는 목차 승인·재시도는 예산을 통과해야 작업 상태를 바꾼다", async (route) => {
+    if (route === RETRY) job.status = "failed";
+    vi.mocked(guardAiUsage).mockResolvedValueOnce(new Response(null, { status: 429 }));
+    expect((await route(request({ revision: 3 }), context)).status).toBe(429);
+    expect(patches).toEqual([]); expect(mocks.dispatch).not.toHaveBeenCalled();
+  });
+  it("취소는 AI 예산을 차감하지 않아 한도 소진 후에도 중단할 수 있다", async () => {
+    expect((await CANCEL(request({ revision: 3 }), context)).status).toBe(200);
+    expect(guardAiUsage).not.toHaveBeenCalled();
+  });
   it.each([REVIEW, CANCEL, RETRY])("인증 실패는 원장 조회·변경 전에 차단한다", async (route) => {
     mocks.auth.mockResolvedValue({ ok: false, response: new Response(null, { status: 401 }) });
     expect((await route(request({ revision: 3 }), context)).status).toBe(401);

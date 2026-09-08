@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { requireApiAdmin } from "@/lib/auth";
 import { summarizeArticle } from "@/lib/news-ai";
 import { DEMO } from "@/lib/demo";
+import { guardAiUsage } from "@/lib/ai-usage";
 
 // 구조 동향(뉴스) 큐레이션 (관리자 전용). 관리자 검증 후 service role로 수행.
 //  POST {action:"summarize", title, text}  → AI 요약/분류 결과 반환(폼 보조)
@@ -26,6 +27,8 @@ export async function POST(req: Request) {
   if (body.action === "summarize") {
     const title = String(body.title ?? "").trim();
     if (!title) return new Response("제목이 필요합니다.", { status: 400 });
+    const limited = await guardAiUsage("news-summary");
+    if (limited) return limited;
     const result = await summarizeArticle({
       title,
       text: body.text ? String(body.text) : undefined,

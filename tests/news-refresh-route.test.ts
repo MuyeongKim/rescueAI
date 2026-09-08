@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { PGlite } from "@electric-sql/pglite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ auth: vi.fn(), collect: vi.fn(), summarize: vi.fn(), from: vi.fn(), insert: vi.fn(), read: vi.fn(), in: vi.fn() }));
+const mocks = vi.hoisted(() => ({ auth: vi.fn(), collect: vi.fn(), summarize: vi.fn(), from: vi.fn(), insert: vi.fn(), read: vi.fn(), in: vi.fn(), usage: vi.fn(), cronUsage: vi.fn() }));
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: mocks.usage, guardNewsCronUsage: mocks.cronUsage }));
 vi.mock("@/lib/auth", () => ({ requireApiAdmin: mocks.auth }));
 vi.mock("@/lib/supabase/admin", () => ({ createAdminClient: () => ({ from: mocks.from }) }));
 vi.mock("@/lib/news-feed", () => ({ collectRecentNews: mocks.collect }));
@@ -15,6 +16,7 @@ beforeEach(() => {
   vi.spyOn(console, "info").mockImplementation(() => {});
   vi.spyOn(console, "error").mockImplementation(() => {});
   mocks.auth.mockResolvedValue({ ok: false });
+  mocks.usage.mockResolvedValue(null); mocks.cronUsage.mockResolvedValue(null);
   mocks.collect.mockResolvedValue({ candidates: [article("a"), article("b")], feedFailures: 0, period: { from: "2026-08-07", to: "2026-09-05" } });
   mocks.summarize.mockResolvedValue([]);
   mocks.read.mockResolvedValue({ data: [], error: null });
@@ -32,10 +34,30 @@ describe("뉴스 자동 수집 API", () => {
   });
   it("관리자 POST를 허용하고 실제 저장수·요약 누락을 알린다", async () => {
     mocks.auth.mockResolvedValue({ ok: true });
-    const response = await POST(request("wrong"));
+    const response = await POST(new Request("https://example.com/api/news/refresh", {
+      method: "POST", headers: { origin: "https://example.com", "sec-fetch-site": "same-origin" },
+    }));
     expect(await response.json()).toMatchObject({ ok: true, added: 2, scanned: 2, summariesMissing: 2 });
     expect(mocks.in).toHaveBeenCalledWith("url", [article("a").url, article("b").url]);
     expect(mocks.insert).toHaveBeenCalledWith(expect.objectContaining({ published_on: "2026-09-04", summary: null }));
+  });
+  it("관리자 쿠키가 있어도 외부 링크 GET은 Cron으로 취급하지 않는다", async () => {
+    mocks.auth.mockResolvedValue({ ok: true });
+    expect((await GET(new Request("https://example.com/api/news/refresh", { headers: { "sec-fetch-site": "cross-site" } }))).status).toBe(403);
+    expect(mocks.auth).not.toHaveBeenCalled(); expect(mocks.collect).not.toHaveBeenCalled();
+  });
+  it.each([{}, { origin: "https://attacker.example" }, { origin: "https://example.com", "sec-fetch-site": "same-site" }])("Origin 누락·외부/다른 하위 도메인 POST는 거절한다", async (headers) => {
+    mocks.auth.mockResolvedValue({ ok: true });
+    expect((await POST(new Request("https://example.com/api/news/refresh", { method: "POST", headers }))).status).toBe(403);
+    expect(mocks.auth).not.toHaveBeenCalled(); expect(mocks.collect).not.toHaveBeenCalled();
+  });
+  it("Cron 또는 관리자 사용량 한도에 걸리면 수집·모델·DB 쓰기를 시작하지 않는다", async () => {
+    mocks.cronUsage.mockResolvedValue(new Response(null, { status: 429 }));
+    expect((await GET(request())).status).toBe(429);
+    mocks.auth.mockResolvedValue({ ok: true });
+    mocks.usage.mockResolvedValue(new Response(null, { status: 503 }));
+    expect((await POST(new Request("https://example.com/api/news/refresh", { method: "POST", headers: { origin: "https://example.com" } }))).status).toBe(503);
+    expect(mocks.collect).not.toHaveBeenCalled(); expect(mocks.summarize).not.toHaveBeenCalled(); expect(mocks.insert).not.toHaveBeenCalled();
   });
   it("기존 기사 확인 실패는 신규 기사로 오인해 재삽입하지 않는다", async () => {
     mocks.read.mockResolvedValue({ data: null, error: { message: "unavailable" } });

@@ -57,7 +57,9 @@ export async function POST(req: Request) {
       supabase,
     });
     return check.ok ? Response.json({ ok: true, scope: "source-provenance-sop-and-technical-values" })
-      : Response.json({ error: check.error, issues: check.issues ?? [] }, { status: check.status });
+      : Response.json({ error: check.error, issues: check.issues ?? [] }, {
+        status: check.status, headers: check.retryAfterSeconds ? { "Retry-After": String(check.retryAfterSeconds) } : undefined,
+      });
   } catch (error) {
     return Response.json({ error: verifying ? "원문 근거 검증을 완료하지 못했습니다. 잠시 후 다시 시도해 주세요." : "검증 요청을 읽지 못했습니다." }, {
       status: error instanceof LimitedJsonBodyError ? error.status : verifying ? 503 : 400,

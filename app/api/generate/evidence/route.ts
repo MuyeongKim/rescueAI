@@ -30,6 +30,7 @@ import {
 } from "@/lib/generated-material-save";
 import { getChatModel } from "@/lib/llm";
 import { rateLimit, tooManyRequests } from "@/lib/rate-limit";
+import { guardAiUsage } from "@/lib/ai-usage";
 import type { SopEvidence } from "@/lib/sop-evidence";
 
 export const maxDuration = 60;
@@ -265,6 +266,8 @@ export async function POST(request: Request) {
     if (!auth.ok) return auth.response;
     const rl = rateLimit(`generate-evidence:${auth.user.id}`, 20, 60_000);
     if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
+    const usageLimit = await guardAiUsage("generate-evidence");
+    if (usageLimit) return usageLimit;
   }
 
   let raw: unknown;

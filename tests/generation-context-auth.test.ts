@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({ auth: vi.fn(), rate: vi.fn(), reader: vi.fn() }));
+vi.mock("@/lib/ai-usage", () => ({ guardAiUsage: vi.fn().mockResolvedValue(null) }));
 vi.mock("server-only", () => ({}));
 vi.mock("@/lib/demo", () => ({ DEMO: false }));
 vi.mock("@/lib/auth", () => ({ requireApiUser: mocks.auth }));
