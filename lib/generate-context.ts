@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 // 자료제작 생성 컨텍스트 조회 — 전체 생성(/api/generate)과 부분 재생성(/api/generate/section)의 단일 출처.
 // 서버 전용(supabase/server·admin 의존). 클라이언트에서 import 하지 말 것.
 import { createClient } from "@/lib/supabase/server";
@@ -142,7 +143,7 @@ export async function fetchCategoryContext(
           ? fetchExternalSopContext(category, query, 4, suppliedClient)
           : createGenerationRagReader().fetchSopContext(category, query, 4));
       } catch (error) {
-        console.error("[generate-context] SOP reader unavailable:", error instanceof Error ? error.message : error);
+        console.error("[generate-context] SOP reader unavailable:", safeServerError(error));
         return { contextText: "", sources: [], bindingSources: [], degraded: true,
           evidence: { status: "degraded", sourceLabels: [] } };
       }
@@ -196,7 +197,7 @@ export async function fetchCategoryContext(
     GENERATION_CONTEXT_DB_TIMEOUT_MS
   );
   if (docsError) {
-    console.error("[generate-context] document lookup failed:", docsError.message);
+    console.error("[generate-context] document lookup failed:", safeServerError(docsError));
     return {
       contextText: "",
       sources: [],
@@ -228,7 +229,7 @@ export async function fetchCategoryContext(
     GENERATION_CONTEXT_DB_TIMEOUT_MS
   );
   if (chunksError) {
-    console.error("[generate-context] chunk lookup failed:", chunksError.message);
+    console.error("[generate-context] chunk lookup failed:", safeServerError(chunksError));
     return {
       contextText: "",
       sources: [],

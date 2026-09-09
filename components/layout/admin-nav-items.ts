@@ -4,6 +4,7 @@ import {
   Megaphone,
   Newspaper,
   Users,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -17,4 +18,5 @@ export const ADMIN_NAV_ITEMS: AdminNavItem[] = [
   { key: "admin-documents", href: "/admin/documents", label: "자료 관리", icon: FolderCog },
   { key: "admin-users", href: "/admin/users", label: "사용자 관리", icon: Users },
   { key: "admin-notices", href: "/admin/notices", label: "공지 작성", icon: Megaphone },
+  { key: "admin-mfa", href: "/admin-mfa", label: "추가 인증", icon: ShieldCheck },
 ];

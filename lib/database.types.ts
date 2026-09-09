@@ -28,6 +28,7 @@ type ProfilesRow = {
   team: string | null;
   digital_id: string | null;
   must_change_password: boolean;
+  account_ready: boolean;
   created_at: string;
 };
 type ProfilesInsert = {
@@ -40,6 +41,7 @@ type ProfilesInsert = {
   team?: string | null;
   digital_id?: string | null;
   must_change_password?: boolean;
+  account_ready?: boolean;
   created_at?: string;
 };
 

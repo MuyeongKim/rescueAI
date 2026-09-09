@@ -15,7 +15,8 @@
 ## 기술 스택
 - **Next.js 15** (App Router, TypeScript) + **Tailwind CSS v4**(`@tailwindcss/postcss`, 설정은
   `app/globals.css`의 `@theme` — `tailwind.config.ts` 없음) + **shadcn/ui**(Radix 기반, classic)
-- **Vercel AI SDK v4** (`ai`, `@ai-sdk/anthropic`) — `useChat` / `streamText` 스트리밍
+- **Vercel AI SDK v5** (`ai`, `@ai-sdk/react`, 제공자 패키지 v2) — `useChat` / UI message 스트리밍
+  (`lib/chat-message.ts`, `lib/chat-transport.ts`가 SDK 메시지와 기존 대화 저장 형식을 변환).
 - **Anthropic Claude** (`ANTHROPIC_MODEL`, 기본 `claude-sonnet-4-5`)
 - **Supabase** (PostgreSQL + pgvector + Auth + Storage), `@supabase/supabase-js` + `@supabase/ssr`
 - **임베딩**: 기본 Google `gemini-embedding-001` @ **1024차원**(MRL 절단) / 옵션 OpenAI `text-embedding-3-small`·BGE-M3·Ollama(자체 호스팅).
@@ -47,7 +48,8 @@ app/admin/  통계 + documents(자료) · users(사용자) · notices(공지 작
 components/learning/      CategoryBadge(분야색)·ProgressBar 재사용 컴포넌트 (학습 로직은 제거됨)
 components/generate/      GenerateForm(입력) · DocResult/SlideDeckResult(결과) · NotebookLmResult(저장본 호환)
                           · parts.tsx(공용 조각)
-scripts/import-users.mjs  명단(CSV) 일괄 계정 등록 (--random-password 옵션)
+scripts/import-users.mjs  명단(CSV) 신규 계정 발급 (항상 무작위 초기 비밀번호, 기존 계정 유지)
+scripts/run-app.mjs  dev/build/start 환경 검사·실행   config/database-environments.json  DB 환경별 공개 식별자
 scripts/build-setup-sql.mjs  마이그레이션 → setup_new_project.sql 생성 (npm run sql:setup)
 supabase/migrations/    0001 테이블 · 0002 RPC · 0003 트리거+RLS · 0004 학습(제거됨)
                         · 0005 플랫폼(공지·체력) · 0006 퀴즈 제거 · 0007 직원필드+비번변경
@@ -113,6 +115,23 @@ eval/           평가셋 러너(vitest 통합)
 - 등록 프로필 조회 오류·누락은 접근을 차단한다. 사용자 메타데이터나 가상 프로필로
   비밀번호 변경 상태·역할을 대신 판단하지 않는다. 초기 비밀번호 변경 API만 공통 가드에서
   변경 필요 플래그를 예외로 하며, 세션·등록 프로필 검증은 동일하게 적용한다.
+- `profiles.account_ready`는 관리자 발급 완료 상태다. 신규 계정은 `false`, 초기 비밀번호
+  변경 필요는 `true`이며, 발급이 끝나기 전에는 비밀번호 변경 API도 차단한다. 새 마이그레이션은
+  기존 계정만 `account_ready=true`로 보존한다. 클라이언트가 준비 상태를 직접 바꿀 수 없다.
+  공용·개인 테이블과 Storage의 제한적 RLS는 현재 Auth 존재·삭제/차단 상태·발급 완료·
+  비밀번호 변경 완료를 검사한다. 소유자·공유·활성 자료 조건을 대신하거나 넓히지 않는다.
+- 관리자 페이지는 `requireAdminAndProfile()`, 관리자 API는 `requireApiAdmin()`으로
+  DB 역할과 현재 검증된 TOTP·서명 검증된 세션의 `aal2`를 확인한다. `/admin-mfa`와
+  전용 등록 API만 추가 인증 전 접근을 허용한다. 일반 기능·공용 일반 계정에는 MFA를 강제하지 않는다.
+  관리자 DB 예외도 `access_private.is_verified_admin()`을 사용한다. 복구를 위해 MFA 검사를
+  끄거나 일반 사용자에게 관리자 역할을 주지 않는다. 등록·분실 절차는 `SETUP.md`를 따른다.
+- 일괄 발급은 무작위 20자 비밀번호만 사용한다. 직원 식별번호를 비밀번호로 쓰지 않는다.
+  기존 계정의 비밀번호·프로필·역할은 재실행으로 변경하지 않는다. 발급용 `*.passwords.csv`는
+  Git 제외·0600·배타적 생성으로 보관하며 완료 계정만 개별 전달한 뒤 삭제한다.
+- `npm run dev/build/start`의 `scripts/run-app.mjs` 검사를 유지한다. 비운영 실행은
+  `.env.development.local`과 `RESCUEAI_DATABASE_ENV=development`를 사용하고, 원격 개발 DB의
+  ref는 `config/database-environments.json`의 개발 목록에 등록한다. 개발 DB 미설정·미등록·
+  운영 DB 혼용은 실행을 차단한다. 운영 `.env.local` 값을 개발용으로 복사하지 않는다.
 - Supabase 신규 가입은 서버 설정에서 끄고 로그인에 `shouldCreateUser: false`를 유지한다.
   공용 계정의 동시 로그인과 `signOut({ scope: 'local' })`는 유지한다. 비밀번호 변경 같은
   보안 작업에서 Auth가 다른 세션을 종료할 수 있는 점은 일반 로그아웃과 구분한다.
@@ -138,8 +157,8 @@ eval/           평가셋 러너(vitest 통합)
 
 ## 자주 쓰는 명령
 ```bash
-npm run dev        # 개발 서버
-npm run build      # 프로덕션 빌드(타입 체크 포함)
+npm run dev        # 등록된 별도 개발 DB 또는 명시적 데모로 실행
+npm run build      # 빌드(타입 체크 포함), 비운영 실행은 개발 DB 환경 검사
 npm run lint       # ESLint
 npm run typecheck  # 타입만 체크(tsc --noEmit)
 npm test           # 단위 테스트(vitest)
@@ -150,4 +169,7 @@ cd indexing && pip install -r requirements-rag7.txt && cd .. && python rag7.py
 ```
 
 ## 환경변수
-`.env.local.example` 를 `.env.local` 로 복사 후 채운다. 키 목록·설명은 그 파일 주석 참고.
+웹앱 개발은 `.env.development.local.example`을 `.env.development.local`로 복사 후 별도 개발
+DB 값과 개발용 API 키를 채운다. 개발 DB가 없으면 먼저 로컬/별도 클라우드 구성을 결정해야 하며,
+운영 DB로 자동 연결하지 않는다. 운영 배포 변수와 서버 전용 발급·인덱싱 도구의 `.env.local`
+키 목록은 `.env.local.example`을 참고한다. 민감한 실데이터는 개발 DB에 그대로 복사하지 않는다.

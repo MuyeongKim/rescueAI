@@ -1,7 +1,6 @@
-import { redirect } from "next/navigation";
 import { Newspaper } from "lucide-react";
 
-import { requireUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireAdminAndProfile } from "@/lib/auth";
 import { listAllNews } from "@/lib/news";
 import { NewsManager } from "@/components/admin/NewsManager";
 import { NewsRefreshButton } from "@/components/admin/NewsRefreshButton";
@@ -10,8 +9,7 @@ import { OperationalHeader } from "@/components/layout/OperationalHeader";
 export const dynamic = "force-dynamic";
 
 export default async function AdminNewsPage() {
-  const { profile } = await requireUserAndProfile();
-  if (!isAdmin(profile)) redirect("/chat");
+  await requireAdminAndProfile();
 
   const items = await listAllNews();
 

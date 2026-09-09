@@ -7,7 +7,7 @@
 import { anthropic } from "@ai-sdk/anthropic";
 import { google } from "@ai-sdk/google";
 import { createOpenAI } from "@ai-sdk/openai";
-import type { LanguageModelV1 } from "ai";
+import type { LanguageModel } from "ai";
 
 type Provider = "claude" | "gemini" | "openai-compat";
 
@@ -85,7 +85,7 @@ const glmFetch: typeof fetch = async (input, init) => {
   return fetch(input, init);
 };
 
-function build(option: ModelOption): LanguageModelV1 {
+function build(option: ModelOption): LanguageModel {
   if (option.provider === "gemini") return google(option.model);
   if (option.provider === "claude") return anthropic(option.model);
   // openai-compat (z.ai GLM·내부망 Qwen·vLLM 등)
@@ -96,7 +96,8 @@ function build(option: ModelOption): LanguageModelV1 {
     apiKey: process.env.LLM_API_KEY || "not-needed",
     fetch: glmFetch,
   });
-  return compat(option.model || process.env.LLM_MODEL || "qwen3.5");
+  // SDK 5의 기본 Responses API로 바뀌지 않도록 기존 Chat Completions 경로를 명시한다.
+  return compat.chat(option.model || process.env.LLM_MODEL || "qwen3.5");
 }
 
 // 환경변수 기본 제공자에 해당하는 모델 옵션 (모델 키 미지정 시 사용)
@@ -110,7 +111,7 @@ function defaultOption(): ModelOption {
 }
 
 // 모델 키가 오면 그 모델을, 없거나 사용 불가하면 환경변수 기본값을 반환한다.
-export function getChatModel(modelKey?: string): LanguageModelV1 {
+export function getChatModel(modelKey?: string): LanguageModel {
   if (modelKey) {
     const opt = MODEL_OPTIONS.find((m) => m.key === modelKey);
     if (opt && providerReady(opt.provider)) return build(opt);

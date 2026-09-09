@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { slideDiagramSchema } from "@/lib/slide-diagram";
@@ -440,7 +441,7 @@ export async function POST(request: Request) {
         : "";
     console.error(
       "[generate/evidence] 근거 보완 실패:",
-      error instanceof Error ? error.message : error
+      safeServerError(error)
     );
     if (name === "AbortError" || name === "TimeoutError") {
       return Response.json(

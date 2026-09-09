@@ -9,6 +9,11 @@
 /.claude/
 /.vscode/
 /.ruff_cache/
+# 배포 환경변수는 Vercel 설정에서 주입한다. 로컬 키·임시 비밀번호 파일은 업로드하지 않는다.
+.env*
+**/.env*
+*.passwords.csv
+**/*.passwords.csv
 /tests/
 /eval/
 /supabase/

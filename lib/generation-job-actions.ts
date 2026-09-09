@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import "server-only";
 import { z } from "zod";
 import { getRun } from "workflow/api";
@@ -59,7 +60,7 @@ export async function generationJobAction(request: Request, id: string, action: 
           await Promise.race([getRun(current.workflow_run_id).cancel(), new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error("Workflow cancellation deadline")), 6_000);
           })]);
-        } catch (cancelError) { console.error("[generate/jobs/cancel] provider cancellation", cancelError); }
+        } catch (cancelError) { console.error("[generate/jobs/cancel] provider cancellation", safeServerError(cancelError)); }
         finally { if (timer) clearTimeout(timer); }
       }
       return Response.json({ job: toPublicGenerationJob(cancelled) }, { headers: { "Cache-Control": "no-store" } });
@@ -91,10 +92,10 @@ export async function generationJobAction(request: Request, id: string, action: 
     if (!queued) return Response.json({ error: "다른 화면에서 목차가 처리되었습니다. 최신 상태를 확인해 주세요." }, { status: 409 });
     let dispatched;
     try { dispatched = await dispatchGenerationJob(id, runToken); }
-    catch (dispatchError) { console.error("[generate/jobs/review] dispatch", dispatchError); dispatched = await markGenerationDispatchFailed(id, runToken); }
+    catch (dispatchError) { console.error("[generate/jobs/review] dispatch", safeServerError(dispatchError)); dispatched = await markGenerationDispatchFailed(id, runToken); }
     return Response.json({ job: toPublicGenerationJob(dispatched ?? queued) }, { status: 202, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    console.error(`[generate/jobs/${action}]`, error);
+    console.error(`[generate/jobs/${action}]`, safeServerError(error));
     return Response.json({ error: "작업 상태를 처리하지 못했습니다. 잠시 후 다시 시도해 주세요." }, { status: 503 });
   }
 }

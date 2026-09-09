@@ -71,7 +71,7 @@ export async function reviewChatLearningAnswer(
       const operation = generateObject({
         model: getChatModel("gemini-flash"), schema: reviewSchema,
         system: REVIEW_SYSTEM, prompt: JSON.stringify({ answer: text, contextText }),
-        temperature: 0, maxRetries: 0, maxTokens: 3_000,
+        temperature: 0, maxRetries: 0, maxOutputTokens: 3_000,
         providerOptions: { google: { thinkingConfig: { thinkingBudget: 0 } } },
         abortSignal: controller.signal,
       }).then(({ object }) => {

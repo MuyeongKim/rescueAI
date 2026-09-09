@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { z } from "zod";
 
 import { requireApiUser } from "@/lib/auth";
@@ -44,13 +45,13 @@ export async function GET(
       JOB_STATUS_DB_REQUEST_MAX_MS
     );
   } catch (lookupError) {
-    console.error("[generate/jobs/:id] lookup timeout", lookupError);
+    console.error("[generate/jobs/:id] lookup timeout", safeServerError(lookupError));
     return Response.json({ error: "생성 작업 상태 조회가 지연되고 있습니다." }, { status: 503 });
   }
   const { data, error } = lookup;
 
   if (error) {
-    console.error("[generate/jobs/:id]", error);
+    console.error("[generate/jobs/:id]", safeServerError(error));
     return Response.json({ error: "생성 작업 상태를 확인하지 못했습니다." }, { status: 500 });
   }
   if (!data) return Response.json({ error: "생성 작업을 찾을 수 없습니다." }, { status: 404 });
@@ -75,7 +76,7 @@ export async function GET(
       if (recovered) current = recovered;
     } catch (recoveryError) {
       // 다음 폴링이 같은 CAS 복구를 다시 시도할 수 있으므로 상태 조회 자체는 유지한다.
-      console.error("[generate/jobs/:id] stalled dispatch recovery", recoveryError);
+      console.error("[generate/jobs/:id] stalled dispatch recovery", safeServerError(recoveryError));
     }
   }
 
@@ -85,7 +86,7 @@ export async function GET(
       (await reconcileStalledActiveGenerationJob(publicJob, auth.user.id)) ?? publicJob;
   } catch (reconcileError) {
     // 상태 확인 안전망의 장애가 정상 폴링을 막아서는 안 된다.
-    console.error("[generate/jobs/:id] workflow reconciliation", reconcileError);
+    console.error("[generate/jobs/:id] workflow reconciliation", safeServerError(reconcileError));
   }
 
   return Response.json(

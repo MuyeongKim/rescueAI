@@ -1,9 +1,11 @@
 import { DOMParser } from "@xmldom/xmldom";
 import JSZip from "jszip";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { buildHwpxFiles } from "@/lib/hwpx";
-import { normalizeTrainingPlanHwpx } from "@/lib/hwpx-template";
+import { HWPX_XML_MAX_BYTES, normalizeTrainingPlanHwpx } from "@/lib/hwpx-template";
+
+afterEach(() => vi.restoreAllMocks());
 
 const HH_NS = "http://www.hancom.co.kr/hwpml/2011/head";
 const HP_NS = "http://www.hancom.co.kr/hwpml/2011/paragraph";
@@ -51,6 +53,32 @@ function sampleSection() {
 }
 
 describe("훈련계획 HWPX 정렬 정규화", () => {
+  it("작은 ZIP의 과대 XML을 DOM 생성 전에 거절한다", async () => {
+    const source = new JSZip();
+    source.file("mimetype", "application/hwp+zip");
+    source.file("Contents/header.xml", "X".repeat(HWPX_XML_MAX_BYTES + 1));
+    source.file("Contents/section0.xml", sampleSection());
+    const input = await source.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+    expect(input.byteLength).toBeLessThan(16 * 1024);
+    const parse = vi.spyOn(DOMParser.prototype, "parseFromString");
+    await expect(normalizeTrainingPlanHwpx(input)).rejects.toThrow("byte limit exceeded");
+    expect(parse).not.toHaveBeenCalled();
+  });
+
+  it("잘못된 XML 문서 조각을 기본 parser 로그나 반환 오류에 남기지 않는다", async () => {
+    const privateMarker = "SYNTHETIC_PRIVATE_DOCUMENT";
+    const source = new JSZip();
+    source.file("mimetype", "application/hwp+zip");
+    source.file("Contents/header.xml", sampleHeader().replace("</hh:head>", `&${privateMarker};</hh:head>`));
+    source.file("Contents/section0.xml", sampleSection());
+    const input = await source.generateAsync({ type: "uint8array", compression: "DEFLATE" });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    await expect(normalizeTrainingPlanHwpx(input)).rejects.toThrow("XML 형식이 올바르지 않습니다.");
+    expect(warn).not.toHaveBeenCalled();
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it("생성값 문단을 왼쪽 정렬하고 다중행 셀을 상단에 배치한다", async () => {
     const source = new JSZip();
     source.file("mimetype", "application/hwp+zip", { compression: "STORE" });

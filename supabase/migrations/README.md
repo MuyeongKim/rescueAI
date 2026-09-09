@@ -79,8 +79,47 @@ supabase test db supabase/tests/generated_materials_sharing_rls_test.sql --local
 | `20260908042907_distributed_ai_usage_budget.sql` | 계정·기능별 분당 및 계정·전체 일일 AI 가중 요청량 원자 제한 |
 | `20260908043547_harden_legacy_function_permissions.sql` | 기존 함수 검색 경로 고정·트리거 직접 실행 권한 회수 |
 | `20260908043629_use_verified_auth_password_completion.sql` | Auth 내부 해시 변경 트리거 제거·서버가 실제 비밀번호 변경 성공 후 완료 기록 |
+| `20260909112954_require_ready_accounts_for_data_access.sql` | 신규 발급 준비 상태·현재 Auth 계정 검사·공용/개인 RLS와 Storage 접근 제한·관리자 예외의 TOTP/AAL2 |
 
-2026-09-08 보안 보완은 위 5개 파일을 앱 배포 전에 순서대로 적용합니다. 비밀번호 관련 첫 파일만
+### 2026-09-09 계정·관리자 경계 적용
+
+이전 마이그레이션들을 적용한 뒤 `20260909112954_require_ready_accounts_for_data_access.sql`을
+**앱 배포와 새 계정 발급 전에** 실행합니다. `npm run sql:setup`으로 생성한 통합 SQL은 새 DB용이며,
+기존 DB에 통째로 다시 적용하는 대신 새 파일만 적용합니다. 적용 이력과 실제 조회 결과를 별도로
+확인해야 하며 문서나 통합 SQL 생성 자체가 운영 적용 완료를 의미하지 않습니다.
+
+- 기존 프로필에는 `account_ready=true`를 추가하고 기존 비밀번호·변경 필요 상태·세션·자료를
+  보존합니다. 이후 새 프로필은 `account_ready=false`, `must_change_password=true`로 생성합니다.
+  Auth 사용자 메타데이터는 발급 준비 상태·역할·비밀번호 완료의 근거로 사용하지 않습니다.
+- `access_private.is_registered_account()`는 현재 Auth 존재·삭제/차단 상태와 발급 완료를 확인합니다.
+  `is_active_account()`는 비밀번호 변경 완료도 확인합니다. helper는 인자 없는 비공개 스키마의
+  함수이며 Auth 테이블 내용을 클라이언트에 공개하지 않습니다.
+- 공용 자료·개인 데이터 12개 테이블과 Storage의 제한적 정책은 기존 허용 조건과 AND로 결합합니다.
+  본인/공유/활성 자료 범위를 넓히지 않으며, service role의 적재·worker 권한은 유지합니다.
+  본인 프로필은 초기 비밀번호 변경에 필요한 범위에서 읽을 수 있습니다. 발급 미완료 계정은
+  비밀번호 변경 API로도 준비 상태를 해제할 수 없습니다.
+- 관리자 타인 메시지/과거 운동기록 조회와 관리 AI 예산에는 `is_verified_admin()`이
+  관리자 역할·현재 검증된 TOTP·JWT AAL2를 함께 확인합니다. 일반 기능과 일반 AI 사용에는
+  관리자도 AAL1을 유지할 수 있습니다. 앱 가드와 `/admin-mfa` 등록 화면을 함께 배포합니다.
+- 공개 접속 통계 조회는 유지하며, 접속 기록과 AI 예산의 SECURITY DEFINER 경로는 같은
+  계정 상태 검사를 다시 수행합니다. 단순 RLS 추가만으로 definer 함수가 보호된다고 간주하지 않습니다.
+
+적용 전 `auth.users.deleted_at/banned_until`과 `auth.mfa_factors.user_id/status/factor_type`가 있는지
+확인합니다. 새 계정은 CSV 발급 완료 또는 신규 계정만 대상으로 한 관리자 설정 후에 이용할 수 있습니다.
+수동 최초 관리자 생성·비밀번호 파일 0600 보관·MFA 등록/분실 복구는 [`SETUP.md`](../../SETUP.md)를
+따릅니다. 정상 합성 계정에는 `account_ready=true`와 비밀번호 변경 완료를 설정해 검증합니다.
+
+`tests/account-access-migration.test.ts`는 실제 PostgreSQL(PGlite)에서 반복 적용·기존 계정/세션
+보존, 채워진 공용/개인 테이블·Storage·키워드 검색의 차단, 신규 발급, 관리자 MFA 예외와 서비스
+역할 유지를 검사합니다. `tests/import-users.test.ts`는 발급 실패·삭제 실패·파일 저장 실패와
+무작위 비밀번호·기존 계정 유지·0600/덮어쓰기 차단을 검사합니다. 실제 Supabase의 서명 JWT·
+MFA 등록과 HTTPS Storage 동작은 대상 환경의 합성 계정으로 추가 확인해야 합니다.
+
+SQL 외 운영 설정은 별도로 관리합니다. SSL 강제·직접 PostgreSQL/pooler 허용 IP 제한은
+HTTPS Data API·Auth·Storage에 적용되지 않습니다. 개발 DB는 별도 생성 후 같은 스키마와 합성
+데이터를 준비하고, 원격 ref를 `config/database-environments.json`에 등록해야 합니다.
+
+2026-09-08 보안 보완은 `20260908`로 시작하는 위 5개 파일을 앱 배포 전에 순서대로 적용합니다. 비밀번호 관련 첫 파일만
 적용하고 중단하지 않습니다. Auth는 일반 로그인 중에도 내부 해시를 갱신할 수 있으므로, 마지막
 파일이 자동 해제 트리거를 제거하고 새 비밀번호 변경 API만 완료 플래그를 기록하도록 합니다.
 이전 적용 파일은 수정하지 않습니다. 기존 계정·세션·대화·자료는 보존하며, 초안 기존 초과분은

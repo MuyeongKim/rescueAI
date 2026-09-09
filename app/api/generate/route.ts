@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { generateObject } from "ai";
 import { getChatModel } from "@/lib/llm";
 import { requireApiUser } from "@/lib/auth";
@@ -277,7 +278,7 @@ export async function POST(req: Request) {
         } else {
           console.warn(
             `[generate] ${reason}, 빠른 모델로 전환:`,
-            error instanceof Error ? error.message : "unknown error"
+            safeServerError(error)
           );
         }
       };
@@ -405,7 +406,7 @@ export async function POST(req: Request) {
           }
         } catch (repairError) {
           generationBudgetLimited ||= isGenerationBudgetError(repairError);
-          console.error("[generate] 슬라이드 자동 보완 실패, 1차 초안 반환:", repairError);
+          console.error("[generate] 슬라이드 자동 보완 실패, 1차 초안 반환:", safeServerError(repairError));
         }
       } else if (!report.ok) {
         generationBudgetLimited = true;
@@ -512,7 +513,7 @@ export async function POST(req: Request) {
         }
       } catch (repairError) {
         generationBudgetLimited ||= isGenerationBudgetError(repairError);
-        console.error("[generate] 문서 자동 보완 실패, 1차 초안 반환:", repairError);
+        console.error("[generate] 문서 자동 보완 실패, 1차 초안 반환:", safeServerError(repairError));
       }
     } else if (!report.ok) {
       generationBudgetLimited = true;
@@ -541,7 +542,7 @@ export async function POST(req: Request) {
       ),
     } satisfies GeneratedDoc & { quality: QualityMeta });
   } catch (e) {
-    console.error("[generate] 실패:", e);
+    console.error("[generate] 실패:", safeServerError(e));
     if (isGenerationBudgetError(e)) {
       return Response.json(
         { error: "생성 시간이 길어 요청을 안전하게 종료했습니다. 잠시 후 다시 시도해 주세요." },

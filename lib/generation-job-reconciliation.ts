@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import "server-only";
 
 import { getRun } from "workflow/api";
@@ -100,7 +101,7 @@ export async function reconcileStalledActiveGenerationJob(
   );
   if (candidateError || !candidateData) {
     if (candidateError) {
-      console.error("[generation-job-reconciliation] candidate", candidateError);
+      console.error("[generation-job-reconciliation] candidate", safeServerError(candidateError));
     }
     return null;
   }
@@ -133,7 +134,7 @@ export async function reconcileStalledActiveGenerationJob(
     HEALTH_DB_REQUEST_TIMEOUT_MS
   );
   if (claimError || !claimedData) {
-    if (claimError) console.error("[generation-job-reconciliation] claim", claimError);
+    if (claimError) console.error("[generation-job-reconciliation] claim", safeServerError(claimError));
     return null;
   }
   const claimed = claimedData as unknown as HealthJobRow;
@@ -184,7 +185,7 @@ export async function reconcileStalledActiveGenerationJob(
         HEALTH_DB_REQUEST_TIMEOUT_MS
       );
       if (missingError) {
-        console.error("[generation-job-reconciliation] missing run", missingError);
+        console.error("[generation-job-reconciliation] missing run", safeServerError(missingError));
         return toPublicGenerationJob(claimed);
       }
       return missingData
@@ -192,7 +193,7 @@ export async function reconcileStalledActiveGenerationJob(
         : toPublicGenerationJob(claimed);
     }
     // 네트워크 단절, 5xx, API 시간 초과는 상태 미상이다. 정상 실행을 오판하지 않는다.
-    console.error("[generation-job-reconciliation] workflow status", error);
+    console.error("[generation-job-reconciliation] workflow status", safeServerError(error));
     return toPublicGenerationJob(claimed);
   }
   if (workflowStatus === "pending" || workflowStatus === "running") {
@@ -211,7 +212,7 @@ export async function reconcileStalledActiveGenerationJob(
           .maybeSingle(),
         HEALTH_DB_REQUEST_TIMEOUT_MS
       );
-      if (resetError) console.error("[generation-job-reconciliation] reset missing", resetError);
+      if (resetError) console.error("[generation-job-reconciliation] reset missing", safeServerError(resetError));
       if (resetData) return toPublicGenerationJob(resetData as unknown as HealthJobRow);
     }
     return toPublicGenerationJob(claimed);
@@ -248,7 +249,7 @@ export async function reconcileStalledActiveGenerationJob(
     HEALTH_DB_REQUEST_TIMEOUT_MS
   );
   if (failedError) {
-    console.error("[generation-job-reconciliation] finalize", failedError);
+    console.error("[generation-job-reconciliation] finalize", safeServerError(failedError));
     return toPublicGenerationJob(claimed);
   }
   if (failedData) return toPublicGenerationJob(failedData as unknown as HealthJobRow);

@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import type { createClient } from "@/lib/supabase/server";
 import { generatedSourceLabels, type GenType } from "@/lib/generate";
 import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
@@ -81,7 +82,7 @@ export async function verifySopBeforeSave(
       // 구분해 장애 상태 전용 고정 안내문을 요구한다.
       console.error(
         "[generate/save] SOP 근거 재검증 실패:",
-        error instanceof Error ? error.message : error
+        safeServerError(error)
       );
       expected = { status: "degraded", sourceLabels: [] };
     }
@@ -148,7 +149,7 @@ export function trustedRagVerificationReader(): GenerationRagReader | null | Res
   } catch (error) {
     console.error(
       "[generate/save] 서버 RAG 검증기 준비 실패:",
-      error instanceof Error ? error.message : error
+      safeServerError(error)
     );
     return Response.json(
       {

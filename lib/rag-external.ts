@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 // 외부에서 임베딩해 적재한 LangChain 형식 벡터 테이블(예: rag_rescue) 연동 어댑터.
 // RAG_TABLE 환경변수가 설정되면 lib/rag.ts·/api/generate 가 이 모듈을 사용한다.
 //
@@ -284,7 +285,7 @@ export async function verifyExternalRagSourceProvenance(
     const results = await Promise.all(requests);
     const queryError = results.find((result) => result.error)?.error;
     if (queryError) {
-      console.error("[rag-external] 저장 출처 검증 실패:", queryError.message);
+      console.error("[rag-external] 저장 출처 검증 실패:", safeServerError(queryError));
       return { sources: [], degraded: true };
     }
     // 응답 상한에 닿으면 일부 요청 페이지가 잘렸을 수 있으므로 안전하게 재시도를 요구한다.
@@ -342,7 +343,7 @@ export async function verifyExternalRagSourceProvenance(
   } catch (error) {
     console.error(
       "[rag-external] 저장 출처 검증 요청 실패:",
-      error instanceof Error ? error.message : error
+      safeServerError(error)
     );
     return { sources: [], degraded: true };
   }
@@ -1259,7 +1260,7 @@ export async function expandQuery(
       keywords: Array.isArray(object.keywords) ? object.keywords : [],
     };
   } catch (e) {
-    console.error("[rag-external] 쿼리 확장 실패, 원문 사용:", e);
+    console.error("[rag-external] 쿼리 확장 실패, 원문 사용:", safeServerError(e));
     return { embedText: query, keywords: [] };
   }
 }
@@ -1310,7 +1311,7 @@ async function llmRerank(
     }
     return picked;
   } catch (e) {
-    console.error("[rag-external] 재순위 실패, 융합 순서 유지:", e);
+    console.error("[rag-external] 재순위 실패, 융합 순서 유지:", safeServerError(e));
     return items.slice(0, keep);
   }
 }
@@ -1409,7 +1410,7 @@ async function keywordRowsForPlan(
         })
       );
       if (error) {
-        console.error("[rag-external] keyword error:", error.message);
+        console.error("[rag-external] keyword error:", safeServerError(error));
         results.push({ rows: [], degraded: true });
       } else {
         results.push({
@@ -1420,7 +1421,7 @@ async function keywordRowsForPlan(
     } catch (error) {
       console.error(
         "[rag-external] keyword request failed:",
-        error instanceof Error ? error.message : error
+        safeServerError(error)
       );
       results.push({ rows: [], degraded: true });
     }
@@ -1673,14 +1674,14 @@ async function hybridCandidates(
         })
       );
       if (error) {
-        console.error("[rag-external] vector error:", error.message);
+        console.error("[rag-external] vector error:", safeServerError(error));
         return { rows: [] as RagRow[], degraded: true };
       }
       return { rows: (data ?? []) as RagRow[], degraded: false };
     } catch (error) {
       console.error(
         "[rag-external] vector request failed:",
-        error instanceof Error ? error.message : error
+        safeServerError(error)
       );
       return { rows: [] as RagRow[], degraded: true };
     }
@@ -2097,7 +2098,7 @@ async function discoverCategorySources(
     );
 
     if (error) {
-      console.error("[rag-external] source discovery error:", error.message);
+      console.error("[rag-external] source discovery error:", safeServerError(error));
       return null;
     }
 
@@ -2147,7 +2148,7 @@ async function fetchRowsByCategorySources(
   const rows: RagRow[] = [];
   for (const result of results) {
     if (result.error) {
-      console.error("[rag-external] source context error:", result.error.message);
+      console.error("[rag-external] source context error:", safeServerError(result.error));
       continue;
     }
     rows.push(...((result.data ?? []) as RagRow[]));
@@ -2171,7 +2172,7 @@ async function fetchLegacyCategoryRows(
   );
 
   if (error) {
-    console.error("[rag-external] fetch context error:", error.message);
+    console.error("[rag-external] fetch context error:", safeServerError(error));
     return null;
   }
   return (data ?? []) as RagRow[];
@@ -2209,7 +2210,7 @@ export async function fetchExternalRagContext(
       retrievalDegraded = true;
       console.error(
         "[rag-external] 생성용 벡터 검색 비활성화, 키워드 검색으로 진행:",
-        error instanceof Error ? error.message : error
+        safeServerError(error)
       );
     }
 
@@ -2251,7 +2252,7 @@ export async function fetchExternalRagContext(
       retrievalDegraded = true;
     } catch (e) {
       retrievalDegraded = true;
-      console.error("[rag-external] 주제 키워드 검색까지 실패, 분야 전체로 폴백:", e);
+      console.error("[rag-external] 주제 키워드 검색까지 실패, 분야 전체로 폴백:", safeServerError(e));
     }
   }
 
@@ -2399,7 +2400,7 @@ export async function fetchExternalSopContext(
             .limit(32);
           const { data, error } = await withRagDbTimeout(request);
           if (error) {
-            console.error("[rag-external] SOP keyword error:", error.message);
+            console.error("[rag-external] SOP keyword error:", safeServerError(error));
             return { rows: [] as RagRow[], degraded: true, terms: plan.terms };
           }
           const relevantRows = ((data ?? []) as RagRow[]).filter((row) =>
@@ -2413,7 +2414,7 @@ export async function fetchExternalSopContext(
         } catch (error) {
           console.error(
             "[rag-external] SOP keyword request failed:",
-            error instanceof Error ? error.message : error
+            safeServerError(error)
           );
           return { rows: [] as RagRow[], degraded: true, terms: plan.terms };
         }
@@ -2470,7 +2471,7 @@ export async function listExternalRagCategories(): Promise<Record<string, string
         .range(from, from + PAGE - 1)
     );
     if (error) {
-      console.error("[rag-external] list categories error:", error.message);
+      console.error("[rag-external] list categories error:", safeServerError(error));
       break;
     }
     const rows = (data ?? []) as { category: string | null; source: string | null }[];

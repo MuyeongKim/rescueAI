@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import "server-only";
 
 import { start } from "workflow/api";
@@ -52,7 +53,7 @@ export async function dispatchGenerationJob(jobId: string, runToken: string) {
   );
 
   if (error) {
-    console.error("[generation-job-dispatch] workflow run id persist", error);
+    console.error("[generation-job-dispatch] workflow run id persist", safeServerError(error));
     return null;
   }
   return data;
@@ -152,7 +153,7 @@ export async function recoverStalledGenerationDispatch(
   try {
     return (await dispatchGenerationJob(jobId, runToken)) ?? claimed;
   } catch (dispatchError) {
-    console.error("[generation-job-dispatch] stalled workflow recovery", dispatchError);
+    console.error("[generation-job-dispatch] stalled workflow recovery", safeServerError(dispatchError));
     return (await markGenerationDispatchFailed(jobId, runToken)) ?? claimed;
   }
 }

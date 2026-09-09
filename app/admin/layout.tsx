@@ -1,19 +1,13 @@
-import { redirect } from "next/navigation";
 import { AppSidebar } from "@/components/layout/AppSidebar";
 import { AdminNav } from "@/components/admin/AdminNav";
-import { requireUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireAdminAndProfile } from "@/lib/auth";
 
 export default async function AdminLayout({
   children,
 }: {
   children: React.ReactNode;
 }) {
-  const { user, profile } = await requireUserAndProfile();
-
-  // 접근 제어 (AC-9): 관리자만. 아니면 /chat 으로.
-  if (!isAdmin(profile)) {
-    redirect("/chat");
-  }
+  const { user } = await requireAdminAndProfile();
 
   return (
     <div className="flex h-screen">

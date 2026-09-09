@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { createClient } from "@/lib/supabase/server";
 import { getQueryEmbedding, toPgVector } from "@/lib/embeddings";
 import {
@@ -76,7 +77,7 @@ export async function searchContext(
       degraded = true;
       console.error(
         "[rag] 벡터 검색 비활성화, 키워드 검색으로 진행:",
-        error instanceof Error ? error.message : error
+        safeServerError(error)
       );
     }
     const result = await searchExternalRag(
@@ -101,7 +102,7 @@ export async function searchContext(
   });
 
   if (error) {
-    console.error("[rag] hybrid_search error:", error.message);
+    console.error("[rag] hybrid_search error:", safeServerError(error));
     return { contextText: "", sources: [], matched: 0, degraded: true };
   }
 

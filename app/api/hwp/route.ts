@@ -8,9 +8,13 @@ import {
 } from "@/lib/document-export";
 import { normalizeHwpxCellText } from "@/lib/hwpx-format";
 import { claimedGeneratedSources } from "@/lib/source-provenance";
+import { z } from "zod";
+import { LimitedJsonBodyError, readLimitedJsonBody } from "@/lib/generated-material-save";
+import { fetchHwpBytes, HWP_FILE_MAX_BYTES, HWP_METADATA_MAX_BYTES, HWP_REQUEST_MAX_BYTES } from "@/lib/hwp-upstream";
+import { safeServerError } from "@/lib/safe-server-error";
 
 // 한글(hwpx) 파일 생성 — 미니서버(hwp-writer-api)에 서버 대 서버로 중계한다.
-// API 키는 서버 env 에만 두고, 생성→다운로드 2단계를 여기서 처리해 파일을 그대로 스트리밍.
+// API 키는 서버 env 에만 두고, 생성→다운로드 2단계를 여기서 처리해 크기를 확인한 파일만 반환.
 // 미설정(501)/장애(502) 시 클라이언트(lib/hwpx-download.ts)가 로컬 생성(lib/hwpx.ts)으로 폴백한다.
 //
 // 두 경로:
@@ -18,18 +22,20 @@ import { claimedGeneratedSources } from "@/lib/source-provenance";
 //  - 그 외: 제목 + 섹션 본문을 /generate/plain 으로 단순 생성.
 export const maxDuration = 60;
 
-const TIMEOUT_MS = 20_000;
-
 type Section = { heading?: string; content?: string };
-type PlanMeta = {
-  topic?: string;
-  datetime?: string;
-  formType?: string; // 훈련형태
-  method?: string; // 훈련방법
-  duration?: string;
-  target?: string; // 훈련대상
-  place?: string;
-};
+const optionalMeta = z.string().max(1000).optional();
+const hwpRequestSchema = z.object({
+  title: z.string().trim().min(1).max(200),
+  sections: z.array(z.object({
+    heading: z.string().max(300).optional(),
+    content: z.string().max(60_000).optional(),
+  })).min(1).max(50),
+  sources: z.unknown(),
+  template: z.string().max(50).optional(),
+  plan: z.object({ topic: optionalMeta, datetime: optionalMeta, formType: optionalMeta,
+    method: optionalMeta, duration: optionalMeta, target: optionalMeta, place: optionalMeta,
+  }).optional(),
+});
 
 // 고정 제목 섹션에서 값 찾기(제목에 키워드 포함 여부로 확정 매핑)
 function pick(sections: Section[], keyword: string): string {
@@ -52,24 +58,16 @@ export async function POST(req: Request) {
   const rl = rateLimit(`hwp:${session.user.id}`, 15, 60_000);
   if (!rl.ok) return tooManyRequests(rl.retryAfterSec);
 
-  let body: {
-    title?: string;
-    sections?: Section[];
-    sources?: unknown;
-    template?: string;
-    plan?: PlanMeta;
-  };
+  let body: z.infer<typeof hwpRequestSchema>;
   try {
-    body = await req.json();
-  } catch {
-    return new Response("Bad Request", { status: 400 });
+    body = hwpRequestSchema.parse(await readLimitedJsonBody(req, HWP_REQUEST_MAX_BYTES));
+  } catch (error) {
+    return Response.json({ error: error instanceof LimitedJsonBodyError && error.status === 413
+      ? "한글 변환 요청은 256KiB 이하로 줄여 주세요." : "한글 문서의 제목과 본문 형식을 확인해 주세요." },
+    { status: error instanceof LimitedJsonBodyError ? error.status : 400 });
   }
 
-  const title = body.title?.trim().slice(0, 200);
-  const rawSections = Array.isArray(body.sections) ? body.sections.slice(0, 50) : [];
-  if (!title || rawSections.length === 0) {
-    return new Response("title과 sections가 필요합니다.", { status: 400 });
-  }
+  const { title, sections: rawSections } = body;
   const claimedSources = claimedGeneratedSources({ sources: body.sources });
   if (!claimedSources.ok || claimedSources.sources.length === 0) {
     return Response.json(
@@ -160,28 +158,30 @@ export async function POST(req: Request) {
 
   try {
     // 1) 생성 요청 → {ok, download_path}
-    const gen = await fetch(endpoint, {
+    const payloadText = JSON.stringify(payload);
+    if (new TextEncoder().encode(payloadText).byteLength > HWP_REQUEST_MAX_BYTES) {
+      return Response.json({ error: "한글 변환 요청은 256KiB 이하로 줄여 주세요." }, { status: 413 });
+    }
+    const gen = await fetchHwpBytes(endpoint, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (!gen.ok) throw new Error(`generate 응답 ${gen.status}`);
-    const meta = (await gen.json()) as { ok?: boolean; download_path?: string };
-    if (!meta.ok || !meta.download_path) throw new Error("generate 응답 형식 오류");
+      body: payloadText,
+    }, HWP_METADATA_MAX_BYTES, req.signal);
+    const meta = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(gen)) as { ok?: boolean; download_path?: unknown };
+    if (meta.ok !== true || typeof meta.download_path !== "string" ||
+      !meta.download_path.startsWith("/") || meta.download_path.startsWith("//") ||
+      /[\\\r\n]/.test(meta.download_path)) throw new Error("generate 응답 형식 오류");
 
-    // 2) 파일 다운로드 → 브라우저로 스트리밍 (파일명은 클라이언트가 지정)
-    const file = await fetch(`${base}${meta.download_path}`, {
+    // 2) 파일 다운로드 → 실제 수신 크기 검사 후 반환 (파일명은 클라이언트가 지정)
+    const original = await fetchHwpBytes(`${base}${meta.download_path}`, {
       headers: auth,
-      signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    if (!file.ok) throw new Error(`download 응답 ${file.status}`);
+    }, HWP_FILE_MAX_BYTES, req.signal);
 
-    const original = new Uint8Array(await file.arrayBuffer());
     const output =
       body.template === "training_plan"
-        ? await normalizeTrainingPlanHwpx(original)
+        ? await normalizeTrainingPlanHwpx(original, { signal: req.signal })
         : original;
+    if (output.byteLength > HWP_FILE_MAX_BYTES) throw new Error("HWP normalized output limit exceeded");
     const responseBody = new ArrayBuffer(output.byteLength);
     new Uint8Array(responseBody).set(output);
 
@@ -189,7 +189,7 @@ export async function POST(req: Request) {
       headers: { "Content-Type": "application/vnd.hancom.hwpx" },
     });
   } catch (e) {
-    console.error("[hwp] 미니서버 호출 실패:", e instanceof Error ? e.message : e);
+    console.error("[hwp] 미니서버 호출 실패:", safeServerError(e));
     return Response.json(
       { error: "한글 작성 서버에 연결할 수 없습니다." },
       { status: 502 }

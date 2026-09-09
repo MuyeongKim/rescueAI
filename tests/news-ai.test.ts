@@ -16,7 +16,7 @@ describe("뉴스 헤드라인 배치 요약", () => {
     mocks.generateObject.mockResolvedValue({ object: { items } });
     expect(await summarizeHeadlines(headlines)).toEqual(items);
     expect(timeout).toHaveBeenCalledExactlyOnceWith(12_000);
-    expect(mocks.generateObject).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: controller.signal, maxRetries: 0, maxTokens: 2_048 }));
+    expect(mocks.generateObject).toHaveBeenCalledWith(expect.objectContaining({ abortSignal: controller.signal, maxRetries: 0, maxOutputTokens: 2_048 }));
     const prompt = mocks.generateObject.mock.calls[0][0].prompt;
     expect(prompt).toContain("기사 본문은 제공되지 않았습니다");
     expect(prompt).toContain("기술 성능·수치, 도입 효과");

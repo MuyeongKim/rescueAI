@@ -98,10 +98,11 @@ async function embedGoogle(text: string): Promise<number[]> {
   }
   const model = process.env.GOOGLE_EMBEDDING_MODEL || "gemini-embedding-001";
   const { embedding } = await embed({
-    model: google.textEmbeddingModel(model, {
+    model: google.textEmbeddingModel(model),
+    providerOptions: { google: {
       outputDimensionality: EMBEDDING_DIM,
       taskType: "RETRIEVAL_QUERY",
-    }),
+    } },
     value: text,
     abortSignal: AbortSignal.timeout(REMOTE_EMBEDDING_TIMEOUT_MS),
   });

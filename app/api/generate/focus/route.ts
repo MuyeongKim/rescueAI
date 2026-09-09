@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { generateObject } from "ai";
 import { z } from "zod";
 
@@ -190,7 +191,7 @@ export async function POST(request: Request) {
       );
     }
     if (historyResult.error) {
-      console.error("[generate/focus] 최근 개인 자료 조회 실패:", historyResult.error.message);
+      console.error("[generate/focus] 최근 개인 자료 조회 실패:", safeServerError(historyResult.error));
     }
 
     const allowedSourceRefs = extractSourceLabels(context.contextText);
@@ -303,7 +304,7 @@ export async function POST(request: Request) {
   } catch (error) {
     console.error(
       "[generate/focus] 세부 방향 추천 실패:",
-      error instanceof Error ? error.message : error
+      safeServerError(error)
     );
     if (isFocusBudgetError(error)) {
       return Response.json(

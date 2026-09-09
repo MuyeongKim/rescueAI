@@ -7,6 +7,30 @@ AI 튜터는 인덱싱된 자료를 검색해 출처와 페이지를 함께 제�
 현재는 중간보고와 사용성 검증을 위한 PoC 단계이며, 검증 이후 애플리케이션, 데이터베이스,
 LLM 및 임베딩 서비스를 내부망 서버로 이전하는 것을 목표로 합니다.
 
+## 2026-09-09 보안 보완 적용 지침
+
+앱을 배포하기 전에 `20260909112954_require_ready_accounts_for_data_access.sql`을 적용합니다.
+적용·배포 여부는 문서 존재가 아니라 대상 DB의 마이그레이션 이력과 실제 실행 결과로 확인합니다.
+
+- **계정 상태와 자료 권한:** DB에서도 현재 Auth 계정·등록 프로필·발급 완료·비밀번호 변경 완료를
+  검사합니다. 공용 자료 접근과 개인 자료 소유권 정책에 함께 적용하며 기존 계정·세션은 보존합니다.
+- **신규 발급:** `account_ready=false`, `must_change_password=true`로 시작해 발급을 마친 뒤에만
+  로그인 후 비밀번호를 변경할 수 있습니다. 일괄 발급은 무작위 20자 비밀번호를 사용하고 기존
+  계정은 변경하지 않습니다. 비밀번호 파일은 0600으로 보관하고 개별 전달 후 삭제합니다.
+- **관리자 추가 인증:** `/admin-mfa`에서 인증 앱을 등록합니다. 관리 화면·API와 DB의 관리자
+  예외에는 추가 인증이 필요하며, 공용 일반 계정의 동시 로그인과 일반 기능은 유지합니다.
+- **개발·운영 분리:** `npm run dev/build/start`는 DB 환경을 검사합니다. 별도 개발 DB 또는
+  명시적 데모가 필요하며 운영 DB를 개발용으로 자동 사용하지 않습니다. 현재 개발 프로젝트 목록은
+  비어 있으므로 로컬/별도 클라우드 선택과 생성, 합성 데이터 준비 후 설정해야 합니다.
+- **AI 연결과 로그:** AI SDK v5의 UI 메시지 스트림을 사용합니다. 저장된 대화와 요청의
+  역할·본문 계약은 변환 계층으로 유지하며 출처·검색 상태·복구 동작을 함께 검증해야 합니다.
+  오류 로그에는 질문·생성 본문·SDK 오류 객체 대신 허용한 오류 정보만 기록합니다.
+
+DB 직접 PostgreSQL·pooler 연결은 SSL 강제와 필요한 네트워크 제한을 적용하는 운영 기준으로
+관리합니다. 직접 접속을 쓰지 않는 환경은 허용 IP를 비워 외부 직접 연결을 차단할 수 있습니다.
+이 제한은 HTTPS Data API·Auth·Storage의 권한 검사를 대신하지 않습니다.
+등록·복구·연결 확인 순서는 [SETUP.md](SETUP.md)를 참고하세요.
+
 ## 2026-09-08 AI 튜터 질문 작성 도움말
 
 AI 튜터의 첫 화면에 계정의 자주 묻는 질문 대신 **‘이렇게 질문해 보세요’** 안내를 표시합니다.
@@ -588,6 +612,7 @@ DB 검증은 PGlite에서 실제 SQL과 RLS·CAS를 실행하고, UI·API·생�
 | `/news` | 국내외 구조 동향과 신기술 사례 |
 | `/notices` | 공지사항 |
 | `/me` | 사용자 정보와 저장한 자료 요약 |
+| `/admin-mfa` | 관리자 인증 앱 등록·추가 인증·예비 인증 앱 관리 |
 | `/admin/*` | 통계, 자료, 사용자, 공지 및 동향 관리 |
 
 ## 동작 흐름
@@ -616,7 +641,7 @@ rag7.py GUI -> 문서 변환·OCR -> 페이지 보존 청킹 -> 1024차원 임�
 | --- | --- |
 | 웹 | Next.js 15 App Router, React 18, TypeScript |
 | UI | Tailwind CSS v4, shadcn/ui, Radix UI, Pretendard |
-| AI | Vercel AI SDK v4, Claude·Gemini·OpenAI 호환 LLM 선택 |
+| AI | Vercel AI SDK v5, `@ai-sdk/react`·제공자 패키지 v2, Claude·Gemini·OpenAI 호환 LLM 선택 |
 | 데이터 | Supabase PostgreSQL, pgvector, Auth, 비공개 Storage, RLS |
 | 검색 | 벡터·키워드 하이브리드 검색, 질의 확장, 선택적 재순위 |
 | 임베딩 | 기본 `gemini-embedding-001` 1024차원, OpenAI·BGE-M3·Ollama 선택 |
@@ -644,22 +669,33 @@ LLM은 `LLM_PROVIDER=claude|gemini|openai-compat`, 임베딩은
 
 ```bash
 npm install
-cp .env.local.example .env.local
-# .env.local 값을 환경에 맞게 설정
+cp .env.development.local.example .env.development.local
+# 별도 개발 DB를 만들고 개발용 URL·키를 설정
+# 원격 개발 프로젝트 ref는 config/database-environments.json의 developmentProjectRefs에 등록
 npm run dev
 ```
 
-브라우저에서 `http://localhost:3000`으로 접속합니다. 환경변수 설명과 서버 전용 키 구분은
-[`.env.local.example`](.env.local.example)을 기준으로 확인합니다.
+브라우저에서 `http://localhost:3000`으로 접속합니다. `.env.development.local`에
+`RESCUEAI_DATABASE_ENV=development`를 지정합니다. 로컬 Supabase의 localhost 주소도 사용할 수
+있습니다. 개발 DB를 준비하지 않거나 운영 DB 주소를 넣으면 실행이 중단됩니다.
+현재 `developmentProjectRefs`는 비어 있으며 별도 개발 DB 생성 완료를 의미하지 않습니다.
+개발 설정은 [`.env.development.local.example`](.env.development.local.example), 전체 키 설명은
+[`.env.local.example`](.env.local.example)을 참고합니다. 운영 자격증명을 개발 설정에 복사하지 않습니다.
 
 실제 API와 Supabase 없이 UI 흐름만 시연할 때는 데모 모드를 사용할 수 있습니다.
 
-```bash
-NEXT_PUBLIC_DEMO_MODE=1 NEXT_PUBLIC_SUPABASE_URL=https://demo.supabase.co npm run dev
+`.env.development.local`에 다음 값을 지정하고 Supabase·외부 API 키는 비웁니다.
+
+```dotenv
+NEXT_PUBLIC_DEMO_MODE=1
+NEXT_PUBLIC_SUPABASE_URL=https://demo.supabase.co
 ```
 
+이후 `npm run dev`를 실행합니다. 셸의 일회성 값보다 개발 환경 파일이 우선 적용되므로
+이미 작성된 개발 파일이 있으면 해당 파일에서 모드를 바꿉니다.
+
 데모 모드는 미들웨어의 인증 검사를 통째로 통과시키므로, **실제 Supabase 백엔드가 연결된
-환경에서는 플래그가 켜져 있어도 자동으로 무시**합니다(`lib/demo-flag.ts`). 그래서 위 명령처럼
+환경에서는 플래그가 켜져 있어도 자동으로 무시**합니다(`lib/demo-flag.ts`). 그래서 위 설정처럼
 Supabase 주소를 자리표시자로 덮어써야 데모가 켜집니다. 이 가드는 운영 배포에 데모 플래그가
 실수로 들어가 인증이 열리는 사고를 막기 위한 것이므로 제거하지 마세요.
 
@@ -676,9 +712,13 @@ Supabase 주소를 자리표시자로 덮어써야 데모가 켜집니다. 이 �
    Storage 버킷 `documents`와 인증 사용자 읽기 정책을 함께 구성합니다. 수동으로 공개 버킷을
    만들지 않습니다.
 5. 관리자 계정과 일반 사용자 계정을 등록합니다.
-   일괄 등록은 `node scripts/import-users.mjs <명단.csv>`를 사용하며,
-   `--random-password`를 붙이면 무작위 초기 비밀번호를 발급해 별도 CSV로 떨어뜨립니다
-   (명단 유출만으로 로그인되지 않게 하려면 이쪽을 권장합니다).
+   일괄 등록은 `node scripts/import-users.mjs <명단.csv>`를 사용하며 모든 초기 비밀번호는
+   무작위 20자입니다. 신규 계정 설정과 비밀번호 파일 기록 후 `account_ready=true`가 되고,
+   `must_change_password=true`는 최초 변경까지 유지됩니다. 기존 계정은 프로필·역할도 변경하지 않습니다.
+   기본 출력은 `<명단.csv>.<시각>-<무작위>.passwords.csv`이며 파일 권한은 0600입니다.
+   `--password-file <출력.passwords.csv>`로 위치를 지정할 수 있고 기존 파일은 덮어쓰지 않습니다.
+   개발 발급은 `node --env-file=.env.development.local scripts/import-users.mjs <명단.csv>`로
+   대상을 명시합니다. 수동 발급과 최초 관리자 설정은 [SETUP.md](SETUP.md#7-사용자--관리자-계정-만들기)를 따릅니다.
 
 세부 설치와 인증 설정은 [`SETUP.md`](SETUP.md), 실제 운영 전환 순서는
 [`DEPLOYMENT.md`](DEPLOYMENT.md)를 참고합니다.
@@ -764,7 +804,7 @@ python embed_and_upload.py
 
 ```bash
 npm test           # Vitest 단위·통합 테스트
-npm run build      # 프로덕션 빌드, 타입 및 Next.js 검사 포함
+npm run build      # 빌드·타입 검사, 비운영 실행은 등록된 개발 DB 또는 명시적 데모 필요
 npm run typecheck  # TypeScript 타입 검사
 npm run lint       # ESLint
 npm run sql:setup  # 마이그레이션에서 setup_new_project.sql 재생성
@@ -784,12 +824,13 @@ RAG 평가셋과 실행 방법은 [`eval/README.md`](eval/README.md)를 참고�
 
 | 위치 | 사용할 가드 | 하는 일 |
 | --- | --- | --- |
-| 페이지·레이아웃 | `requireUserAndProfile()` | 세션 확인 + 최초 로그인 비밀번호 변경 강제 |
-| 일반 route handler | `requireApiUser()` | 세션 확인 + 비밀번호 미변경 계정 차단 |
-| 관리자 route handler | `requireApiAdmin()` | 위 항목 + `admin` 역할 재확인 |
+| 페이지·레이아웃 | `requireUserAndProfile()` | 세션·등록·발급 완료 확인 + 최초 비밀번호 변경 강제 |
+| 일반 route handler | `requireApiUser()` | 세션·등록·발급 완료 + 비밀번호 미변경 계정 차단 |
+| 관리자 페이지·레이아웃 | `requireAdminAndProfile()` | 위 항목 + 관리자 역할·현재 TOTP·검증된 AAL2 세션 |
+| 관리자 route handler | `requireApiAdmin()` | 위 항목 + 관리자 역할·현재 TOTP·검증된 AAL2 세션 |
 
-- route handler에서 `supabase.auth.getUser()`를 직접 호출하지 않습니다. 비밀번호를 바꾸지 않은
-  계정이 API로 새어 들어옵니다(초기 비밀번호는 디지털식별번호라 명단을 아는 사람이 알 수 있습니다).
+- route handler에서 `supabase.auth.getUser()`만으로 허용하지 않습니다. 계정 발급 완료와
+  최초 비밀번호 변경 상태까지 검사해야 합니다. 직원 식별번호는 초기 비밀번호로 사용하지 않습니다.
 - 로그인 후 이동 경로 등 리다이렉트 파라미터는 반드시 `safeRedirectPath()`를 통과시킵니다.
   외부 URL과 `javascript:` 스킴을 차단합니다.
 - LLM을 호출하는 엔드포인트에는 `rateLimit()`을 적용하고, 클라이언트가 보낸 대화 이력은

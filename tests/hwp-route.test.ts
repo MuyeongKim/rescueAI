@@ -20,6 +20,7 @@ vi.mock("@/lib/hwpx-template", () => ({
 
 import { POST } from "@/app/api/hwp/route";
 import { evaluationTableRows, replaceEvaluationCell } from "@/lib/document-structure";
+import { HWP_FILE_MAX_BYTES, HWP_METADATA_MAX_BYTES, HWP_REQUEST_MAX_BYTES } from "@/lib/hwp-upstream";
 
 function requestWith(body: unknown): Request {
   return new Request("http://localhost/api/hwp", {
@@ -32,6 +33,7 @@ function requestWith(body: unknown): Request {
 describe("POST /api/hwp 출처 배치", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.fetch.mockReset();
     process.env.HWP_WRITER_API_URL = "https://hwp-writer.example";
     process.env.HWP_WRITER_API_KEY = "test-key";
     mocks.requireApiUser.mockResolvedValue({ ok: true, user: { id: "user-1" } });
@@ -47,9 +49,74 @@ describe("POST /api/hwp 출처 배치", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     vi.unstubAllGlobals();
     delete process.env.HWP_WRITER_API_URL;
     delete process.env.HWP_WRITER_API_KEY;
+  });
+
+  const validBody = () => ({ title: "합성 교안", sections: [{ heading: "학습목표", content: "합성 점검 내용" }],
+    sources: [{ document_id: 7, doc: "합성 교육자료", page: 3 }],
+  });
+
+  it.each([null, { ...validBody(), title: 123 }, { ...validBody(), sections: [{ content: { secret: "bad type" } }] },
+    { ...validBody(), sections: Array.from({ length: 51 }, () => ({ content: "합성" })) },
+  ])("잘못된 문서 구조는 외부 서버 호출 전에 400으로 처리한다", async (body) => {
+    expect((await POST(requestWith(body))).status).toBe(400);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it("선언된 요청 크기가 256KiB를 초과하면 외부 호출 없이 413을 반환한다", async () => {
+    const req = new Request("http://localhost/api/hwp", { method: "POST", body: "{}",
+      headers: { "Content-Length": String(HWP_REQUEST_MAX_BYTES + 1) },
+    });
+    expect((await POST(req)).status).toBe(413);
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it("Content-Length 없는 대용량 스트림도 읽는 도중 취소한다", async () => {
+    const cancel = vi.fn();
+    const stream = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(new Uint8Array(HWP_REQUEST_MAX_BYTES + 1)); }, cancel });
+    const req = new Request("http://localhost/api/hwp", { method: "POST", body: stream, duplex: "half" } as RequestInit);
+    expect((await POST(req)).status).toBe(413);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(mocks.fetch).not.toHaveBeenCalled();
+  });
+
+  it("과대 생성 메타응답은 다운로드 요청 전에 중단한다", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.fetch.mockReset().mockResolvedValueOnce(new Response(new Uint8Array(HWP_METADATA_MAX_BYTES + 1)));
+    expect((await POST(requestWith(validBody()))).status).toBe(502);
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+  });
+
+  it("다른 출처의 다운로드 URL은 요청하지 않는다", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.fetch.mockReset().mockResolvedValueOnce(Response.json({ ok: true, download_path: "https://untrusted.invalid/file" }));
+    expect((await POST(requestWith(validBody()))).status).toBe(502);
+    expect(mocks.fetch).toHaveBeenCalledOnce();
+  });
+
+  it("8MiB를 넘는 파일은 문서 파싱 전에 중단한다", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const cancel = vi.fn();
+    mocks.fetch.mockReset()
+      .mockResolvedValueOnce(Response.json({ ok: true, download_path: "/files/example.hwpx" }))
+      .mockResolvedValueOnce(new Response(new ReadableStream({ cancel }), { headers: { "Content-Length": String(HWP_FILE_MAX_BYTES + 1) } }));
+    expect((await POST(requestWith(validBody()))).status).toBe(502);
+    expect(cancel).toHaveBeenCalledOnce();
+    expect(mocks.normalizeTrainingPlanHwpx).not.toHaveBeenCalled();
+  });
+
+  it("업스트림 오류에 본문이나 비밀값이 있어도 로그와 안내에 포함하지 않는다", async () => {
+    const marker = "SYNTHETIC_PRIVATE_HWP_TEXT";
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.fetch.mockReset().mockRejectedValueOnce(Object.assign(new Error(marker), { responseBody: marker, cause: { token: marker } }));
+    const response = await POST(requestWith(validBody()));
+    expect(response.status).toBe(502);
+    expect(await response.text()).not.toContain(marker);
+    expect(JSON.stringify(log.mock.calls)).not.toContain(marker);
+    expect(log).toHaveBeenCalledWith("[hwp] 미니서버 호출 실패:", { code: "operation_failed" });
   });
 
   it("표준 훈련계획 양식은 문장별 출처를 숨기고 마지막 평가 셀 끝에만 모은다", async () => {

@@ -28,31 +28,29 @@ vi.mock("@/lib/chat-query-expansion", () => ({
   },
 }));
 vi.mock("@/lib/chat-learning-review", () => ({ reviewChatLearningAnswer: mocks.reviewChatLearningAnswer }));
-vi.mock("ai", () => ({
+vi.mock("ai", async () => ({
+  ...await vi.importActual<typeof import("ai")>("ai"),
   generateText: mocks.generateText,
-  convertToCoreMessages: (messages: unknown) => messages,
   streamText: mocks.streamText,
-  formatDataStreamPart: (_type: string, value: unknown) => value,
-  createDataStreamResponse: async ({ execute, onError }: {
-    execute: (writer: unknown) => Promise<void>;
-    onError: (error: unknown) => string;
-  }) => {
+}));
+vi.mock("@/lib/chat-stream", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/chat-stream")>("@/lib/chat-stream");
+  return { ...actual, createChatStreamResponse: async (execute: Parameters<typeof actual.createChatStreamResponse>[0]) => {
     const data: unknown[] = [];
     const annotations: unknown[] = [];
     const text: unknown[] = [];
-    try {
-      await execute({
-        write: (value: unknown) => text.push(value),
-        writeData: (value: unknown) => data.push(value),
-        writeMessageAnnotation: (value: unknown) => annotations.push(value),
-      });
-      await Promise.all(mocks.finishes);
-      return Response.json({ data, annotations, text });
-    } catch (error) {
-      return Response.json({ error: onError(error) });
+    const wire = await actual.createChatStreamResponse(execute).text();
+    for (const line of wire.split("\n")) {
+      if (!line.startsWith("data: ") || line === "data: [DONE]") continue;
+      const part = JSON.parse(line.slice(6));
+      if (part.type === "data-conversationId") data.push({ type: "conversationId", value: part.data.value });
+      if (part.type === "message-metadata") annotations.push(part.messageMetadata);
+      if (part.type === "text-delta") text.push(part.delta);
+      if (part.type === "error") return Response.json({ error: part.errorText });
     }
-  },
-}));
+    return Response.json({ data, annotations, text });
+  } };
+});
 
 import { POST } from "@/app/api/chat/route";
 import { NOT_FOUND_MESSAGE } from "@/lib/rag";
@@ -133,13 +131,8 @@ beforeEach(() => {
   mocks.requireApiUser.mockResolvedValue({ ok: true, user: { id: "user-1" } });
   mocks.rateLimit.mockReturnValue({ ok: true });
   mocks.searchContext.mockResolvedValue({ contextText: "근거", sources: [], degraded: true });
-  mocks.streamText.mockImplementation(({ onFinish }) => ({
-    consumeStream: () => {
-      const finish = onFinish({ text: answerText });
-      mocks.finishes.push(finish);
-      return finish;
-    },
-    mergeIntoDataStream: () => undefined,
+  mocks.streamText.mockImplementation(() => ({
+    fullStream: (async function* () { yield { type: "text-delta", text: answerText }; })(),
   }));
 });
 
@@ -154,7 +147,7 @@ describe("튜터 오류 복구와 저장 경계", () => {
     answerText = "대원은 장비를 확인하고 동료와 점검 결과를 공유합니다.\n".repeat(70);
     await POST(request());
     await Promise.all(mocks.finishes);
-    expect(mocks.streamText).toHaveBeenCalledWith(expect.objectContaining({ maxTokens: 4_000, maxRetries: 0, abortSignal: expect.any(AbortSignal) }));
+    expect(mocks.streamText).toHaveBeenCalledWith(expect.objectContaining({ maxOutputTokens: 4_000, maxRetries: 0, abortSignal: expect.any(AbortSignal) }));
     expect(messages.find(row => row.role === "assistant")?.content).toBe(answerText);
   });
   it("인증 실패에는 저장·검색·모델 호출이 없다", async () => {
@@ -290,7 +283,7 @@ describe("튜터 오류 복구와 저장 경계", () => {
     const payload = await (await POST(request())).json();
 
     expect(mocks.streamText).toHaveBeenCalledOnce();
-    expect(payload.text).toEqual([]); // 일부 근거가 있는 응답은 표준 거절문으로 교체하지 않는다.
+    expect(payload.text).toEqual([answerText]); // 일부 근거가 있는 응답은 표준 거절문으로 교체하지 않는다.
     expect(payload.annotations[0].sources).toEqual([source]);
     expect(messages.find(row => row.role === "assistant")).toMatchObject({
       content: expect.stringContaining("전체 조건의 전용 절차"), sources: [source],
@@ -365,7 +358,7 @@ describe("튜터 질문 유형과 실제 대화 흐름", () => {
     answerText = NOT_FOUND_MESSAGE;
     const payload = await (await POST(request())).json();
     const tail = `\n\n${buildChatEvidenceFallback("degraded")}`;
-    expect(payload.text).toEqual([tail]);
+    expect(payload.text).toEqual([answerText, tail]);
     expect(messages.find(row => row.role === "assistant")?.content).toBe(NOT_FOUND_MESSAGE + tail);
     expect(payload.annotations[0].sources).toEqual([]);
   });

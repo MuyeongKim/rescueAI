@@ -4,7 +4,8 @@ import { outlineEvidenceGaps, type EvidenceOutlineItem } from "@/lib/generation-
 import type { ValidatedGenerateRequest } from "@/lib/generation-request";
 import type { Json } from "@/lib/database.types";
 
-const textList = (max: number) => z.array(z.string().trim().min(1).max(160)).max(max);
+export const GENERATION_OUTLINE_TEXT_MAX_LENGTH = 160;
+const textList = (max: number) => z.array(z.string().trim().min(1).max(GENERATION_OUTLINE_TEXT_MAX_LENGTH)).max(max);
 export const generationOutlineEditSchema = z.object({
   title: z.string().trim().min(4).max(100),
   items: z.array(z.object({

@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { z } from "zod";
 import { requireApiUser } from "@/lib/auth";
 import { createClient } from "@/lib/supabase/server";
@@ -33,7 +34,7 @@ export async function DELETE(request: Request) {
     return Response.json({ ok: true }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof LimitedJsonBodyError) return Response.json({ error: error.message }, { status: error.status });
-    console.error("[generate/drafts] private snapshot delete failed", error instanceof Error ? error.message : "database failure");
+    console.error("[generate/drafts] private snapshot delete failed", safeServerError(error));
     return Response.json({ error: "편집 초안을 삭제하지 못했습니다. 다시 시도해 주세요." }, { status: 503 });
   }
 }
@@ -86,7 +87,7 @@ export async function POST(request: Request) {
     return Response.json({ draft: data }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     if (error instanceof LimitedJsonBodyError) return Response.json({ error: error.message }, { status: error.status });
-    console.error("[generate/drafts] private snapshot save failed", error instanceof Error ? error.message : "database failure");
+    console.error("[generate/drafts] private snapshot save failed", safeServerError(error));
     return Response.json({ error: "편집 초안을 보관하지 못했습니다. 이 화면을 유지하고 다시 시도해 주세요." }, { status: 503 });
   }
 }

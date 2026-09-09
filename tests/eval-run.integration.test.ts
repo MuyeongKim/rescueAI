@@ -5,7 +5,8 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { isAbsolute, dirname, join, relative, resolve } from "node:path";
 import { tmpdir } from "node:os";
 import { describe, it, beforeAll, expect, vi } from "vitest";
-import { convertToCoreMessages, generateText, type Message } from "ai";
+import { generateText } from "ai";
+import type { ChatMessage as Message } from "@/lib/chat-message";
 import { createClient as createSupabaseClient } from "@supabase/supabase-js";
 import type { Database, DocSource } from "@/lib/database.types";
 import type { RetrievalCoverage } from "@/lib/rag";
@@ -178,7 +179,7 @@ describe.skipIf(process.env.RUN_INTEGRATION !== "1")("튜터 자동 기준 점�
           ? (await generateText({
               model: getChatModel(),
               system: buildSystemPrompt(r.contextText, answerPlanGuidance(buildChatAnswerPlan(retrievalQuestion)), r.independentEvidenceTopics, r.retrievalCoverage),
-              messages: convertToCoreMessages(messages),
+              messages: messages.map(({ role, content }) => ({ role, content })),
               temperature: 0.2,
             })).text
           : NOT_FOUND_MESSAGE;

@@ -1,8 +1,7 @@
-import { redirect } from "next/navigation";
 import { Megaphone } from "lucide-react";
 
 import { createClient } from "@/lib/supabase/server";
-import { requireUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireAdminAndProfile } from "@/lib/auth";
 import { DEMO, demoNotices } from "@/lib/demo";
 import { NoticeManager } from "@/components/admin/NoticeManager";
 import { OperationalHeader } from "@/components/layout/OperationalHeader";
@@ -22,8 +21,7 @@ async function loadNotices() {
 }
 
 export default async function AdminNoticesPage() {
-  const { profile } = await requireUserAndProfile();
-  if (!isAdmin(profile)) redirect("/chat");
+  await requireAdminAndProfile();
 
   const notices = await loadNotices();
 

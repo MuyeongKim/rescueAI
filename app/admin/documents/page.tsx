@@ -1,8 +1,7 @@
-import { redirect } from "next/navigation";
 import { FileText } from "lucide-react";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireAdminAndProfile } from "@/lib/auth";
 import { DEMO, demoDocuments } from "@/lib/demo";
 import {
   Card,
@@ -57,8 +56,7 @@ async function loadDocuments(): Promise<DocRow[]> {
 }
 
 export default async function AdminDocumentsPage() {
-  const { profile } = await requireUserAndProfile();
-  if (!isAdmin(profile)) redirect("/chat");
+  await requireAdminAndProfile();
 
   const docs = await loadDocuments();
 

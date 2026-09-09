@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { z } from "zod";
 
 import { requireApiUser } from "@/lib/auth";
@@ -61,12 +62,12 @@ export async function POST(
       JOB_RETRY_DB_REQUEST_MAX_MS
     );
   } catch (readFailure) {
-    console.error("[generate/jobs/:id/retry] read timeout", readFailure);
+    console.error("[generate/jobs/:id/retry] read timeout", safeServerError(readFailure));
     return Response.json({ error: "생성 작업 확인이 지연되고 있습니다." }, { status: 503 });
   }
   const { data: current, error: readError } = read;
   if (readError) {
-    console.error("[generate/jobs/:id/retry] read", readError);
+    console.error("[generate/jobs/:id/retry] read", safeServerError(readError));
     return Response.json({ error: "생성 작업을 확인하지 못했습니다." }, { status: 500 });
   }
   if (!current) return Response.json({ error: "생성 작업을 찾을 수 없습니다." }, { status: 404 });
@@ -87,7 +88,7 @@ export async function POST(
       privateRead = await withSupabaseRequestTimeout(worker.from("generation_jobs")
         .select("checkpoint,revision").eq("id", current.id).eq("user_id", auth.user.id).eq("revision", current.revision).maybeSingle(), JOB_RETRY_DB_REQUEST_MAX_MS);
     } catch (readError) {
-      console.error("[generate/jobs/retry] review draft lookup", readError);
+      console.error("[generate/jobs/retry] review draft lookup", safeServerError(readError));
       return Response.json({ error: "저장된 초안 조회가 지연되고 있습니다." }, { status: 503 });
     }
     const { data: privateRow, error: privateError } = privateRead;
@@ -140,13 +141,13 @@ export async function POST(
       JOB_RETRY_DB_REQUEST_MAX_MS
     );
   } catch (updateFailure) {
-    console.error("[generate/jobs/:id/retry] queue timeout", updateFailure);
+    console.error("[generate/jobs/:id/retry] queue timeout", safeServerError(updateFailure));
     return Response.json({ error: "재시도 상태 저장이 지연되고 있습니다." }, { status: 503 });
   }
   const { data: queued, error: updateError } = queuedResult;
 
   if (updateError) {
-    console.error("[generate/jobs/:id/retry] queue", updateError);
+    console.error("[generate/jobs/:id/retry] queue", safeServerError(updateError));
     if (updateError.code === "23505") {
       return Response.json(
         { error: "다른 품질 우선 생성 작업이 진행 중입니다. 완료 후 다시 시도해 주세요." },
@@ -169,7 +170,7 @@ export async function POST(
       { status: 202, headers: { "Cache-Control": "no-store" } }
     );
   } catch (error) {
-    console.error("[generate/jobs/:id/retry] dispatch", error);
+    console.error("[generate/jobs/:id/retry] dispatch", safeServerError(error));
     const failed = await markGenerationDispatchFailed(queued.id, runToken);
     return Response.json(
       { job: toPublicGenerationJob(failed ?? queued) },

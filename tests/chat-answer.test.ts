@@ -1,6 +1,6 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
-import type { Message } from "ai";
+import type { ChatMessage as Message } from "@/lib/chat-message";
 import { describe, expect, it } from "vitest";
 
 import { MessageBubble } from "@/components/chat/MessageBubble";

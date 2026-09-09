@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import type { Message } from "ai";
+import type { ChatMessage as Message } from "@/lib/chat-message";
 import { ThumbsUp, ThumbsDown, Flame, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import type { DocSource } from "@/lib/database.types";

@@ -6,6 +6,10 @@ import {
 import JSZip from "jszip";
 
 import { hwpxParagraphs, normalizeHwpxCellText } from "@/lib/hwpx-format";
+import { collectLimitedZipStream, readLimitedZipEntry } from "@/lib/limited-zip";
+import { HWP_FILE_MAX_BYTES } from "@/lib/hwp-upstream";
+
+export const HWPX_XML_MAX_BYTES = 2 * 1024 * 1024;
 
 const HH_NS = "http://www.hancom.co.kr/hwpml/2011/head";
 const HP_NS = "http://www.hancom.co.kr/hwpml/2011/paragraph";
@@ -15,7 +19,12 @@ const VALUE_ROWS = new Set(["2", "3", "4", "6", "7", "8", "9", "10", "11", "12",
 const MULTILINE_ROWS = new Set(["6", "10", "11", "12", "13"]);
 
 function parseXml(xml: string, path: string) {
-  const document = new DOMParser().parseFromString(xml, "application/xml");
+  // 기본 XML 진단은 잘못된 속성·entity 등 문서 조각을 console에 출력할 수 있다.
+  let document;
+  try {
+    document = new DOMParser({ onError: () => { throw new Error("Invalid HWPX XML"); } })
+      .parseFromString(xml, "application/xml");
+  } catch { throw new Error(`${path} XML 형식이 올바르지 않습니다.`); }
   if (!document.documentElement) {
     throw new Error(`${path} XML을 읽을 수 없습니다.`);
   }
@@ -223,8 +232,10 @@ function normalizeGeneratedCells(
 }
 
 export async function normalizeTrainingPlanHwpx(
-  input: ArrayBuffer | Uint8Array
+  input: ArrayBuffer | Uint8Array,
+  options: { signal?: AbortSignal } = {}
 ): Promise<Uint8Array> {
+  if (input.byteLength > HWP_FILE_MAX_BYTES) throw new Error("HWPX input byte limit exceeded");
   const zip = await JSZip.loadAsync(input);
   const headerFile = zip.file("Contents/header.xml");
   const sectionFile = zip.file("Contents/section0.xml");
@@ -233,11 +244,11 @@ export async function normalizeTrainingPlanHwpx(
     throw new Error("훈련계획 HWPX 필수 파일이 없습니다.");
   }
 
-  const [headerXml, sectionXml, mimetype] = await Promise.all([
-    headerFile.async("string"),
-    sectionFile.async("string"),
-    mimetypeFile.async("string"),
-  ]);
+  // 순차 해제로 앞 항목이 초과했을 때 다른 XML까지 계속 해제하지 않는다.
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const headerXml = decoder.decode(await readLimitedZipEntry(headerFile, HWPX_XML_MAX_BYTES, options.signal));
+  const sectionXml = decoder.decode(await readLimitedZipEntry(sectionFile, HWPX_XML_MAX_BYTES, options.signal));
+  const mimetype = decoder.decode(await readLimitedZipEntry(mimetypeFile, 128, options.signal));
 
   zip.file("mimetype", mimetype, { compression: "STORE" });
   const normalizedHeader = normalizeParagraphProperties(headerXml);
@@ -247,9 +258,9 @@ export async function normalizeTrainingPlanHwpx(
     normalizeGeneratedCells(sectionXml, normalizedHeader.styles)
   );
 
-  return zip.generateAsync({
+  return collectLimitedZipStream(zip.generateInternalStream({
     type: "uint8array",
     mimeType: "application/hwp+zip",
     compression: "DEFLATE",
-  });
+  }), HWP_FILE_MAX_BYTES, options.signal);
 }

@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 // 뉴스 기사 → 한국어 요약 + 지역/분야 분류 (AI). 관리자 "AI 요약"(A)·자동수집(B) 공용.
 import { generateObject } from "ai";
 import { z } from "zod";
@@ -36,7 +37,7 @@ export async function summarizeHeadlines(
       temperature: 0.2,
       abortSignal: AbortSignal.timeout(12_000),
       maxRetries: 0,
-      maxTokens: 2_048,
+      maxOutputTokens: 2_048,
       prompt: `아래 소방·구조 관련 뉴스 헤드라인들을 각각 한국어로 처리해 **입력과 같은 순서·개수**로 반환하세요.
 - summary: 헤드라인 기준 1~2문장 한국어 요약(해외면 번역).
 - region: 국내면 "전국", 해외면 "해외".
@@ -56,7 +57,7 @@ ${listed}`,
     }
     return object.items;
   } catch (e) {
-    console.error("[news-ai] 배치 요약 실패:", e);
+    console.error("[news-ai] 배치 요약 실패:", safeServerError(e));
     return [];
   }
 }
@@ -71,7 +72,7 @@ export async function summarizeArticle(input: {
       model: getChatModel(),
       schema,
       temperature: 0.2,
-      maxTokens: 2_048,
+      maxOutputTokens: 2_048,
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(12_000),
       prompt: `다음은 소방·구조 관련 기사입니다. 구조대원이 빠르게 파악하도록 한국어로 처리하세요.
@@ -87,7 +88,7 @@ export async function summarizeArticle(input: {
     });
     return object;
   } catch (e) {
-    console.error("[news-ai] 요약 실패:", e);
+    console.error("[news-ai] 요약 실패:", safeServerError(e));
     return null;
   }
 }

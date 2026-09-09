@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { z } from "zod";
 
 import { requireApiUser } from "@/lib/auth";
@@ -114,7 +115,7 @@ async function recoverIdempotentJobIfStalled(
     );
   } catch (error) {
     // 같은 clientRequestId 응답은 유지하고, 상태 폴링에서도 복구를 다시 시도한다.
-    console.error("[generate/jobs] stalled idempotent dispatch recovery", error);
+    console.error("[generate/jobs] stalled idempotent dispatch recovery", safeServerError(error));
     return job;
   }
 }
@@ -237,7 +238,7 @@ export async function POST(request: Request) {
         { status: 202, headers: { "Cache-Control": "no-store" } }
       );
     } catch (error) {
-      console.error("[generate/jobs] workflow dispatch failed", error);
+      console.error("[generate/jobs] workflow dispatch failed", safeServerError(error));
       const failed = await markGenerationDispatchFailed(inserted.id, runToken);
       return Response.json(
         { job: toPublicGenerationJob(failed ?? inserted) },
@@ -245,7 +246,7 @@ export async function POST(request: Request) {
       );
     }
   } catch (error) {
-    console.error("[generate/jobs]", error);
+    console.error("[generate/jobs]", safeServerError(error));
     return Response.json(
       { error: "생성 작업을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요." },
       { status: 500 }

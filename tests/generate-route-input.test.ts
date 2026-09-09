@@ -388,7 +388,7 @@ describe("POST /api/generate 입력 경계", () => {
       );
       expect(warnSpy).toHaveBeenCalledWith(
         expect.stringContaining("정밀 모델 호출 실패"),
-        "timed out"
+        { code: "request_timeout" }
       );
     } finally {
       warnSpy.mockRestore();

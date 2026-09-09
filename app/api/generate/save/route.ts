@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { clientSopEvidence, trustedRagVerificationReader, verifySourcesBeforeSave, verifySopBeforeSave } from "@/lib/generation-evidence-validation";
 import { createClient } from "@/lib/supabase/server";
 import { requireApiUser } from "@/lib/auth";
@@ -393,7 +394,7 @@ export async function POST(req: Request) {
       .eq("user_id", auth.user.id)
       .maybeSingle();
     if (currentError) {
-      console.error("[generate/save] 개정 번호 확인 실패:", currentError.message);
+      console.error("[generate/save] 개정 번호 확인 실패:", safeServerError(currentError));
       return Response.json({ error: "저장본의 최신 상태를 확인하지 못했습니다." }, { status: 500 });
     }
     if (!current) {
@@ -448,7 +449,7 @@ export async function POST(req: Request) {
       .eq("revision", body.revision as number)
       .select("id, revision");
     if (error) {
-      console.error("[generate/save] update 실패:", error.message);
+      console.error("[generate/save] update 실패:", safeServerError(error));
       if (isShareContractDatabaseError(error)) {
         return Response.json(
           {
@@ -489,7 +490,7 @@ export async function POST(req: Request) {
     .select("id", { count: "exact", head: true })
     .eq("user_id", auth.user.id);
   if (countError) {
-    console.error("[generate/save] 저장 개수 확인 실패:", countError.message);
+    console.error("[generate/save] 저장 개수 확인 실패:", safeServerError(countError));
     return Response.json({ error: "저장 공간을 확인하지 못했습니다." }, { status: 500 });
   }
   if ((count ?? 0) >= MAX_GENERATED_MATERIALS_PER_USER) {
@@ -506,7 +507,7 @@ export async function POST(req: Request) {
     .single();
 
   if (error) {
-    console.error("[generate/save] insert 실패:", error.message);
+    console.error("[generate/save] insert 실패:", safeServerError(error));
     if (error.message.includes("generated_materials_user_limit_exceeded")) {
       return Response.json(
         { error: `저장 자료는 계정당 최대 ${MAX_GENERATED_MATERIALS_PER_USER}개까지 보관할 수 있습니다.` },
@@ -565,7 +566,7 @@ export async function DELETE(req: Request) {
     .eq("user_id", auth.user.id)
     .maybeSingle();
   if (currentError) {
-    console.error("[generate/save] 삭제 전 개정 번호 확인 실패:", currentError.message);
+    console.error("[generate/save] 삭제 전 개정 번호 확인 실패:", safeServerError(currentError));
     return Response.json({ error: "삭제할 자료의 최신 상태를 확인하지 못했습니다." }, { status: 500 });
   }
   if (!current) {
@@ -591,7 +592,7 @@ export async function DELETE(req: Request) {
     .eq("revision", revision)
     .select("id");
   if (error) {
-    console.error("[generate/save] delete 실패:", error.message);
+    console.error("[generate/save] delete 실패:", safeServerError(error));
     return Response.json({ error: "삭제 중 오류가 발생했습니다." }, { status: 500 });
   }
   // 조회 직후 다른 화면이 저장했다면 CAS 조건에서 0행이 되어 최신본을 보존한다.
@@ -639,7 +640,7 @@ export async function PATCH(req: Request) {
       .eq("user_id", auth.user.id)
       .maybeSingle();
     if (storedError) {
-      console.error("[generate/save] 공유 전 자료 조회 실패:", storedError.message);
+      console.error("[generate/save] 공유 전 자료 조회 실패:", safeServerError(storedError));
       return Response.json({ error: "공유할 자료를 확인하지 못했습니다." }, { status: 500 });
     }
     if (!stored) {
@@ -731,7 +732,7 @@ export async function PATCH(req: Request) {
   if (verifiedRevision !== undefined) shareUpdate = shareUpdate.eq("revision", verifiedRevision);
   const { data, error } = await shareUpdate.select("id");
   if (error) {
-    console.error("[generate/save] 공유 토글 실패:", error.message);
+    console.error("[generate/save] 공유 토글 실패:", safeServerError(error));
     if (isShareContractDatabaseError(error)) {
       return Response.json(
         {

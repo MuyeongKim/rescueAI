@@ -1,5 +1,6 @@
 // 실제 workflow의 목차 보완 제어 흐름을 검증한다. 모델은 mock이며 원문 적용 타당성 평가는 별도다.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { MockLanguageModelV2 } from "ai/test";
 
 const mocks = vi.hoisted(() => ({
   worker: vi.fn(), generateObject: vi.fn(), supplement: vi.fn(), fetchCategory: vi.fn(),
@@ -119,6 +120,67 @@ function addMissing(...requirements: string[]) {
 }
 
 describe("목차 생성 뒤 부족 근거만 보완하는 영속 workflow", () => {
+  it.each([126, 160])("실제 SDK는 %i자 핵심 요점을 자르지 않고 기존 목차 검토 계약으로 전달한다", async (length) => {
+    const { generateObject } = await vi.importActual<typeof import("ai")>("ai");
+    job.request = { ...request, reviewOutline: true };
+    Reflect.deleteProperty(job.checkpoint, "documentOutline");
+    const keyPoint = "합성 점검 조건과 예외를 확인한다. ".repeat(10).slice(0, length - 1) + "끝";
+    const object = {
+      title: "합성 장비 점검 훈련계획",
+      sections: TRAINING_PLAN_SECTIONS.map(heading => ({
+        heading, purpose: "교육 전 장비 점검 절차를 확인한다", keyPoints: ["점검 항목 확인", keyPoint],
+        sourceRefs: [label], actionRequirements: ["장비의 손상 여부를 확인한다"], evidenceRequirements: [anchored],
+      })),
+    };
+    const model = new MockLanguageModelV2({ doGenerate: async () => ({
+      content: [{ type: "text", text: JSON.stringify(object) }], finishReason: "stop",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, warnings: [],
+    }) });
+    const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is forbidden"));
+    mocks.generateObject.mockImplementation(options => generateObject({ ...options, model, maxRetries: 0 }));
+    try {
+      expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("awaiting_review");
+      expect(job.review_outline).toMatchObject({ items: object.sections.map(() => ({ keyPoints: ["점검 항목 확인", keyPoint] })) });
+      expect(job.checkpoint.documentOutline.sections[0].keyPoints[1]).toBe(keyPoint);
+      expect(mocks.generateObject).toHaveBeenCalledOnce();
+      expect(job.result).toBeNull();
+      expect(network).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); }
+  });
+
+  it.each(["overlong", "unknown_source", "wrong_order"])("실제 SDK는 %s 목차를 검토 화면에 공개하지 않는다", async (violation) => {
+    const { generateObject } = await vi.importActual<typeof import("ai")>("ai");
+    job.request = { ...request, reviewOutline: true };
+    Reflect.deleteProperty(job.checkpoint, "documentOutline");
+    const object = {
+      title: "합성 장비 점검 훈련계획",
+      sections: TRAINING_PLAN_SECTIONS.map(heading => ({
+        heading, purpose: "교육 전 장비 점검 절차를 확인한다", keyPoints: ["점검 항목 확인", "손상 여부 확인"],
+        sourceRefs: [label], actionRequirements: ["장비의 손상 여부를 확인한다"], evidenceRequirements: [anchored],
+      })),
+    };
+    if (violation === "overlong") object.sections[0].keyPoints[1] = "가".repeat(161);
+    if (violation === "unknown_source") object.sections[0].sourceRefs = ["[등록되지 않은 합성 자료 p.99]"];
+    if (violation === "wrong_order") [object.sections[0], object.sections[1]] = [object.sections[1], object.sections[0]];
+    const model = new MockLanguageModelV2({ doGenerate: async () => ({
+      content: [{ type: "text", text: JSON.stringify(object) }], finishReason: "stop",
+      usage: { inputTokens: 1, outputTokens: 1, totalTokens: 2 }, warnings: [],
+    }) });
+    const network = vi.spyOn(globalThis, "fetch").mockRejectedValue(new Error("Network is forbidden"));
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    mocks.generateObject.mockImplementation(options => generateObject({ ...options, model, maxRetries: 0 }));
+    try {
+      expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("failed");
+      expect(job.review_outline).toBeFalsy();
+      expect(job.result).toBeFalsy();
+      expect(job.checkpoint.documentOutline).toBeUndefined();
+      expect(log).toHaveBeenCalledWith("[generation-workflow] 모델 단계 실패:", {
+        code: "ai_invalid_output", reason: "schema_validation_failed", finishReason: "stop", inputTokens: 1, outputTokens: 1,
+      });
+      expect(network).not.toHaveBeenCalled();
+    } finally { network.mockRestore(); log.mockRestore(); }
+  });
+
   it("사용자 검토 선택 시 목차만 공개하고 추가검색·본문 호출 없이 실행권을 폐기한다", async () => {
     job.request = { ...request, reviewOutline: true };
     addMissing("중단 판단 조건");

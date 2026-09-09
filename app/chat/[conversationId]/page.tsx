@@ -1,5 +1,5 @@
 import { notFound } from "next/navigation";
-import type { Message } from "ai";
+import type { ChatMessage as Message } from "@/lib/chat-message";
 import { createClient } from "@/lib/supabase/server";
 import {
   DEMO,

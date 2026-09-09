@@ -5,13 +5,17 @@ vi.mock("@/lib/supabase/server", () => ({ createClient: mocks.createClient }));
 vi.mock("next/navigation", () => ({ redirect: mocks.redirect }));
 vi.mock("@/lib/demo", () => ({ get DEMO() { return mocks.demo; }, demoUser: { id: "demo" }, demoProfile: { role: "admin", must_change_password: false } }));
 
-import { getUserAndProfile, requireApiAdmin, requireApiPasswordChangeUser, requireApiUser, requireUserAndProfile } from "@/lib/auth";
+import { getUserAndProfile, requireAdminAndProfile, requireAdminMfaSetup, requireApiAdmin, requireApiAdminMfaSetup, requireApiPasswordChangeUser, requireApiUser, requireUserAndProfile } from "@/lib/auth";
 
-const user = { id: "shared-user", email: "synthetic@example.invalid", user_metadata: { role: "admin" }, app_metadata: { role: "admin" } };
-function client(profile: Record<string, unknown> | null = { role: "user", must_change_password: false }, error: unknown = null) {
+const user = { id: "shared-user", email: "synthetic@example.invalid", user_metadata: { role: "admin", aal: "aal2" }, app_metadata: { role: "admin" }, factors: [{ id: "totp-factor", factor_type: "totp", status: "verified" }] };
+function client(profile: Record<string, unknown> | null = { role: "user", must_change_password: false, account_ready: true }, error: unknown = null) {
+  if (profile && !("account_ready" in profile)) profile = { ...profile, account_ready: true };
   const maybeSingle = vi.fn().mockResolvedValue({ data: profile, error });
   const eq = vi.fn(() => ({ maybeSingle }));
-  const auth = { getUser: vi.fn().mockResolvedValue({ data: { user }, error: null }) };
+  const auth = {
+    getUser: vi.fn().mockResolvedValue({ data: { user }, error: null }),
+    getClaims: vi.fn().mockResolvedValue({ data: { claims: { sub: user.id, aal: "aal2" } }, error: null }),
+  };
   return { auth, from: vi.fn(() => ({ select: vi.fn(() => ({ eq })) })), maybeSingle, eq };
 }
 
@@ -90,5 +94,59 @@ describe("인증 가드의 프로필 확인", () => {
     await expect(requireUserAndProfile()).rejects.toThrow("redirect:/login");
     mocks.createClient.mockResolvedValue(client({ role: "user", must_change_password: true }));
     await expect(requireUserAndProfile()).rejects.toThrow("redirect:/change-password");
+  });
+
+  it.each([false, undefined])("발급 준비 상태(%s)가 확인되지 않으면 비밀번호 변경을 포함한 접근을 막는다", async (accountReady) => {
+    const db = client({ role: "admin", must_change_password: false, account_ready: accountReady });
+    mocks.createClient.mockResolvedValue(db);
+    for (const result of [await requireApiUser(db as never), await requireApiAdmin(), await requireApiPasswordChangeUser(db as never), await requireApiAdminMfaSetup(db as never)]) {
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect([403, 503]).toContain(result.response.status);
+    }
+  });
+
+  it("AAL1 관리자는 MFA 등록과 일반 기능만 이용하고 관리자 API와 페이지는 차단된다", async () => {
+    const db = client({ role: "admin", must_change_password: false });
+    db.auth.getClaims.mockResolvedValue({ data: { claims: { sub: user.id, aal: "aal1" } }, error: null });
+    mocks.createClient.mockResolvedValue(db);
+    expect((await requireApiAdminMfaSetup(db as never)).ok).toBe(true);
+    expect((await requireApiUser(db as never)).ok).toBe(true);
+    expect((await requireAdminMfaSetup()).user?.id).toBe(user.id);
+    const result = await requireApiAdmin(db as never);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.response.status).toBe(403);
+      expect(result.response.headers.get("X-Admin-MFA-Required")).toBe("true");
+    }
+    await expect(requireAdminAndProfile()).rejects.toThrow("redirect:/admin-mfa");
+  });
+
+  it("서명 검증 실패 또는 다른 계정의 AAL2 주장을 허용하지 않는다", async () => {
+    const db = client({ role: "admin", must_change_password: false });
+    mocks.createClient.mockResolvedValue(db);
+    for (const result of [
+      { data: { claims: { sub: "different-user", aal: "aal2" } }, error: null },
+      { data: null, error: { message: "private token content" } },
+    ]) {
+      db.auth.getClaims.mockResolvedValue(result);
+      const access = await requireApiAdmin(db as never);
+      expect(access.ok).toBe(false);
+      if (!access.ok) { expect(access.response.status).toBe(503); expect(await access.response.text()).not.toContain("private token content"); }
+    }
+  });
+
+  it("등록 수단이 삭제되면 남은 AAL2 토큰만으로 관리 API를 허용하지 않는다", async () => {
+    const db = client({ role: "admin", must_change_password: false });
+    db.auth.getUser.mockResolvedValue({ data: { user: { ...user, factors: [] } }, error: null });
+    const access = await requireApiAdmin(db as never);
+    expect(access.ok).toBe(false);
+    if (!access.ok) expect(access.response.status).toBe(403);
+  });
+
+  it("검증된 AAL2 관리자는 API와 페이지를 이용한다", async () => {
+    const db = client({ role: "admin", must_change_password: false });
+    mocks.createClient.mockResolvedValue(db);
+    expect((await requireApiAdmin(db as never)).ok).toBe(true);
+    expect((await requireAdminAndProfile()).user?.id).toBe(user.id);
   });
 });

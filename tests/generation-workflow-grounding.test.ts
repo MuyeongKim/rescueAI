@@ -391,6 +391,22 @@ describe("실제 영속 workflow의 근거 검토·보완·완료 경로", () =>
     expect(updates.some(update => update.quality_passed === true)).toBe(false);
   });
 
+  it("의미 검토 SDK 오류의 본문·cause는 Workflow 오류 로그와 실패 안내에 전달하지 않는다", async () => {
+    const marker = "SYNTHETIC_WORKFLOW_DOCUMENT_SECRET";
+    const log = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    try {
+      mocks.reviewGenerationGrounding.mockRejectedValue(Object.assign(new Error(marker), {
+        name: "AI_NoObjectGeneratedError", text: marker, cause: { responseBody: marker },
+      }));
+      expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("failed");
+      expect(job.result).toBeNull();
+      expect(job.quality_passed).toBe(false);
+      expect(String(job.error_message)).not.toContain(marker);
+      expect(JSON.stringify(log.mock.calls)).not.toContain(marker);
+      expect(log).toHaveBeenCalledWith("[generation-workflow] 모델 단계 실패:", { code: "ai_invalid_output" });
+    } finally { log.mockRestore(); }
+  });
+
   it("본문·근거·요청이 그대로이면 저장된 통과 검토를 재사용한다", async () => {
     seedPassingReview();
     expect((await generateMaterialWorkflow(jobId, runToken)).status).toBe("completed");

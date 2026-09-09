@@ -42,7 +42,7 @@ type TurnRecord = {
   reviewStatus?: "verified" | "corrected" | "unverified";
   reviewChecks?: number;
   modelId?: string;
-  usage?: { promptTokens: number; completionTokens: number; totalTokens: number };
+  usage?: { inputTokens: number | undefined; outputTokens: number | undefined; totalTokens: number | undefined };
   durationMs?: number;
   error?: string;
 };

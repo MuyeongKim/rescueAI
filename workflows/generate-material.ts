@@ -27,7 +27,8 @@ import { buildFocusedTrainingQuery } from "@/lib/generate-focus";
 import { generateRequestSchema, type ValidatedGenerateRequest } from "@/lib/generation-request";
 import { getChatModel } from "@/lib/llm";
 import { generationErrorInfo } from "@/lib/generation-model-error";
-import { projectGenerationOutline, projectGenerationReviewDraft, publicGenerationQualityIssues } from "@/lib/generation-job-review";
+import { safeServerError } from "@/lib/safe-server-error";
+import { GENERATION_OUTLINE_TEXT_MAX_LENGTH, projectGenerationOutline, projectGenerationReviewDraft, publicGenerationQualityIssues } from "@/lib/generation-job-review";
 import {
   SLIDE_COMPOSITION_TYPES,
   SLIDE_ROLE_TYPES,
@@ -209,8 +210,8 @@ function asJson(value: unknown): Json {
 
 function safeWorkflowFailureMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : "";
-  if (message.includes("인덱싱된 자료")) return message.slice(0, 300);
-  if (message.includes("검증된 근거 출처")) return message.slice(0, 300);
+  if (message.includes("인덱싱된 자료")) return "해당 분야에 인덱싱된 자료가 없어 생성할 수 없습니다.";
+  if (message.includes("검증된 근거 출처")) return "자료제작에 연결할 검증된 근거 출처가 없습니다.";
   if (message.includes("근거 자료 조회")) {
     return "근거 자료 조회가 반복해서 지연되었습니다. 저장된 요청으로 다시 시도해 주세요.";
   }
@@ -254,7 +255,8 @@ async function loadWorkerJob(jobId: string, runToken: string): Promise<WorkerJob
     WORKER_DB_REQUEST_MAX_MS
   );
   if (error) {
-    throw new RetryableError(`생성 작업 조회 실패: ${error.message}`, { retryAfter: "10s" });
+    console.error("[generation-workflow] 작업 조회 실패:", safeServerError(error));
+    throw new RetryableError("생성 작업 조회를 다시 시도합니다.", { retryAfter: "10s" });
   }
   if (!data) throw new FatalError("이미 교체되었거나 존재하지 않는 생성 작업입니다.");
   return data as unknown as WorkerJobRow;
@@ -271,7 +273,8 @@ async function loadWorkerJobById(jobId: string): Promise<WorkerJobRow | null> {
     WORKER_DB_REQUEST_MAX_MS
   );
   if (error) {
-    throw new RetryableError(`생성 작업 조회 실패: ${error.message}`, { retryAfter: "10s" });
+    console.error("[generation-workflow] 작업 조회 실패:", safeServerError(error));
+    throw new RetryableError("생성 작업 조회를 다시 시도합니다.", { retryAfter: "10s" });
   }
   return data ? (data as unknown as WorkerJobRow) : null;
 }
@@ -300,7 +303,8 @@ async function updateActiveWorkerJobCas(
     WORKER_DB_REQUEST_MAX_MS
   );
   if (error) {
-    throw new RetryableError(`생성 작업 저장 실패: ${error.message}`, { retryAfter: "10s" });
+    console.error("[generation-workflow] 작업 저장 실패:", safeServerError(error));
+    throw new RetryableError("생성 작업 저장을 다시 시도합니다.", { retryAfter: "10s" });
   }
   return data ? (data as unknown as WorkerJobRow) : null;
 }
@@ -419,6 +423,9 @@ async function retryGenerationError(
   row: WorkerJobRow,
   request: ValidatedGenerateRequest
 ): Promise<never> {
+  // 내부 제어 오류는 그대로 유지하고 SDK 오류 객체는 Workflow 실행 기록으로 전달하지 않는다.
+  if (error instanceof RetryableError || error instanceof FatalError) throw error;
+  console.error("[generation-workflow] 모델 단계 실패:", safeServerError(error));
   const info = generationErrorInfo(error);
   const checkpoint = checkpointOf(row.checkpoint);
   const candidates = modelCandidates(checkpoint, request);
@@ -472,7 +479,9 @@ async function retryGenerationError(
       retryAfter: "20s",
     });
   }
-  throw error;
+  throw new RetryableError(info.invalidOutput
+    ? "정밀 모델 응답 형식을 확인하지 못해 같은 단계를 다시 시도합니다."
+    : "정밀 모델 처리가 완료되지 않아 같은 단계를 다시 시도합니다.", { retryAfter: "20s" });
 }
 
 function validatedRequest(row: WorkerJobRow): ValidatedGenerateRequest {
@@ -980,7 +989,9 @@ async function generateDocumentOutlineStep(jobId: string, runToken: string): Pro
         z.object({
           heading: headingSchema,
           purpose: z.string().min(10).max(300),
-          keyPoints: z.array(z.string().min(2).max(120)).min(2).max(6),
+          // 검토 화면과 같은 상한을 유지한다. 문장을 잘라 기술 조건을 유실하지 않는다.
+          keyPoints: z.array(z.string().min(2).max(GENERATION_OUTLINE_TEXT_MAX_LENGTH)
+            .describe(`각 핵심 요점은 ${GENERATION_OUTLINE_TEXT_MAX_LENGTH}자 이내로 작성합니다.`)).min(2).max(6),
           sourceRefs: z.array(labelSchema).min(1).max(4),
           actionRequirements: z.array(z.string().min(4).max(140)).min(1).max(6),
           evidenceRequirements: outlineEvidenceRequirementsSchema(allowedSourceLabels(context) as [string, ...string[]]),
@@ -1487,7 +1498,7 @@ async function reviewGenerationStep(
       draft,
       evidenceText: contextFromCheckpoint(checkpoint).contextText,
       request, modelKey: activeModelKey(checkpoint, request),
-    });
+    }).catch((error: unknown) => retryGenerationError(error, row, request));
     row = await saveCheckpointCas(row,
       (saved) => saved.groundingReview?.signature === signature,
       (saved) => {
@@ -1891,7 +1902,8 @@ async function failGenerationJobStep(
   );
   if (error) {
     // DB 장애가 수초보다 길어도 UI가 영구히 진행 중으로 남지 않도록 충분히 재시도한다.
-    throw new RetryableError(`생성 작업 실패 상태 저장 실패: ${error.message}`, {
+    console.error("[generation-workflow] 실패 상태 저장 실패:", safeServerError(error));
+    throw new RetryableError("생성 작업 실패 상태 저장을 다시 시도합니다.", {
       retryAfter: "15s",
     });
   }

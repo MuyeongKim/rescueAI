@@ -1,4 +1,3 @@
-import { redirect } from "next/navigation";
 import {
   Users,
   BarChart3,
@@ -8,7 +7,7 @@ import {
 } from "lucide-react";
 
 import { createAdminClient } from "@/lib/supabase/admin";
-import { requireUserAndProfile, isAdmin } from "@/lib/auth";
+import { requireAdminAndProfile } from "@/lib/auth";
 import { DEMO, getDemoAdminStats } from "@/lib/demo";
 import {
   Card,
@@ -76,8 +75,7 @@ async function loadAdminStats(): Promise<AdminStats> {
 
 export default async function AdminPage() {
   // 레이아웃에서 이미 막지만 한 번 더 검증
-  const { profile } = await requireUserAndProfile();
-  if (!isAdmin(profile)) redirect("/chat");
+  await requireAdminAndProfile();
 
   const {
     totalUsers,

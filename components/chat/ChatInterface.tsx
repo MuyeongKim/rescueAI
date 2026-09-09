@@ -1,9 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { useChat } from "ai/react";
-import type { Message } from "ai";
+import { useChat } from "@ai-sdk/react";
+import { fromTutorUIMessage, toTutorUIMessage, type TutorUIMessage, type ChatMessage as Message } from "@/lib/chat-message";
+import { createTutorChatTransport } from "@/lib/chat-transport";
 import {
   CircleHelp,
   AlertTriangle,
@@ -37,7 +38,7 @@ import { ConversationList } from "@/components/chat/ConversationList";
 import { QuestionGuide } from "@/components/chat/QuestionGuide";
 import { USER_GUIDE_QUESTION_EXAMPLE } from "@/lib/user-guide-content";
 import { COURSE_CATEGORIES } from "@/lib/courses";
-import { ChatRequestError, chatErrorMessage, fetchChat } from "@/lib/chat-request";
+import { ChatRequestError, chatErrorMessage } from "@/lib/chat-request";
 
 const DEFAULT_CATEGORIES = [...COURSE_CATEGORIES];
 
@@ -82,24 +83,25 @@ export function ChatInterface({
   const [retrySeconds, setRetrySeconds] = useState(0);
   const [questionHelpOpen, setQuestionHelpOpen] = useState(false);
   const focusQuestionOnClose = useRef(false);
+  const [input, setInput] = useState(initialInput ?? "");
+  const transport = useMemo(() => createTutorChatTransport(), []);
 
   const {
-    messages,
-    input,
-    handleInputChange,
-    handleSubmit,
-    isLoading,
+    messages: uiMessages,
+    sendMessage,
+    status,
     stop,
-    data,
     error,
-    reload,
-    setInput,
-  } = useChat({
-    api: "/api/chat",
-    initialMessages,
-    initialInput,
-    fetch: fetchChat,
-    keepLastMessageOnError: true,
+    regenerate,
+  } = useChat<TutorUIMessage>({
+    transport,
+    messages: initialMessages.map(toTutorUIMessage),
+    onData: (part) => {
+      if (part.type === "data-conversationId" && part.data.value && part.data.value !== convIdRef.current) {
+        convIdRef.current = part.data.value;
+        window.history.replaceState(null, "", `/chat/${part.data.value}`);
+      }
+    },
     onError: (failure) => {
       if (failure instanceof ChatRequestError && failure.retryAfterSeconds > 0) {
         setRetryAt(Date.now() + failure.retryAfterSeconds * 1000);
@@ -115,6 +117,8 @@ export function ChatInterface({
       }
     },
   });
+  const messages = useMemo(() => uiMessages.map(fromTutorUIMessage), [uiMessages]);
+  const isLoading = status === "submitted" || status === "streaming";
 
   useEffect(() => {
     const last = initialMessages.at(-1);
@@ -137,21 +141,6 @@ export function ChatInterface({
     const timer = window.setInterval(update, 1000);
     return () => window.clearInterval(timer);
   }, [retryAt]);
-
-  // 스트림에서 conversationId 추출 → URL 갱신(브라우저 스토리지 미사용, 히스토리만 교체)
-  useEffect(() => {
-    if (!data || data.length === 0) return;
-    for (let i = data.length - 1; i >= 0; i--) {
-      const d = data[i] as { type?: string; value?: string } | null;
-      if (d && typeof d === "object" && d.type === "conversationId" && d.value) {
-        if (d.value !== convIdRef.current) {
-          convIdRef.current = d.value;
-          window.history.replaceState(null, "", `/chat/${d.value}`);
-        }
-        break;
-      }
-    }
-  }, [data]);
 
   // 새 메시지/토큰마다 하단으로 스크롤 — 단, 사용자가 위로 올려 읽는 중이면 방해하지 않는다.
   useEffect(() => {
@@ -188,7 +177,8 @@ export function ChatInterface({
     const body = { ...requestBody(), clientRequestId: crypto.randomUUID() };
     lastRequestRef.current = body;
     requestStartedAtRef.current = Date.now();
-    handleSubmit(e, { body });
+    void sendMessage({ text: input }, { body });
+    setInput("");
   }
 
   function useQuestionExample() {
@@ -206,7 +196,7 @@ export function ChatInterface({
     if (isLoading || retrySeconds > 0) return;
     hasSubmittedRef.current = true;
     stoppedRef.current = false;
-    // reload가 마지막 미완성 답변만 교체하므로 같은 질문 말풍선을 추가하지 않는다.
+    // regenerate가 마지막 미완성 답변만 교체하므로 같은 질문 말풍선을 추가하지 않는다.
     const restoredRequestId = initialMessages.at(-1)?.annotations?.find(
       (annotation) => annotation && typeof annotation === "object" && "clientRequestId" in annotation
     ) as { clientRequestId?: string } | undefined;
@@ -217,7 +207,7 @@ export function ChatInterface({
     };
     lastRequestRef.current = body;
     requestStartedAtRef.current = Date.now();
-    void reload({ body });
+    void regenerate({ body });
   }
 
   const empty = messages.length === 0;
@@ -485,7 +475,7 @@ export function ChatInterface({
             id="chat-question"
             ref={questionRef}
             value={input}
-            onChange={handleInputChange}
+              onChange={(event) => setInput(event.target.value)}
             placeholder="질문을 입력하세요"
             className="h-12 flex-1 text-base"
             disabled={isLoading}

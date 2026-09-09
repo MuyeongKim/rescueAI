@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import "server-only";
 import { createClient } from "@/lib/supabase/server";
 import { createGenerationRagReader } from "@/lib/supabase/generation-rag";
@@ -95,7 +96,7 @@ export async function checkStoredMaterialGrounding(args: {
     }
     return { ok: true };
   } catch (error) {
-    console.error("[generation-grounding] 원문 검증 실패:", error instanceof Error ? error.message : "unknown");
+    console.error("[generation-grounding] 원문 검증 실패:", safeServerError(error));
     return { ok: false, status: 503, error: "원문 검증을 완료하지 못했습니다. 초안을 보존하고 다시 시도해 주세요." };
   }
 }

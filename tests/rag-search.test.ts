@@ -64,7 +64,7 @@ describe("searchContext 외부 RAG 복구", () => {
     expect(result).toMatchObject({ matched: 1, degraded: true });
     expect(console.error).toHaveBeenCalledWith(
       "[rag] 벡터 검색 비활성화, 키워드 검색으로 진행:",
-      "embedding timeout"
+      { code: "operation_failed" }
     );
   });
 

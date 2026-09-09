@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { generateObject } from "ai";
 import { z } from "zod";
 import { slideDiagramSchema } from "@/lib/slide-diagram";
@@ -293,7 +294,7 @@ export async function POST(req: Request) {
         modelFallbackUsed = true;
         console.warn(
           "[generate/section] 정밀 모델 호출 실패, 빠른 모델로 한 번 재시도:",
-          error instanceof Error ? error.message : "unknown error"
+          safeServerError(error)
         );
         return run(
           getChatModel(activeModelKey),
@@ -512,7 +513,7 @@ export async function POST(req: Request) {
       responseInit()
     );
   } catch (e) {
-    console.error("[generate/section] 실패:", e);
+    console.error("[generate/section] 실패:", safeServerError(e));
     if (isRegenerationBudgetError(e)) {
       return Response.json(
         { error: "재생성 시간이 길어 요청을 안전하게 종료했습니다. 다시 시도해 주세요." },

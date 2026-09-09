@@ -220,5 +220,5 @@ describe("문서 말미 출처 DB 계약", () => {
         } finally { await db.exec("reset role"); }
       }
     } finally { await db.close(); }
-  });
+  }, 15_000); // 전체 회귀검사에서 병렬 PGlite 초기화가 겹치는 시간까지 허용한다.
 });

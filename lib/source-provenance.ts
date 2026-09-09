@@ -1,3 +1,4 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import type { GeneratedDocSource } from "@/lib/generate";
 import { createClient } from "@/lib/supabase/server";
 
@@ -181,7 +182,7 @@ export async function verifyNativeDocumentSourceProvenance(
     if (documentsResult.error || chunkError) {
       console.error(
         "[generate/save] 기본 자료 출처 검증 실패:",
-        documentsResult.error?.message ?? chunkError?.message
+        safeServerError(documentsResult.error ?? chunkError)
       );
       return { sources: [], degraded: true };
     }
@@ -237,7 +238,7 @@ export async function verifyNativeDocumentSourceProvenance(
   } catch (error) {
     console.error(
       "[generate/save] 기본 자료 출처 검증 요청 실패:",
-      error instanceof Error ? error.message : error
+      safeServerError(error)
     );
     return { sources: [], degraded: true };
   }

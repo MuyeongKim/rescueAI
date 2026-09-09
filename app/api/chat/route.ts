@@ -1,12 +1,8 @@
+import { safeServerError } from "@/lib/safe-server-error";
 import { getChatModel } from "@/lib/llm";
-import {
-  createDataStreamResponse,
-  streamText,
-  generateText,
-  convertToCoreMessages,
-  formatDataStreamPart,
-  type Message,
-} from "ai";
+import { streamText, generateText } from "ai";
+import type { ChatMessage as Message } from "@/lib/chat-message";
+import { createChatStreamResponse, writeChatText } from "@/lib/chat-stream";
 import { createClient } from "@/lib/supabase/server";
 import { requireApiUser } from "@/lib/auth";
 import { prepareChatAnswerText, uniqueChatSources } from "@/lib/chat-answer";
@@ -27,20 +23,18 @@ export const maxDuration = 60;
 export async function POST(req: Request) {
   // 데모 모드: Anthropic/Supabase 없이 정해진 답변을 스트리밍
   if (DEMO) {
-    return createDataStreamResponse({
-      execute: async (dataStream) => {
-        dataStream.writeData({ type: "conversationId", value: "demo-conv-1" });
+    return createChatStreamResponse(async (dataStream) => {
+        dataStream.write({ type: "data-conversationId", data: { value: "demo-conv-1" }, transient: true });
         const parts = demoChatAnswer.match(/[\s\S]{1,6}/g) ?? [demoChatAnswer];
         for (const p of parts) {
-          dataStream.write(formatDataStreamPart("text", p));
+          writeChatText(dataStream, p);
           await new Promise((r) => setTimeout(r, 35));
         }
-        dataStream.writeMessageAnnotation({
+        dataStream.write({ type: "message-metadata", messageMetadata: {
           messageId: 1,
           conversationId: "demo-conv-1",
           sources: demoChatSources,
-        });
-      },
+        } });
     });
   }
 
@@ -104,7 +98,7 @@ export async function POST(req: Request) {
     .maybeSingle();
   const { data: previous, error: lookupError } = await findRequest();
   if (lookupError) {
-    console.error("[chat] 질문 복구 상태 조회 실패:", lookupError.message);
+    console.error("[chat] 질문 복구 상태 조회 실패:", safeServerError(lookupError));
     return new Response("질문 저장 상태를 확인하지 못했습니다. 잠시 후 다시 시도해 주세요.", { status: 503 });
   }
   if (previous && (previous.content !== question || (body.conversationId && previous.conversation_id !== body.conversationId))) {
@@ -131,7 +125,7 @@ export async function POST(req: Request) {
       if (!owned) return new Response("질문 요청을 확인하지 못했습니다.", { status: 409 });
       conversationId = owned.id;
     } else if (error || !conv) {
-      console.error("[chat] 대화 저장 실패:", error?.message);
+      console.error("[chat] 대화 저장 실패:", safeServerError(error));
       return new Response("대화를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.", { status: 503 });
     } else {
       conversationId = conv.id;
@@ -149,7 +143,7 @@ export async function POST(req: Request) {
         return new Response("질문 요청을 확인하지 못했습니다.", { status: 409 });
       }
     } else if (umErr) {
-      console.error("[chat] user 메시지 저장 실패:", umErr.message);
+      console.error("[chat] user 메시지 저장 실패:", safeServerError(umErr));
       return new Response("질문을 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.", { status: 503 });
     }
   }
@@ -158,10 +152,9 @@ export async function POST(req: Request) {
   const startedAt = Date.now();
 
   // 4~5) Claude 스트리밍 + 메타데이터(conversationId, sources) 전달
-  return createDataStreamResponse({
-    execute: async (dataStream) => {
+  return createChatStreamResponse(async (dataStream) => {
       // 검색을 기다리는 동안에도 저장된 질문의 복구 주소를 먼저 전달한다.
-      dataStream.writeData({ type: "conversationId", value: convId });
+      dataStream.write({ type: "data-conversationId", data: { value: convId }, transient: true });
       let contextText = "";
       let sources: DocSource[] = [];
       let independentEvidenceTopics: string[] = [];
@@ -188,21 +181,21 @@ export async function POST(req: Request) {
           })
           .select("id")
           .single();
-        if (error) console.error("[chat] assistant 저장 실패:", error.message);
+        if (error) console.error("[chat] assistant 저장 실패:", safeServerError(error));
 
         // 모델 응답과 표준 확인 불가 응답 모두 같은 저장·복구 메타데이터를 전달한다.
-        dataStream.writeMessageAnnotation({
+        dataStream.write({ type: "message-metadata", messageMetadata: {
           messageId: saved?.id ?? null,
           conversationId: convId,
           sources: effectiveSources,
           degraded: ragFailed,
           saveFailed: saved == null,
-        });
+        } });
       };
 
       const directReply = buildDirectChatReply(turnKind, messages);
       if (directReply) {
-        dataStream.write(formatDataStreamPart("text", directReply));
+        writeChatText(dataStream, directReply);
         await persistAnswer(directReply, true);
         console.info("[chat] outcome", { requestId: clientRequestId, kind: turnKind, state: "direct" });
         return;
@@ -231,7 +224,7 @@ export async function POST(req: Request) {
       if (!contextText.trim()) {
         const state = ragFailed ? "degraded" : "empty";
         const reply = buildChatEvidenceFallback(state, category);
-        dataStream.write(formatDataStreamPart("text", reply));
+        writeChatText(dataStream, reply);
         await persistAnswer(reply, true);
         console.info("[chat] outcome", { requestId: clientRequestId, kind: turnKind, state });
         return;
@@ -249,21 +242,21 @@ export async function POST(req: Request) {
       if (answerPlan.mode === "learning") {
         // 학습 조언에 기술 사실이 섞일 수 있어 원문 대조 전 초안을 화면에 노출하지 않는다.
         const { text } = await generateText({
-          model: getChatModel(modelKey), system, messages: convertToCoreMessages(messages),
+          model: getChatModel(modelKey), system, messages: messages.map(({ role, content }) => ({ role, content })),
           temperature: 0.2, maxRetries: 0,
-          maxTokens: 4_000,
+          maxOutputTokens: 4_000,
           abortSignal: AbortSignal.timeout(Math.max(1, Math.min(30_000, requestDeadline - Date.now() - 4_000))),
         });
         if (prepareChatAnswerText(text).replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE) {
           const reply = buildChatEvidenceFallback(ragFailed ? "degraded" : "insufficient", category);
-          dataStream.write(formatDataStreamPart("text", reply));
+          writeChatText(dataStream, reply);
           await persistAnswer(reply, true);
           console.info("[chat] outcome", { requestId: clientRequestId, kind: turnKind, state: "insufficient", degraded: ragFailed });
           return;
         }
         const reviewed = await reviewChatLearningAnswer(text, contextText, { deadline: requestDeadline });
         const reply = reviewed.status === "unverified" ? buildChatEvidenceFallback("review_failed") : reviewed.text;
-        dataStream.write(formatDataStreamPart("text", reply));
+        writeChatText(dataStream, reply);
         await persistAnswer(reply, reviewed.status === "unverified");
         console.info("[chat] outcome", {
           requestId: clientRequestId, kind: turnKind,
@@ -276,34 +269,36 @@ export async function POST(req: Request) {
       const result = streamText({
         model: getChatModel(modelKey),
         system,
-        messages: convertToCoreMessages(messages),
+        messages: messages.map(({ role, content }) => ({ role, content })),
         temperature: 0.2,
-        maxTokens: 4_000,
+        maxOutputTokens: 4_000,
         maxRetries: 0,
         // 연결 종료 뒤 답변 보관은 유지하되 함수 종료 전에 모델 호출을 닫는다.
         abortSignal: AbortSignal.timeout(Math.max(1, requestDeadline - Date.now() - 2_000)),
-        onFinish: async ({ text }) => {
-          const refused = prepareChatAnswerText(text).replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE;
-          // 스트리밍된 본문은 바꾸지 않는다. 모델이 전체 확인 불가로 끝냈으면
-          // 다음 질문 안내를 덧붙이고 화면과 같은 최종 본문을 저장한다.
-          const tail = refused ? `\n\n${buildChatEvidenceFallback(ragFailed ? "degraded" : "insufficient", category)}` : "";
-          if (tail) dataStream.write(formatDataStreamPart("text", tail));
-          await persistAnswer(text + tail, refused);
-          console.info("[chat] outcome", {
-            requestId: clientRequestId, kind: turnKind,
-            state: refused ? "insufficient" : "answered", degraded: ragFailed,
-          });
-        },
+        onError: ({ error }) => console.error("[chat] model stream error:", safeServerError(error)),
       });
 
-      // 클라이언트가 중간에 끊거나(Stop·탭 닫기) 연결이 끊겨도 스트림을 끝까지 소비해
-      // onFinish(assistant 메시지 저장)가 반드시 실행되게 한다. 없으면 질문만 남고 답변 유실.
-      result.consumeStream();
-      result.mergeIntoDataStream(dataStream);
-    },
-    onError: (error) => {
-      console.error("[chat] stream error:", error);
-      return "답변 생성 중 연결이 끊겼습니다. 잠시 후 같은 질문을 다시 시도해 주세요.";
-    },
+      // HTTP 수신 중단과 별도로 모델 스트림을 끝까지 읽는다. 저장과 추가 안내가
+      // 끝난 뒤에만 완료 이벤트를 보내 본문·출처·저장 상태 순서를 유지한다.
+      const textId = crypto.randomUUID();
+      dataStream.write({ type: "text-start", id: textId });
+      let text = "";
+      for await (const part of result.fullStream) {
+        // textStream은 SDK 오류 이벤트를 생략하므로 fullStream에서 실패도 직접 확인한다.
+        if (part.type === "error") throw part.error;
+        if (part.type === "abort") throw new DOMException("Model request aborted", "AbortError");
+        if (part.type !== "text-delta") continue;
+        text += part.text;
+        dataStream.write({ type: "text-delta", id: textId, delta: part.text });
+      }
+      dataStream.write({ type: "text-end", id: textId });
+      const refused = prepareChatAnswerText(text).replace(/\s+/g, " ").trim() === NOT_FOUND_MESSAGE;
+      const tail = refused ? `\n\n${buildChatEvidenceFallback(ragFailed ? "degraded" : "insufficient", category)}` : "";
+      if (tail) writeChatText(dataStream, tail);
+      await persistAnswer(text + tail, refused);
+      console.info("[chat] outcome", {
+        requestId: clientRequestId, kind: turnKind,
+        state: refused ? "insufficient" : "answered", degraded: ragFailed,
+      });
   });
 }
